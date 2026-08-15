@@ -1,0 +1,13 @@
+# Gradle
+.gradle/
+build/
+# IDE
+.idea/
+*.iml
+# 本地配置
+local.properties
+# 构建产物
+*.apk
+*.aab
+captures/
+.kotlin/
