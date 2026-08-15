@@ -81,7 +81,7 @@ public class ClipboardController(ClipboardService svc) : ControllerBase
         return NoContent();
     }
 
-    /// 发送给指定设备(写入剪贴板 + 广播,客户端按 deviceId 过滤自身回显)
+    /// 发送给指定设备:写入共享剪贴板;实时通知只推送到目标设备(未指定目标时广播全员,保持旧行为)
     [HttpPost("send")]
     public async Task<IActionResult> Send([FromBody] SendRequest req)
     {
@@ -90,7 +90,11 @@ public class ClipboardController(ClipboardService svc) : ControllerBase
             return BadRequest(new { error = "text 不能为空" });
         var deviceId = string.IsNullOrEmpty(req.DeviceId) ? "web-" + Guid.NewGuid().ToString("N")[..8] : req.DeviceId;
         var deviceName = string.IsNullOrEmpty(req.DeviceName) ? deviceId : req.DeviceName;
-        var (entry, _) = await svc.UploadTextAsync(text, deviceId, deviceName, "Web", null, HttpContext.Connection.RemoteIpAddress?.ToString());
+        var targets = req.DeviceIds?.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().ToList() ?? [];
+        var (entry, _) = await svc.UploadTextAsync(text, deviceId, deviceName, "Web", null,
+            HttpContext.Connection.RemoteIpAddress?.ToString(), broadcast: targets.Count == 0);
+        if (entry is not null && targets.Count > 0)
+            await svc.BroadcastAsync(entry, targets);
         return Ok(entry);
     }
 }

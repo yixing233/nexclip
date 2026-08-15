@@ -68,8 +68,8 @@ public class ClipboardService(
 
     public AppOptions Options => _opt;
 
-    /// 文本上传:内容 hash 去重,返回 (entry, unchanged)
-    public async Task<(ClipboardEntry? entry, bool unchanged)> UploadTextAsync(string text, string deviceId, string deviceName, string? platform, string? version, string? ip)
+    /// 文本上传:内容 hash 去重,返回 (entry, unchanged);broadcast=false 时不广播,由调用方决定通知范围
+    public async Task<(ClipboardEntry? entry, bool unchanged)> UploadTextAsync(string text, string deviceId, string deviceName, string? platform, string? version, string? ip, bool broadcast = true)
     {
         var hash = Hash(text);
         var current = await GetCurrentAsync();
@@ -90,7 +90,7 @@ public class ClipboardService(
         db.Activities.Add(new ActivityLog { Action = "push", DeviceName = deviceName, Content = Truncate(text, 120), CreatedAt = DateTime.UtcNow });
         await db.SaveChangesAsync();
         await TrimHistoryAsync();
-        await BroadcastAsync(entry);
+        if (broadcast) await BroadcastAsync(entry);
         return (entry, false);
     }
 
@@ -201,8 +201,21 @@ public class ClipboardService(
         await db.SaveChangesAsync();
     }
 
-    public async Task BroadcastAsync(ClipboardEntry entry) =>
-        await hub.Clients.All.SendAsync("ClipboardUpdated", entry);
+    /// 广播剪贴板更新;targetDeviceIds 非空时只通知指定设备(定向推送,按 hub 连接登记的 deviceId 定位)
+    public async Task BroadcastAsync(ClipboardEntry entry, IReadOnlyCollection<string>? targetDeviceIds = null)
+    {
+        if (targetDeviceIds is null || targetDeviceIds.Count == 0)
+        {
+            await hub.Clients.All.SendAsync("ClipboardUpdated", entry);
+            return;
+        }
+        var connectionIds = ClipboardHub.ActiveDevices
+            .Where(kv => targetDeviceIds.Contains(kv.Value))
+            .Select(kv => kv.Key)
+            .ToList();
+        if (connectionIds.Count > 0)
+            await hub.Clients.Clients(connectionIds).SendAsync("ClipboardUpdated", entry);
+    }
 
     public async Task BroadcastClearedAsync() =>
         await hub.Clients.All.SendAsync("ClipboardCleared");
