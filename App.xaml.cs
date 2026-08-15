@@ -6,12 +6,18 @@ namespace SyncClipboard.Desktop;
 
 public partial class App : Application
 {
+    private const string MutexName = "SyncClipboardDesktop_SingleInstance";
+    private const string ShowEventName = "SyncClipboardDesktop_Show";
+
     public static AppServices Services { get; private set; } = null!;
     public static ClipboardWindow? ClipboardWindow { get; private set; }
     public static SettingsWindow? SettingsWindow { get; private set; }
-    public static HotKeyService? Hotkey { get; private set; }
+    public static HotKeyService? Hotkey { get; private set; }            // 剪贴板呼出(Alt+V)
+    public static HotKeyService? HotkeySettings { get; private set; }       // 设置打开(Alt+X)
 
     private static readonly List<Window> Windows = new();
+    private static Mutex? _instanceMutex;
+    private static EventWaitHandle? _showEvent;
     private static bool _exiting;
 
     /// <summary>退出流程中(关闭窗口时不再拦截)。</summary>
@@ -29,6 +35,32 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        // 单实例:已有实例则唤醒其剪贴板窗口后退出本进程
+        _instanceMutex = new Mutex(true, MutexName, out var createdNew);
+        if (!createdNew)
+        {
+            try
+            {
+                using var evt = EventWaitHandle.OpenExisting(ShowEventName);
+                evt.Set();
+            }
+            catch { /* 旧实例可能尚未就绪 */ }
+            Environment.Exit(0);
+            return;
+        }
+        _showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
+        var waiter = new Thread(() =>
+        {
+            while (true)
+            {
+                try { _showEvent?.WaitOne(); } catch { return; }
+                _showEvent?.Reset();
+                DispatcherQueue.GetForCurrentThread()?.TryEnqueue(ToggleClipboardWindow);
+            }
+        })
+        { IsBackground = true };
+        waiter.Start();
+
         Services = new AppServices();
 
         var dispatcher = DispatcherQueue.GetForCurrentThread();
@@ -52,7 +84,12 @@ public partial class App : Application
         Hotkey = new HotKeyService(ToggleClipboardWindow);
         if (!Hotkey.Apply(Services.Settings.Hotkey))
         {
-            Log.Warn($"全局热键注册失败(可能被占用):{Services.Settings.Hotkey}");
+            Log.Warn($"剪贴板热键注册失败(可能被占用):{Services.Settings.Hotkey}");
+        }
+        HotkeySettings = new HotKeyService(ToggleSettingsWindow);
+        if (!HotkeySettings.Apply(Services.Settings.HotkeySettings))
+        {
+            Log.Warn($"设置热键注册失败(可能被占用):{Services.Settings.HotkeySettings}");
         }
 
         Services.Engine.Start();
@@ -72,6 +109,17 @@ public partial class App : Application
 
     /// <summary>切换剪贴板窗口显示/隐藏(托盘左键 / 全局热键)。</summary>
     private static void ToggleClipboardWindow() => ClipboardWindow?.ToggleVisibility();
+
+    /// <summary>切换设置窗口显示/隐藏(设置热键)。</summary>
+    private static void ToggleSettingsWindow()
+    {
+        if (SettingsWindow is null || !SettingsWindow.AppWindow.IsVisible)
+        {
+            OpenSettings();
+            return;
+        }
+        SettingsWindow.AppWindow.Hide();
+    }
 
     /// <summary>打开设置窗口(托盘菜单 / 剪贴板窗口按钮)。</summary>
     public static void OpenSettings()

@@ -45,7 +45,10 @@ public partial class SettingsViewModel : ObservableObject
     private bool notifyEnabled;
 
     [ObservableProperty]
-    private string hotkey = "Ctrl+Alt+V";
+    private string hotkey = "Alt+V";            // 剪贴板呼出
+
+    [ObservableProperty]
+    private string hotkeySettings = "Alt+X";    // 设置打开
 
     // ---- 历史 / 外观 ----
     [ObservableProperty]
@@ -72,6 +75,7 @@ public partial class SettingsViewModel : ObservableObject
         AutoPaste = s.AutoPaste;
         NotifyEnabled = s.NotifyEnabled;
         Hotkey = s.Hotkey;
+        HotkeySettings = s.HotkeySettings;
         var idx = Array.IndexOf(MaxHistoryOptions, s.MaxHistory);
         MaxHistoryIndex = idx >= 0 ? idx : 2;
         ThemeModeIndex = s.ThemeMode switch { "light" => 0, "dark" => 1, _ => 2 };
@@ -88,6 +92,30 @@ public partial class SettingsViewModel : ObservableObject
         _svc.Main.RefreshConnectionState();
         TestResult = "设置已保存,正在重新连接…";
         _ = _svc.Engine?.ReconfigureAsync();
+    }
+
+    /// <summary>重置剪贴板热键为默认 Alt+V。</summary>
+    [RelayCommand]
+    public void ResetHotkey()
+    {
+        if (Hotkey == "Alt+V")
+        {
+            TestResult = "剪贴板热键已是默认值 Alt+V";
+            return;
+        }
+        Hotkey = "Alt+V";
+    }
+
+    /// <summary>重置设置热键为默认 Alt+X。</summary>
+    [RelayCommand]
+    public void ResetHotkeySettings()
+    {
+        if (HotkeySettings == "Alt+X")
+        {
+            TestResult = "设置热键已是默认值 Alt+X";
+            return;
+        }
+        HotkeySettings = "Alt+X";
     }
 
     [RelayCommand]
@@ -129,7 +157,15 @@ public partial class SettingsViewModel : ObservableObject
         _svc.Settings.Hotkey = value;
         _svc.Settings.Save();
         var ok = App.Hotkey?.Apply(value) ?? false;
-        TestResult = ok ? "热键已应用: " + value : "热键格式非法或已被占用: " + value;
+        TestResult = ok ? "剪贴板热键已应用: " + value : "热键格式非法或已被占用: " + value;
+    }
+
+    partial void OnHotkeySettingsChanged(string value)
+    {
+        _svc.Settings.HotkeySettings = value;
+        _svc.Settings.Save();
+        var ok = App.HotkeySettings?.Apply(value) ?? false;
+        TestResult = ok ? "设置热键已应用: " + value : "热键格式非法或已被占用: " + value;
     }
     partial void OnMaxHistoryIndexChanged(int value) { _svc.Settings.MaxHistory = MaxHistoryOptions[value]; _svc.Settings.Save(); }
     partial void OnThemeModeIndexChanged(int value)

@@ -120,6 +120,10 @@ public sealed class HotKeyService : IDisposable
         {
             return (mods, (uint)key[0]);
         }
+        if (key.Length is 2 or 3 && key[0] == 'F' && int.TryParse(key[1..], out var fn) && fn is >= 1 and <= 12)
+        {
+            return (mods, (uint)(0x70 + fn - 1));   // VK_F1 = 0x70
+        }
         return null;
     }
 }

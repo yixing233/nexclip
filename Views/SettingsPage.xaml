@@ -59,9 +59,34 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <TextBlock Text="全局热键(呼出剪贴板窗口)" VerticalAlignment="Center" />
-                        <TextBox Grid.Column="1" Width="160" PlaceholderText="Ctrl+Alt+V"
-                            Text="{Binding Hotkey, Mode=TwoWay}" HorizontalAlignment="Right" />
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="剪贴板热键(呼出剪贴板窗口)" />
+                            <TextBlock Text="点击输入框后直接按下组合键" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <TextBox x:Name="HotKeyBox" Width="150" IsReadOnly="True"
+                                PlaceholderText="点击后按组合键"
+                                Text="{Binding Hotkey, Mode=OneWay}"
+                                PreviewKeyDown="HotKeyBox_PreviewKeyDown" HorizontalAlignment="Right" />
+                            <Button Content="重置" Command="{Binding ResetHotkeyCommand}" ToolTipService.ToolTip="恢复默认 Alt+V" />
+                        </StackPanel>
+                    </Grid>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="2" VerticalAlignment="Center">
+                            <TextBlock Text="设置热键(打开设置窗口)" />
+                            <TextBlock Text="点击输入框后直接按下组合键" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <TextBox x:Name="HotKeySettingsBox" Width="150" IsReadOnly="True"
+                                PlaceholderText="点击后按组合键"
+                                Text="{Binding HotkeySettings, Mode=OneWay}"
+                                PreviewKeyDown="HotKeySettingsBox_PreviewKeyDown" HorizontalAlignment="Right" />
+                            <Button Content="重置" Command="{Binding ResetHotkeySettingsCommand}" ToolTipService.ToolTip="恢复默认 Alt+X" />
+                        </StackPanel>
                     </Grid>
                 </StackPanel>
             </Border>

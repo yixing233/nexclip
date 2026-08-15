@@ -15,7 +15,8 @@ public sealed class SettingsStore
     public string AuthToken { get; set; } = "";
     public string DeviceId { get; set; } = "";
     public string DeviceName { get; set; } = "";
-    public string Hotkey { get; set; } = "Ctrl+Alt+V";
+    public string Hotkey { get; set; } = "Alt+V";            // 剪贴板窗口呼出
+    public string HotkeySettings { get; set; } = "Alt+X";       // 设置窗口打开
     public string ThemeMode { get; set; } = "system";   // light | dark | system
     public bool BootStartEnabled { get; set; } = true;
     public bool StartMinimized { get; set; } = true;
@@ -62,6 +63,7 @@ public sealed class SettingsStore
             DeviceId = dto.DeviceId ?? DeviceId;
             DeviceName = dto.DeviceName ?? DeviceName;
             Hotkey = dto.Hotkey ?? Hotkey;
+            HotkeySettings = dto.HotkeySettings ?? HotkeySettings;
             ThemeMode = dto.ThemeMode ?? ThemeMode;
             BootStartEnabled = dto.BootStartEnabled ?? BootStartEnabled;
             StartMinimized = dto.StartMinimized ?? StartMinimized;
@@ -91,6 +93,7 @@ public sealed class SettingsStore
                 DeviceId = DeviceId,
                 DeviceName = DeviceName,
                 Hotkey = Hotkey,
+                HotkeySettings = HotkeySettings,
                 ThemeMode = ThemeMode,
                 BootStartEnabled = BootStartEnabled,
                 StartMinimized = StartMinimized,
@@ -131,6 +134,7 @@ public sealed class SettingsStore
         public string? DeviceId { get; set; }
         public string? DeviceName { get; set; }
         public string? Hotkey { get; set; }
+        public string? HotkeySettings { get; set; }
         public string? ThemeMode { get; set; }
         public bool? BootStartEnabled { get; set; }
         public bool? StartMinimized { get; set; }
