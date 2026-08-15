@@ -1,0 +1,69 @@
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; padding: 0; }
+
+/* ===== 滚动条:细条 + 圆角 + 悬浮加深,全局统一(WebKit/Blink + Firefox) ===== */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(107, 114, 128, 0.35);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(107, 114, 128, 0.6);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(107, 114, 128, 0.4) transparent;
+}
+
+/* 深色模式:Github Primer 风格滚动条 */
+html[data-theme='dark'] ::-webkit-scrollbar-thumb {
+  background: rgba(110, 118, 129, 0.4);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+html[data-theme='dark'] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 148, 158, 0.65);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+html[data-theme='dark'] * {
+  scrollbar-color: rgba(110, 118, 129, 0.45) transparent;
+}
+
+/* ===== 快速同步聊天:气泡 footer 压缩上边距、缩小字号 ===== */
+.clipsync-quick-sync-chat .ant-bubble-footer {
+  margin-block-start: 4px;
+  font-size: 11px;
+  line-height: 16px;
+  opacity: 0.8;
+}
+
+/* ===== 快速同步全屏进出动画 ===== */
+.cs-chat-fullscreen {
+  animation: cs-fullscreen-in 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.cs-chat-fullscreen-leave {
+  animation: cs-fullscreen-out 0.22s cubic-bezier(0.55, 0, 0.55, 0.2) forwards;
+}
+@keyframes cs-fullscreen-in {
+  from { opacity: 0; transform: scale(0.96) translateY(14px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes cs-fullscreen-out {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to { opacity: 0; transform: scale(0.97) translateY(10px); }
+}
