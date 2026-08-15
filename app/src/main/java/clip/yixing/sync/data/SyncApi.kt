@@ -113,6 +113,6 @@ class SyncApi(private val serverUrl: String, private val token: String) {
     } catch (e: ApiException) {
         false to (if (e.statusCode == 401) "令牌无效(401)" else e.message ?: "连接失败")
     } catch (e: Exception) {
-        false to "连接失败: " + e.message
+        false to "连接失败: " + (e.message ?: e.javaClass.simpleName)
     }
 }

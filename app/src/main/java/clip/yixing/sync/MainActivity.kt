@@ -10,6 +10,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.add
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -154,10 +160,10 @@ private fun MainScreen() {
     var searchQuery by remember { mutableStateOf("") }
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // 单个 backdrop:录制外层 content(Pager 整体),与顶栏/底栏 blur 表面同属
-    // 外层 Scaffold 坐标系,且录制范围不含任何 blur 表面 —— 避免 GraphicsLayer
-    // 自引用导致的 hwui native 崩溃,也避免 Pager 页面 graphicsLayer 平移导致的
-    // localPositionOf 坐标错位(模糊内容偏移、部分区域透明)。
+    // 单个 backdrop:录制外层 content(Pager 整体,含各页大标题顶栏),底栏 blur
+    // 表面读取它 —— 录制范围不含任何 blur 表面(顶栏在页面内无模糊,与 KernelSU
+    // 一致),避免 GraphicsLayer 自引用导致的 hwui native 崩溃;且录制节点与底栏
+    // 同属外层 Scaffold 坐标系,不存在 Pager 页面 graphicsLayer 平移导致的错位。
     val barSurface = MiuixTheme.colorScheme.surface
     val backdrop = rememberLayerBackdrop(
         onDraw = {
@@ -166,30 +172,60 @@ private fun MainScreen() {
         }
     )
     val currentPage = pagerState.currentPage
-    val pageTitle = when (currentPage) {
-        0 -> "剪贴板同步"
-        1 -> "捕获记录"
-        else -> "设置"
-    }
-
-    // 每页独立滚动状态(页面间互不共享)
-    val sb0 = MiuixScrollBehavior()
-    val sb1 = MiuixScrollBehavior()
-    val sb2 = MiuixScrollBehavior()
-    val scrollBehaviors = listOf(sb0, sb1, sb2)
 
     Box(Modifier.fillMaxSize()) {
         Scaffold(
-        topBar = {
+        bottomBar = {
             BarBlurSurface(backdrop = backdrop, refreshKey = currentPage) {
-                TopAppBar(
-                    title = pageTitle,
-                    largeTitle = pageTitle,
+                NavigationBar(
                     color = Color.Transparent,
-                    scrollBehavior = scrollBehaviors[currentPage],
-                    actions = {
-                        if (currentPage == 1) {
-                            // 排序:气泡卡片菜单选择 倒序(最新在前)/ 正序(最早在前)
+                    mode = NavigationBarDisplayMode.IconAndText
+                ) {
+                    NavigationBarItem(
+                        selected = currentPage == 0,
+                        onClick = { pagerNavigator.animateTo(pagerState, 0) },
+                        icon = MiuixIcons.Normal.Home,
+                        label = "首页"
+                    )
+                    NavigationBarItem(
+                        selected = currentPage == 1,
+                        onClick = { pagerNavigator.animateTo(pagerState, 1) },
+                        icon = MiuixIcons.Normal.Notes,
+                        label = "记录"
+                    )
+                    NavigationBarItem(
+                        selected = currentPage == 2,
+                        onClick = { pagerNavigator.animateTo(pagerState, 2) },
+                        icon = MiuixIcons.Normal.Settings,
+                        label = "设置"
+                    )
+                }
+            }
+        }
+    ) { padding ->
+        val bottomInnerPadding = padding.calculateBottomPadding()
+        // 整页(含大标题顶栏)在 Pager 内滑动切换,与 KernelSU 一致
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .layerBackdrop(backdrop)
+        ) {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .overScrollHorizontal(),
+                beyondViewportPageCount = 3
+            ) { page ->
+                when (page) {
+                    0 -> PageShell(title = "剪贴板同步", bottomInnerPadding = bottomInnerPadding) { scrollBehavior, topPadding ->
+                        HomePage(scrollBehavior, topPadding, bottomInnerPadding)
+                    }
+                    1 -> PageShell(
+                        title = "捕获记录",
+                        bottomInnerPadding = bottomInnerPadding,
+                        actions = {
+                            // 排序:气泡卡片菜单选择 时间 倒序(最新在前)/ 时间 正序(最早在前)
                             OverlayIconDropdownMenu(
                                 entry = DropdownEntry(
                                     items = listOf(
@@ -226,60 +262,16 @@ private fun MainScreen() {
                                 )
                             }
                         }
+                    ) { scrollBehavior, topPadding ->
+                        RecordsPage(
+                            scrollBehavior, topPadding, bottomInnerPadding,
+                            sortDesc = sortDesc,
+                            snackbarHostState = snackbarHostState,
+                        )
                     }
-                )
-            }
-        },
-        bottomBar = {
-            BarBlurSurface(backdrop = backdrop, refreshKey = currentPage) {
-                NavigationBar(
-                    color = Color.Transparent,
-                    mode = NavigationBarDisplayMode.IconAndText
-                ) {
-                    NavigationBarItem(
-                        selected = currentPage == 0,
-                        onClick = { pagerNavigator.animateTo(pagerState, 0) },
-                        icon = MiuixIcons.Normal.Home,
-                        label = "首页"
-                    )
-                    NavigationBarItem(
-                        selected = currentPage == 1,
-                        onClick = { pagerNavigator.animateTo(pagerState, 1) },
-                        icon = MiuixIcons.Normal.Notes,
-                        label = "记录"
-                    )
-                    NavigationBarItem(
-                        selected = currentPage == 2,
-                        onClick = { pagerNavigator.animateTo(pagerState, 2) },
-                        icon = MiuixIcons.Normal.Settings,
-                        label = "设置"
-                    )
-                }
-            }
-        }
-    ) { padding ->
-        val topPadding = padding.calculateTopPadding()
-        val bottomInnerPadding = padding.calculateBottomPadding()
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .layerBackdrop(backdrop)
-        ) {
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .overScrollHorizontal(),
-                beyondViewportPageCount = 3
-            ) { page ->
-                when (page) {
-                    0 -> HomePage(scrollBehaviors[0], topPadding, bottomInnerPadding)
-                    1 -> RecordsPage(
-                        scrollBehaviors[1], topPadding, bottomInnerPadding,
-                        sortDesc = sortDesc,
-                        snackbarHostState = snackbarHostState,
-                    )
-                    else -> SettingsPage(scrollBehaviors[2], topPadding, bottomInnerPadding)
+                    else -> PageShell(title = "设置", bottomInnerPadding = bottomInnerPadding) { scrollBehavior, topPadding ->
+                        SettingsPage(scrollBehavior, topPadding, bottomInnerPadding)
+                    }
                 }
             }
         }
@@ -353,24 +345,31 @@ private fun BarBlurSurface(
 }
 
 /**
- * KernelSU 风格整页结构:每页独立大标题 TopAppBar 与滚动状态,页面间互不共享。
+ * KernelSU 风格整页结构:每个页面持有自己的 Scaffold、大标题 TopAppBar 与
+ * 独立的滚动状态,整页(含顶栏)随 HorizontalPager 一起滑动切换,底栏固定在外层。
  */
 @Composable
-private fun PageShell(
+internal fun PageShell(
     title: String,
     bottomInnerPadding: Dp,
+    actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
     content: @Composable (ScrollBehavior, Dp) -> Unit
 ) {
     val scrollBehavior = MiuixScrollBehavior()
-    Column(Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = title,
-            largeTitle = title,
-            scrollBehavior = scrollBehavior
-        )
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            content(scrollBehavior, 0.dp)
-        }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = title,
+                largeTitle = title,
+                scrollBehavior = scrollBehavior,
+                actions = actions
+            )
+        },
+        contentWindowInsets = WindowInsets.systemBars
+            .add(WindowInsets.displayCutout)
+            .only(WindowInsetsSides.Horizontal)
+    ) { padding ->
+        content(scrollBehavior, padding.calculateTopPadding())
     }
 }
 
