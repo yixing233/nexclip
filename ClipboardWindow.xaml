@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="SyncClipboard.Desktop.ClipboardWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="SyncClipboard 剪贴板">
+    <views:ClipboardMainPage xmlns:views="using:SyncClipboard.Desktop.Views" />
+</Window>
