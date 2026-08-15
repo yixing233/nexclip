@@ -171,10 +171,10 @@ export function clearHistory(): Promise<void> {
   return request('/api/clipboard/history', { method: 'DELETE' });
 }
 
-export function sendToDevices(text: string, deviceIds: string[]): Promise<void> {
-  return request('/api/clipboard/send', {
+export function sendToDevices(text: string, deviceIds: string[]): Promise<ClipboardEntry> {
+  return request<ClipboardEntry>('/api/clipboard/send', {
     method: 'POST',
-    body: JSON.stringify({ text, deviceIds }),
+    body: JSON.stringify({ text, deviceIds, deviceId: deviceId(), deviceName: 'Web 管理页' }),
   });
 }
 

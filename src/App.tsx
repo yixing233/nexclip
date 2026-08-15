@@ -101,6 +101,10 @@ export default function App() {
         message.info('收到新剪贴板推送')
         setRefreshTick(t => t + 1)
       },
+      onClipboardCleared: () => {
+        message.info('剪贴板历史已清空')
+        setRefreshTick(t => t + 1)
+      },
       onStatusChange: (s) => {
         if (s === 'connected' || s === 'reconnecting' || s === 'disconnected') {
           setHubStatus(s)
@@ -126,7 +130,7 @@ export default function App() {
   const pageEl = useMemo(() => {
     switch (page) {
       case 'overview': return <OverviewPage refreshTick={refreshTick} />
-      case 'clipboard': return <ClipboardPage />
+      case 'clipboard': return <ClipboardPage refreshTick={refreshTick} />
       case 'devices': return <DevicesPage />
       case 'records': return <SyncRecordsPage />
       default: return <SettingsPage onThemeChange={setThemeModeState} themeMode={themeMode} />

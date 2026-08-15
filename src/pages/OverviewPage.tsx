@@ -15,7 +15,7 @@ import relativeTime from 'dayjs/plugin/relativeTime'
 import StatCard from '../components/StatCard'
 import {
   getStats, getCurrentClipboard, getHistory, getDevices, getActivities,
-  pushText, sendToDevices, imageUrl, deviceId, type ClipboardEntry, type DeviceInfo,
+  sendToDevices, imageUrl, type ClipboardEntry, type DeviceInfo,
   type ActivityLog, type Stats,
 } from '../api'
 import {
@@ -175,7 +175,6 @@ export default function OverviewPage({ refreshTick }: { refreshTick: number }) {
     setSending(true)
     try {
       await sendToDevices(text, targets)
-      await pushText(text, deviceId(), 'Web 管理页')
       addOutgoing(text, targets)
       message.success('已发送到所选设备')
       setSendText('')

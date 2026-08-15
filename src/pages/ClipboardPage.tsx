@@ -9,7 +9,7 @@ import { getHistory, deleteEntry, imageUrl, type ClipboardEntry } from '../api'
 dayjs.extend(relativeTime)
 const { Text } = Typography
 
-export default function ClipboardPage() {
+export default function ClipboardPage({ refreshTick }: { refreshTick: number }) {
   const [data, setData] = useState<ClipboardEntry[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -37,7 +37,7 @@ export default function ClipboardPage() {
       .then(res => { setData(res.items); setTotal(res.total) })
       .finally(() => setLoading(false))
   }
-  useEffect(() => { load(page) }, [page])
+  useEffect(() => { load(page) }, [page, refreshTick]) // eslint-disable-line
 
   const columns: ColumnsType<ClipboardEntry> = [
     {
