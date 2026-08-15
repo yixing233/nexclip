@@ -18,7 +18,9 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -26,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.background
 import androidx.compose.ui.graphics.Shape
@@ -41,6 +44,7 @@ import clip.yixing.sync.ui.theme.SyncClipboardTheme
 import clip.yixing.sync.util.SyncSettings
 import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Icon
@@ -56,9 +60,9 @@ import top.yukonga.miuix.kmp.basic.SnackbarHostState
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.blur.BlendColorEntry
+import top.yukonga.miuix.kmp.blur.BlurBlendMode
 import top.yukonga.miuix.kmp.blur.BlurDefaults
 import top.yukonga.miuix.kmp.blur.LayerBackdrop
-import top.yukonga.miuix.kmp.blur.isRuntimeShaderSupported
 import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
@@ -133,13 +137,25 @@ private fun MainScreen() {
     var searchOpen by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     val snackbarHostState = remember { SnackbarHostState() }
-    // 顶/底栏毛玻璃:页面内容层被 layerBackdrop 捕获,模糊条叠加其上
-    // 注意:miuix 0.9.3 的 RuntimeShader 模糊在小米 15 Pro + MIUI OS3.0(HWUI)上
-    // 触发原生 SIGSEGV(isRuntimeShaderSupported 返回 true 仍崩溃),故本版本禁用,
-    // 用半透明 surface 视觉替代。待 miuix 修复或换 RenderEffect 方案后恢复。
-    val shaderSupported = false
-    val backdrop: LayerBackdrop? = null
-    val titles = listOf("剪贴板同步", "捕获记录", "设置")
+
+    // 单个 backdrop:录制外层 content(Pager 整体),与顶栏/底栏 blur 表面同属
+    // 外层 Scaffold 坐标系,且录制范围不含任何 blur 表面 —— 避免 GraphicsLayer
+    // 自引用导致的 hwui native 崩溃,也避免 Pager 页面 graphicsLayer 平移导致的
+    // localPositionOf 坐标错位(模糊内容偏移、部分区域透明)。
+    val barSurface = MiuixTheme.colorScheme.surface
+    val backdrop = rememberLayerBackdrop(
+        onDraw = {
+            drawRect(barSurface)
+            drawContent()
+        }
+    )
+    val currentPage = pagerState.currentPage
+    val pageTitle = when (currentPage) {
+        0 -> "剪贴板同步"
+        1 -> "捕获记录"
+        else -> "设置"
+    }
+
     // 每页独立滚动状态(页面间互不共享)
     val sb0 = MiuixScrollBehavior()
     val sb1 = MiuixScrollBehavior()
@@ -147,141 +163,159 @@ private fun MainScreen() {
     val scrollBehaviors = listOf(sb0, sb1, sb2)
 
     Box(Modifier.fillMaxSize()) {
-        // 内容层(被捕获为模糊背景,滚动到顶/底栏底下;不支持 shader 时纯色)
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .then(
-                    if (backdrop != null) Modifier.layerBackdrop(backdrop)
-                    else Modifier.background(MiuixTheme.colorScheme.surface)
-                )
-        ) {
-            Scaffold(
-                bottomBar = {
-                    BlurredBar(backdrop, shaderSupported) {
-                        NavigationBar(mode = NavigationBarDisplayMode.IconAndText) {
-                            NavigationBarItem(
-                                selected = pagerState.currentPage == 0,
-                                onClick = { pagerNavigator.animateTo(pagerState, 0) },
-                                icon = MiuixIcons.Normal.Home,
-                                label = "首页"
-                            )
-                            NavigationBarItem(
-                                selected = pagerState.currentPage == 1,
-                                onClick = { pagerNavigator.animateTo(pagerState, 1) },
-                                icon = MiuixIcons.Normal.Notes,
-                                label = "记录"
-                            )
-                            NavigationBarItem(
-                                selected = pagerState.currentPage == 2,
-                                onClick = { pagerNavigator.animateTo(pagerState, 2) },
-                                icon = MiuixIcons.Normal.Settings,
-                                label = "设置"
-                            )
+        Scaffold(
+        topBar = {
+            BarBlurSurface(backdrop = backdrop, refreshKey = currentPage) {
+                TopAppBar(
+                    title = pageTitle,
+                    largeTitle = pageTitle,
+                    color = Color.Transparent,
+                    scrollBehavior = scrollBehaviors[currentPage],
+                    actions = {
+                        if (currentPage == 1) {
+                            // 排序:倒序(最新在前,默认)/ 正序(最早在前)
+                            IconButton(
+                                onClick = { sortDesc = !sortDesc },
+                            ) {
+                                Icon(
+                                    imageVector = MiuixIcons.Basic.ArrowUpDown,
+                                    contentDescription = if (sortDesc) "切换为顺序排列" else "切换为倒序排列"
+                                )
+                            }
+                            // 搜索:打开全屏搜索页
+                            IconButton(
+                                onClick = {
+                                    searchQuery = ""
+                                    searchOpen = true
+                                },
+                            ) {
+                                Icon(
+                                    imageVector = MiuixIcons.Normal.Search,
+                                    contentDescription = "搜索"
+                                )
+                            }
                         }
                     }
-                }
-            ) { padding ->
-                val topPadding = padding.calculateTopPadding()
-                val bottomInnerPadding = padding.calculateBottomPadding()
-                HorizontalPager(
-                    state = pagerState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .overScrollHorizontal(),
-                    beyondViewportPageCount = 3
-                ) { page ->
-                    when (page) {
-                        0 -> HomePage(scrollBehaviors[0], topPadding, bottomInnerPadding)
-                        1 -> RecordsPage(
-                            scrollBehaviors[1], topPadding, bottomInnerPadding,
-                            sortDesc = sortDesc,
-                            snackbarHostState = snackbarHostState,
-                        )
-                        else -> SettingsPage(scrollBehaviors[2], topPadding, bottomInnerPadding)
-                    }
+                )
+            }
+        },
+        bottomBar = {
+            BarBlurSurface(backdrop = backdrop, refreshKey = currentPage) {
+                NavigationBar(
+                    color = Color.Transparent,
+                    mode = NavigationBarDisplayMode.IconAndText
+                ) {
+                    NavigationBarItem(
+                        selected = currentPage == 0,
+                        onClick = { pagerNavigator.animateTo(pagerState, 0) },
+                        icon = MiuixIcons.Normal.Home,
+                        label = "首页"
+                    )
+                    NavigationBarItem(
+                        selected = currentPage == 1,
+                        onClick = { pagerNavigator.animateTo(pagerState, 1) },
+                        icon = MiuixIcons.Normal.Notes,
+                        label = "记录"
+                    )
+                    NavigationBarItem(
+                        selected = currentPage == 2,
+                        onClick = { pagerNavigator.animateTo(pagerState, 2) },
+                        icon = MiuixIcons.Normal.Settings,
+                        label = "设置"
+                    )
                 }
             }
         }
-
-        // 顶栏(毛玻璃覆盖,滚动时内容从底下穿过)
-        BlurredBar(backdrop, shaderSupported) {
-            TopAppBar(
-                title = titles[pagerState.currentPage],
-                largeTitle = titles[pagerState.currentPage],
-                scrollBehavior = scrollBehaviors[pagerState.currentPage],
-                color = Color.Transparent,
-                actions = {
-                    if (pagerState.currentPage == 1) {
-                        // 排序:倒序(最新在前,默认)/ 正序(最早在前)
-                        IconButton(
-                            onClick = { sortDesc = !sortDesc },
-                        ) {
-                            Icon(
-                                imageVector = MiuixIcons.Basic.ArrowUpDown,
-                                contentDescription = if (sortDesc) "切换为顺序排列" else "切换为倒序排列"
-                            )
-                        }
-                        // 搜索:打开全屏搜索页
-                        IconButton(
-                            onClick = {
-                                searchQuery = ""
-                                searchOpen = true
-                            },
-                        ) {
-                            Icon(
-                                imageVector = MiuixIcons.Normal.Search,
-                                contentDescription = "搜索"
-                            )
-                        }
-                    }
-                }
-            )
-        }
-
-        // Snackbar(删除/清空撤销提示)
-        SnackbarHost(
-            state = snackbarHostState,
+    ) { padding ->
+        val topPadding = padding.calculateTopPadding()
+        val bottomInnerPadding = padding.calculateBottomPadding()
+        Box(
             modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 88.dp, start = 16.dp, end = 16.dp)
-        )
+                .fillMaxSize()
+                .layerBackdrop(backdrop)
+        ) {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .overScrollHorizontal(),
+                beyondViewportPageCount = 3
+            ) { page ->
+                when (page) {
+                    0 -> HomePage(scrollBehaviors[0], topPadding, bottomInnerPadding)
+                    1 -> RecordsPage(
+                        scrollBehaviors[1], topPadding, bottomInnerPadding,
+                        sortDesc = sortDesc,
+                        snackbarHostState = snackbarHostState,
+                    )
+                    else -> SettingsPage(scrollBehaviors[2], topPadding, bottomInnerPadding)
+                }
+            }
+        }
     }
 
+    // Snackbar(删除/清空撤销提示)
+    SnackbarHost(
+        state = snackbarHostState,
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = 88.dp, start = 16.dp, end = 16.dp)
+    )
+
     // 全屏搜索页(覆盖顶栏/底栏)
-    if (searchOpen) {
-        SearchPage(
-            sortDesc = sortDesc,
-            query = searchQuery,
-            onQueryChange = { searchQuery = it },
-            onClose = { searchOpen = false },
-            snackbarHostState = snackbarHostState,
-        )
+        if (searchOpen) {
+            SearchPage(
+                sortDesc = sortDesc,
+                query = searchQuery,
+                onQueryChange = { searchQuery = it },
+                onClose = { searchOpen = false },
+                snackbarHostState = snackbarHostState,
+            )
+        }
     }
 }
 
-/** 毛玻璃条:内容由 backdrop 捕获,当前条以 surface 混合色模糊叠加;不支持 shader 时降级纯色 */
+/**
+ * 毛玻璃表面(顶栏/底栏通用):内容由 [backdrop] 捕获后由 textureBlur 模糊。
+ *
+ * backdrop 的层录制/坐标定位与 blur 表面的绘制存在时序差:层就绪后
+ * blur 表面不会自动重绘,静止帧会残留透明。因此组合后(以及 [refreshKey]
+ * 变化后)短时 tick 强制重绘,保证显示的是最新捕获内容。
+ */
 @Composable
-private fun BlurredBar(
-    backdrop: LayerBackdrop?,
-    blurEnabled: Boolean,
-    content: @Composable () -> Unit,
+private fun BarBlurSurface(
+    backdrop: LayerBackdrop,
+    refreshKey: Any? = Unit,
+    content: @Composable () -> Unit
 ) {
+    var tick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(refreshKey) {
+        repeat(6) {
+            delay(80)
+            tick++
+        }
+    }
+    val barSurface = MiuixTheme.colorScheme.surface
     Box(
-        modifier = if (blurEnabled && backdrop != null) {
-            Modifier.textureBlur(
+        modifier = Modifier
+            // 读取 tick:每次变化都会让 graphicsLayer 节点更新并触发重绘
+            .graphicsLayer {
+                val t = tick
+                alpha = if (t % 2 == 0) 1f else 1f
+            }
+            .textureBlur(
                 backdrop = backdrop,
                 shape = RectangleShape,
-                blurRadius = 25f,
+                blurRadius = BlurDefaults.BlurRadius,
                 colors = BlurDefaults.blurColors(
                     blendColors = listOf(
-                        BlendColorEntry(color = MiuixTheme.colorScheme.surface.copy(0.8f)),
-                    ),
-                ),
+                        BlendColorEntry(
+                            color = barSurface.copy(alpha = 0.55f),
+                            mode = BlurBlendMode.SrcOver
+                        )
+                    )
+                )
             )
-        } else {
-            Modifier.background(MiuixTheme.colorScheme.surface.copy(alpha = 0.85f))
-        }
     ) {
         content()
     }
