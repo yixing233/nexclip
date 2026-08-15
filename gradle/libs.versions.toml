@@ -11,6 +11,7 @@ signalr = "9.0.1"
 kotlinx-coroutines = "1.10.2"
 core-ktx = "1.15.0"
 lifecycle-runtime = "2.8.7"
+navigationevent = "1.1.2"
 
 [plugins]
 agp-app = { id = "com.android.application", version.ref = "agp" }
@@ -35,3 +36,4 @@ miuix-ui = { group = "top.yukonga.miuix.kmp", name = "miuix-ui-android", version
 miuix-icons = { group = "top.yukonga.miuix.kmp", name = "miuix-icons-android", version.ref = "miuix" }
 miuix-preference = { group = "top.yukonga.miuix.kmp", name = "miuix-preference-android", version.ref = "miuix" }
 miuix-blur = { group = "top.yukonga.miuix.kmp", name = "miuix-blur-android", version.ref = "miuix" }
+navigationevent-compose = { group = "androidx.navigationevent", name = "navigationevent-compose-android", version.ref = "navigationevent" }

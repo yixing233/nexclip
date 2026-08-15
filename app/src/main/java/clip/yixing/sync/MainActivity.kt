@@ -18,6 +18,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -35,6 +36,8 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
+import androidx.navigationevent.compose.rememberNavigationEventDispatcherOwner
 import clip.yixing.sync.service.ClipboardMonitorService
 import clip.yixing.sync.ui.HomePage
 import clip.yixing.sync.ui.RecordsPage
@@ -47,6 +50,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import top.yukonga.miuix.kmp.basic.DropdownEntry
+import top.yukonga.miuix.kmp.basic.DropdownItem
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
@@ -67,6 +72,7 @@ import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
 import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.menu.OverlayIconDropdownMenu
 import top.yukonga.miuix.kmp.icon.basic.ArrowUpDown
 import top.yukonga.miuix.kmp.icon.extended.Home
 import top.yukonga.miuix.kmp.icon.extended.Search
@@ -90,8 +96,18 @@ class MainActivity : ComponentActivity() {
             ClipboardMonitorService.start(this)
         }
         setContent {
-            SyncClipboardTheme {
-                MainScreen()
+            // 气泡菜单/弹窗等组件依赖 NavigationEventDispatcher 处理返回手势,
+            // 需在根节点提供 DispatcherOwner,否则点击下拉菜单会闪退。
+            val dispatcherOwner = rememberNavigationEventDispatcherOwner(
+                enabled = true,
+                parent = null,
+            )
+            CompositionLocalProvider(
+                LocalNavigationEventDispatcherOwner provides dispatcherOwner
+            ) {
+                SyncClipboardTheme {
+                    MainScreen()
+                }
             }
         }
     }
@@ -173,13 +189,28 @@ private fun MainScreen() {
                     scrollBehavior = scrollBehaviors[currentPage],
                     actions = {
                         if (currentPage == 1) {
-                            // 排序:倒序(最新在前,默认)/ 正序(最早在前)
-                            IconButton(
-                                onClick = { sortDesc = !sortDesc },
+                            // 排序:气泡卡片菜单选择 倒序(最新在前)/ 正序(最早在前)
+                            OverlayIconDropdownMenu(
+                                entry = DropdownEntry(
+                                    items = listOf(
+                                        DropdownItem(
+                                            text = "时间 倒序",
+                                            summary = "最新在前",
+                                            selected = sortDesc,
+                                            onClick = { sortDesc = true },
+                                        ),
+                                        DropdownItem(
+                                            text = "时间 正序",
+                                            summary = "最早在前",
+                                            selected = !sortDesc,
+                                            onClick = { sortDesc = false },
+                                        ),
+                                    ),
+                                ),
                             ) {
                                 Icon(
                                     imageVector = MiuixIcons.Basic.ArrowUpDown,
-                                    contentDescription = if (sortDesc) "切换为顺序排列" else "切换为倒序排列"
+                                    contentDescription = "排序",
                                 )
                             }
                             // 搜索:打开全屏搜索页
