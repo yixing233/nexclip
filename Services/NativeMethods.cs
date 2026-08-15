@@ -12,6 +12,9 @@ internal static class NativeMethods
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     internal static extern uint GetDpiForWindow(IntPtr hwnd);
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    internal static extern bool IsWindowVisible(IntPtr hwnd);
+
     [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
     internal static extern long GetWindowLongPtr(IntPtr hwnd, int index);
 

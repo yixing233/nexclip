@@ -73,7 +73,14 @@ public sealed class HotKeyService : IDisposable
     {
         if (msg == WmHotkey)
         {
-            _callback();
+            try
+            {
+                _callback();
+            }
+            catch (Exception ex)
+            {
+                Log.Error("全局热键回调异常", ex);
+            }
         }
         return DefWindowProcW(hWnd, msg, wParam, lParam);
     }

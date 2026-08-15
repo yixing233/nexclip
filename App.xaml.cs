@@ -110,28 +110,56 @@ public partial class App : Application
     /// <summary>切换剪贴板窗口显示/隐藏(托盘左键 / 全局热键)。</summary>
     private static void ToggleClipboardWindow() => ClipboardWindow?.ToggleVisibility();
 
+    /// <summary>窗口真实可见性(Win32 视角,避开 AppWindow.IsVisible 在 Hide 后的不可靠行为)。</summary>
+    private static bool IsWindowActuallyVisible(Window window)
+    {
+        try
+        {
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
+            return NativeMethods.IsWindowVisible(hwnd);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     /// <summary>切换设置窗口显示/隐藏(设置热键)。</summary>
     private static void ToggleSettingsWindow()
     {
-        if (SettingsWindow is null || !SettingsWindow.AppWindow.IsVisible)
+        try
         {
-            OpenSettings();
-            return;
+            if (SettingsWindow is null || !IsWindowActuallyVisible(SettingsWindow))
+            {
+                OpenSettings();
+                return;
+            }
+            SettingsWindow.AppWindow.Hide();
         }
-        SettingsWindow.AppWindow.Hide();
+        catch (Exception ex)
+        {
+            Log.Error("切换设置窗口失败", ex);
+        }
     }
 
     /// <summary>打开设置窗口(托盘菜单 / 剪贴板窗口按钮)。</summary>
     public static void OpenSettings()
     {
-        if (SettingsWindow is null)
+        try
         {
-            SettingsWindow = new SettingsWindow();
-            RegisterWindow(SettingsWindow);
-            ApplyTheme(Services.Settings.ThemeMode);
+            if (SettingsWindow is null || !IsWindowActuallyVisible(SettingsWindow))
+            {
+                SettingsWindow = new SettingsWindow();
+                RegisterWindow(SettingsWindow);
+                ApplyTheme(Services.Settings.ThemeMode);
+            }
+            SettingsWindow.AppWindow.Show();
+            SettingsWindow.Activate();
         }
-        SettingsWindow.AppWindow.Show();
-        SettingsWindow.Activate();
+        catch (Exception ex)
+        {
+            Log.Error("打开设置窗口失败", ex);
+        }
     }
 
     /// <summary>退出应用(托盘菜单)。</summary>
