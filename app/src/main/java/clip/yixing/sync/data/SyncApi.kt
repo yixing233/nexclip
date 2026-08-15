@@ -21,6 +21,17 @@ data class ClipboardEntry(
     val isImage: Boolean get() = type == "Image"
 }
 
+/** 服务端登记的设备(online = LastSeenAt 在服务端阈值内) */
+data class DeviceInfo(
+    val id: String,
+    val name: String,
+    val platform: String,
+    val ip: String?,
+    val version: String?,
+    val online: Boolean,
+    val lastSeenAt: String,
+)
+
 class ApiException(message: String, val statusCode: Int? = null) : Exception(message)
 
 /** REST 客户端:与 SyncClipboard Server 契约一致(Bearer token) */
@@ -62,11 +73,18 @@ class SyncApi(private val serverUrl: String, private val token: String) {
         }
     }
 
-    /** PUT /api/clipboard → 上传文本,返回条目(unchanged 时仍是当前条目) */
-    fun putText(text: String, deviceId: String, deviceName: String): ClipboardEntry {
+    /** PUT /api/clipboard → 上传文本,返回条目(unchanged 时仍是当前条目);platform/version 用于服务端设备登记 */
+    fun putText(
+        text: String,
+        deviceId: String,
+        deviceName: String,
+        platform: String = "Android",
+        version: String = android.os.Build.VERSION.RELEASE,
+    ): ClipboardEntry {
         val json = JSONObject().apply {
             put("type", "Text"); put("text", text)
             put("deviceId", deviceId); put("deviceName", deviceName)
+            put("platform", platform); put("version", version)
         }.toString()
         val req = builder("PUT", "/api/clipboard")
             .header("Content-Type", "application/json")
@@ -87,12 +105,34 @@ class SyncApi(private val serverUrl: String, private val token: String) {
         }
     }
 
+    /** GET /api/devices → 设备列表(服务端按 LastSeenAt 计算 online) */
+    fun getDevices(): List<DeviceInfo> {
+        val resp = execute(builder("GET", "/api/devices").build())
+        resp.use {
+            val arr = JSONArray(it.body?.string() ?: "[]")
+            return (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                DeviceInfo(
+                    id = o.optString("id"),
+                    name = o.optString("name", "未知设备"),
+                    platform = o.optString("platform", "Unknown"),
+                    ip = if (o.isNull("ip")) null else o.optString("ip"),
+                    version = if (o.isNull("version")) null else o.optString("version"),
+                    online = o.optBoolean("online"),
+                    lastSeenAt = o.optString("lastSeenAt"),
+                )
+            }
+        }
+    }
+
     /** POST /api/clipboard/image(multipart) */
     fun uploadImage(pngBytes: ByteArray, deviceId: String, deviceName: String): ClipboardEntry {
         val body = MultipartBody.Builder().setType(MultipartBody.FORM)
             .addFormDataPart("file", "clipboard.png", pngBytes.toRequestBody("image/png".toMediaType()))
             .addFormDataPart("deviceId", deviceId)
             .addFormDataPart("deviceName", deviceName)
+            .addFormDataPart("platform", "Android")
+            .addFormDataPart("version", android.os.Build.VERSION.RELEASE)
             .build()
         val req = builder("POST", "/api/clipboard/image").post(body).build()
         val resp = execute(req)

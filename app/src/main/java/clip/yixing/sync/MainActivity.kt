@@ -4,8 +4,12 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.EaseInOut
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -285,16 +289,24 @@ private fun MainScreen() {
             .padding(bottom = 88.dp, start = 16.dp, end = 16.dp)
     )
 
-    // 全屏搜索页(覆盖顶栏/底栏)
-        if (searchOpen) {
-            SearchPage(
-                sortDesc = sortDesc,
-                query = searchQuery,
-                onQueryChange = { searchQuery = it },
-                onClose = { searchOpen = false },
-                snackbarHostState = snackbarHostState,
-            )
-        }
+    // 全屏搜索页(覆盖顶栏/底栏):进入淡入;退出时整体淡出并向上收起
+    // (与进入时顶栏下滑方向相反,呈"折叠回搜索框"效果)
+    AnimatedVisibility(
+        visible = searchOpen,
+        enter = fadeIn(tween(220)),
+        exit = fadeOut(tween(200)) + slideOutVertically(
+            targetOffsetY = { -it / 5 },
+            animationSpec = tween(200)
+        )
+    ) {
+        SearchPage(
+            sortDesc = sortDesc,
+            query = searchQuery,
+            onQueryChange = { searchQuery = it },
+            onClose = { searchOpen = false },
+            snackbarHostState = snackbarHostState,
+        )
+    }
     }
 }
 
