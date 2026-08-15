@@ -158,11 +158,6 @@ internal fun SettingsPage(scrollBehavior: ScrollBehavior, topPadding: Dp, bottom
                             color = MiuixTheme.colorScheme.primary
                         )
                     }
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = "保存后,回到首页重新开启「持续监听剪贴板」即可生效",
-                        color = MiuixTheme.colorScheme.onBackgroundVariant
-                    )
                 }
             }
             item {

@@ -347,6 +347,11 @@ private fun BarBlurSurface(
 /**
  * KernelSU 风格整页结构:每个页面持有自己的 Scaffold、大标题 TopAppBar 与
  * 独立的滚动状态,整页(含顶栏)随 HorizontalPager 一起滑动切换,底栏固定在外层。
+ *
+ * 顶栏毛玻璃:每页维护独立的 pageBackdrop,录制范围仅为本页内容层(不含顶栏
+ * blur 表面),顶栏 BarBlurSurface 读取它 —— 与页面同坐标系无错位,且不会被
+ * 外层 Pager backdrop 录制到(顶栏 blur 表面读的是 pageBackdrop,非外层层,
+ * 不构成 GraphicsLayer 自引用)。
  */
 @Composable
 internal fun PageShell(
@@ -356,20 +361,37 @@ internal fun PageShell(
     content: @Composable (ScrollBehavior, Dp) -> Unit
 ) {
     val scrollBehavior = MiuixScrollBehavior()
+    val barSurface = MiuixTheme.colorScheme.surface
+    // 本页内容捕获层:只录内容(不含顶栏 blur 表面),顶栏模糊读取它
+    val pageBackdrop = rememberLayerBackdrop(
+        onDraw = {
+            drawRect(barSurface)
+            drawContent()
+        }
+    )
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = title,
-                largeTitle = title,
-                scrollBehavior = scrollBehavior,
-                actions = actions
-            )
+            BarBlurSurface(backdrop = pageBackdrop) {
+                TopAppBar(
+                    title = title,
+                    largeTitle = title,
+                    color = Color.Transparent,
+                    scrollBehavior = scrollBehavior,
+                    actions = actions
+                )
+            }
         },
         contentWindowInsets = WindowInsets.systemBars
             .add(WindowInsets.displayCutout)
             .only(WindowInsetsSides.Horizontal)
     ) { padding ->
-        content(scrollBehavior, padding.calculateTopPadding())
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .layerBackdrop(pageBackdrop)
+        ) {
+            content(scrollBehavior, padding.calculateTopPadding())
+        }
     }
 }
 
