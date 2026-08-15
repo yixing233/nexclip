@@ -1,0 +1,10 @@
+{
+  "port": 5033,
+  "authToken": "clipsync-demo-token",
+  "maxHistoryCount": 1000,
+  "databasePath": "../server/data/syncclipboard.db",
+  "imageStoragePath": "../server/data/images",
+  "maxImageSizeBytes": 10485760,
+  "onlineThresholdSeconds": 120,
+  "webDist": "../web/dist"
+}
