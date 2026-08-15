@@ -1,5 +1,7 @@
+using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using SyncClipboard.Desktop.Models;
 using SyncClipboard.Desktop.Services;
 
 namespace SyncClipboard.Desktop.ViewModels;
@@ -50,6 +52,22 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string hotkeySettings = "Alt+X";    // 设置打开
 
+    // ---- 设备列表 ----
+    public ObservableCollection<DeviceInfo> Devices { get; } = new();
+
+    [ObservableProperty]
+    private string deviceStatus = "";
+
+    [ObservableProperty]
+    private bool isDevicesLoading;
+
+    /// <summary>当前编辑重命名的设备 id(非空时显示重命名输入)。</summary>
+    [ObservableProperty]
+    private string? renamingDeviceId;
+
+    [ObservableProperty]
+    private string renameText = "";
+
     // ---- 历史 / 外观 ----
     [ObservableProperty]
     private int maxHistoryIndex;
@@ -68,7 +86,10 @@ public partial class SettingsViewModel : ObservableObject
         ServerUrl = s.ServerUrl;
         AuthToken = s.AuthToken;
         DeviceName = s.DeviceName;
-        BootStartEnabled = s.BootStartEnabled;
+        // 开机自启动以注册表实际状态为准(老版本仅存设置未写注册表)
+        var bootStart = StartupService.IsEnabled();
+        s.BootStartEnabled = bootStart;
+        BootStartEnabled = bootStart;
         StartMinimized = s.StartMinimized;
         CloseToTray = s.CloseToTray;
         MonitorEnabled = s.MonitorEnabled;
@@ -125,6 +146,106 @@ public partial class SettingsViewModel : ObservableObject
         TestResult = "本地历史已清空";
     }
 
+    /// <summary>加载设备列表(GET /api/devices)。</summary>
+    [RelayCommand]
+    public async Task RefreshDevicesAsync()
+    {
+        var s = _svc.Settings;
+        if (string.IsNullOrWhiteSpace(s.ServerUrl) || string.IsNullOrWhiteSpace(s.AuthToken))
+        {
+            DeviceStatus = "未配置服务器,无法加载设备列表";
+            return;
+        }
+        IsDevicesLoading = true;
+        DeviceStatus = "";
+        try
+        {
+            var list = await _svc.Api.GetDevicesAsync(s.ServerUrl, s.AuthToken);
+            Devices.Clear();
+            foreach (var d in list) Devices.Add(d);
+            DeviceStatus = list.Count == 0 ? "暂无设备" : $"共 {list.Count} 台设备";
+        }
+        catch (Exception ex)
+        {
+            DeviceStatus = $"设备列表加载失败:{ex.Message}";
+        }
+        finally
+        {
+            IsDevicesLoading = false;
+        }
+    }
+
+    /// <summary>开始重命名(设置编辑态)。</summary>
+    [RelayCommand]
+    public void StartRename(DeviceInfo device)
+    {
+        RenamingDeviceId = device.Id;
+        RenameText = device.Name ?? "";
+    }
+
+    /// <summary>取消重命名。</summary>
+    [RelayCommand]
+    public void CancelRename() => RenamingDeviceId = null;
+
+    /// <summary>提交重命名。</summary>
+    [RelayCommand]
+    public async Task ConfirmRenameAsync()
+    {
+        var id = RenamingDeviceId;
+        if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(RenameText)) return;
+        try
+        {
+            await _svc.Api.RenameDeviceAsync(_svc.Settings.ServerUrl, _svc.Settings.AuthToken, id, RenameText.Trim());
+            DeviceStatus = "设备已重命名";
+        }
+        catch (Exception ex)
+        {
+            DeviceStatus = $"重命名失败:{ex.Message}";
+        }
+        finally
+        {
+            RenamingDeviceId = null;
+            await RefreshDevicesAsync();
+        }
+    }
+
+    /// <summary>移除设备。</summary>
+    [RelayCommand]
+    public async Task RemoveDeviceAsync(DeviceInfo device)
+    {
+        try
+        {
+            await _svc.Api.RemoveDeviceAsync(_svc.Settings.ServerUrl, _svc.Settings.AuthToken, device.Id);
+            Devices.Remove(device);
+            DeviceStatus = "设备已移除";
+        }
+        catch (Exception ex)
+        {
+            DeviceStatus = $"移除失败:{ex.Message}";
+        }
+    }
+
+    /// <summary>设备展示文本(名称 + 平台/版本/IP)。</summary>
+    public static string DeviceSubtitle(DeviceInfo d)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(d.Platform)) parts.Add(d.Platform);
+        if (!string.IsNullOrWhiteSpace(d.Version)) parts.Add(d.Version);
+        if (!string.IsNullOrWhiteSpace(d.Ip)) parts.Add(d.Ip);
+        return string.Join(" · ", parts);
+    }
+
+    /// <summary>最后在线时间文案。</summary>
+    public static string LastSeenText(DeviceInfo d)
+    {
+        if (d.Online) return "在线";
+        var diff = DateTime.UtcNow - d.LastSeenAt;
+        if (diff < TimeSpan.FromMinutes(1)) return "刚刚离线";
+        if (diff < TimeSpan.FromHours(1)) return $"{(int)diff.TotalMinutes} 分钟前离线";
+        if (diff < TimeSpan.FromHours(24)) return $"{(int)diff.TotalHours} 小时前离线";
+        return $"{(int)diff.TotalDays} 天前离线";
+    }
+
     [RelayCommand]
     public async Task TestConnectionAsync()
     {
@@ -146,7 +267,16 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     // ---- 开关变更即保存 ----
-    partial void OnBootStartEnabledChanged(bool value) { _svc.Settings.BootStartEnabled = value; _svc.Settings.Save(); }
+    partial void OnBootStartEnabledChanged(bool value)
+    {
+        _svc.Settings.BootStartEnabled = value;
+        _svc.Settings.Save();
+        var ok = StartupService.SetEnabled(value);
+        if (!ok)
+        {
+            TestResult = value ? "开机自启动设置失败(注册表写入被拒)" : "开机自启动已取消,但注册表清理失败";
+        }
+    }
     partial void OnStartMinimizedChanged(bool value) { _svc.Settings.StartMinimized = value; _svc.Settings.Save(); }
     partial void OnCloseToTrayChanged(bool value) { _svc.Settings.CloseToTray = value; _svc.Settings.Save(); }
     partial void OnMonitorEnabledChanged(bool value) { _svc.Settings.MonitorEnabled = value; _svc.Settings.Save(); }

@@ -19,6 +19,9 @@ public sealed partial class ClipboardWindow : Window
 
     private DispatcherQueueTimer? _hideTimer;
 
+    /// <summary>显示保护期:热键/托盘呼出后短暂忽略"假 Deactivated",避免窗口刚显示就被自动隐藏吞掉。</summary>
+    private DateTime _showGuardUntil = DateTime.MinValue;
+
     public ClipboardWindow()
     {
         InitializeComponent();
@@ -39,12 +42,16 @@ public sealed partial class ClipboardWindow : Window
             presenter.PreferredMinimumHeight = DipsToPx(MinHeightDips);
         }
 
-        // 失焦(点击外部)→ 延迟隐藏;200ms 窗口内留给托盘/热键的"切换"语义
+        // 失焦(点击外部)→ 延迟隐藏;200ms 窗口内留给托盘/热键的"切换"语义。
+        // 注意:窗口从隐藏恢复显示瞬间会因焦点竞争触发一次"假 Deactivated",
+        // 若立即启动隐藏 timer,窗口刚显示就被吞掉(表现为"快捷键第二次失效")。
+        // 显示保护期内忽略 Deactivated,保护期过后用户点击外部仍正常自动隐藏。
         Activated += (_, e) =>
         {
             ApplyToolWindowStyle();
             if (e.WindowActivationState == WindowActivationState.Deactivated && !App.IsExiting)
             {
+                if (DateTime.UtcNow < _showGuardUntil) return;
                 EnsureHideTimer();
                 _hideTimer!.Start();
             }
@@ -97,14 +104,32 @@ public sealed partial class ClipboardWindow : Window
     public void ToggleVisibility()
     {
         _hideTimer?.Stop();
-        if (AppWindow.IsVisible)
+        try
         {
-            AppWindow.Hide();
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            if (NativeMethods.IsWindowVisible(hwnd))
+            {
+                AppWindow.Hide();
+            }
+            else
+            {
+                // 显示保护期:窗口从隐藏恢复时会有焦点竞争,忽略随后短时间内的假 Deactivated
+                _showGuardUntil = DateTime.UtcNow.AddMilliseconds(600);
+                AppWindow.Show();
+                Activate();
+                // 热键/托盘回调上下文里 Activate 可能被"前台锁定"拒绝;
+                // 窗口未获得焦点则失焦自动隐藏不会触发(窗口会一直挂着,再按热键变成隐藏,用户感觉"失效")。
+                // 此处强制置顶前台,确保 Deactivated -> 自动隐藏链路工作。
+                if (NativeMethods.GetForegroundWindow() != hwnd)
+                {
+                    NativeMethods.ShowWindow(hwnd, 5 /* SW_SHOW */);
+                    NativeMethods.ForceForeground(hwnd);
+                }
+            }
         }
-        else
+        catch (Exception ex)
         {
-            AppWindow.Show();
-            Activate();
+            Log.Error("切换剪贴板窗口失败", ex);
         }
     }
 

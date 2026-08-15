@@ -19,11 +19,25 @@ public sealed class PushClient : IAsyncDisposable
 
     public bool IsConnected => _hub?.State == HubConnectionState.Connected;
 
-    public async Task ConnectAsync(string serverUrl, string token)
+    /// <summary>
+    /// 连接推送通道。serverUrl/token 必填;deviceId/deviceName 用于服务端设备登记
+    /// (node 服务端从 WebSocket URL 的 deviceId 参数识别设备;C# 服务端同样支持)。
+    /// </summary>
+    public async Task ConnectAsync(string serverUrl, string token, string? deviceId = null, string? deviceName = null)
     {
         await DisconnectAsync();
 
         var endpoint = new Uri(new Uri(serverUrl.TrimEnd('/')), "/hubs/clipboard");
+        if (!string.IsNullOrWhiteSpace(deviceId))
+        {
+            var qs = new List<string> { "deviceId=" + Uri.EscapeDataString(deviceId) };
+            if (!string.IsNullOrWhiteSpace(deviceName))
+            {
+                qs.Add("deviceName=" + Uri.EscapeDataString(deviceName));
+            }
+            var ub = new UriBuilder(endpoint) { Query = string.Join("&", qs) };
+            endpoint = ub.Uri;
+        }
         var builder = new HubConnectionBuilder()
             .WithUrl(endpoint, options =>
             {

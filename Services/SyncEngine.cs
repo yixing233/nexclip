@@ -71,7 +71,8 @@ public sealed class SyncEngine : IDisposable
         if (_push is null) return;
 
         SetState(ConnState.Connecting, "");
-        await _push.ConnectAsync(s.ServerUrl, s.AuthToken);
+        // 携带设备信息连接:服务端据此登记/更新设备列表(在线状态、名称、平台)
+        await _push.ConnectAsync(s.ServerUrl, s.AuthToken, s.DeviceId, s.DeviceName);
         // ConnectAsync 内部会触发 connected/disconnected 状态回调
         await PullCurrentAsync();
     }

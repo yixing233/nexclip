@@ -13,6 +13,7 @@ namespace SyncClipboard.Desktop.ViewModels;
 public partial class HistoryItemViewModel : ObservableObject
 {
     private static readonly SolidColorBrush SelectedBrush = new(ColorHelper.FromArgb(255, 37, 99, 235));
+    private static readonly SolidColorBrush HoverBrush = new(ColorHelper.FromArgb(255, 96, 165, 250));   // hover 线框(浅蓝)
     private static readonly SolidColorBrush NormalBrush = new(ColorHelper.FromArgb(255, 229, 231, 235));
 
     public HistoryItem Item { get; }
@@ -67,13 +68,18 @@ public partial class HistoryItemViewModel : ObservableObject
 
     public bool IsImage => Item.Type == "Image";
 
-    // ---- x:Bind 辅助(选中态样式) ----
-    public Brush BorderBrushFor(bool selected) => selected ? SelectedBrush : NormalBrush;
+    // ---- x:Bind 辅助(hover 线框 / 选中态样式) ----
+    // 边框厚度恒定 1px:只换颜色不换尺寸,避免 hover 时卡片"动一下"
+    public Brush BorderBrushFor(bool selected, bool hovered) =>
+        selected ? SelectedBrush : hovered ? HoverBrush : NormalBrush;
 
-    public Thickness BorderThicknessFor(bool selected) => selected ? new Thickness(2) : new Thickness(1);
+    public Thickness BorderThicknessFor(bool selected, bool hovered) => new Thickness(1);
 
-    public Visibility ActionVisibilityFor(bool hovered, bool selected) =>
-        hovered || selected ? Visibility.Visible : Visibility.Collapsed;
+    // 操作按钮始终占位(不改变布局),仅用透明度显隐,避免卡片内容跳动
+    public double ActionOpacityFor(bool hovered, bool selected) =>
+        hovered || selected ? 1.0 : 0.0;
+
+    public bool ActionHitTestFor(bool hovered, bool selected) => hovered || selected;
 
     /// <summary>类型图标(lucide)。</summary>
     public ImageSource TypeIconSource => Item.Type == "Image"

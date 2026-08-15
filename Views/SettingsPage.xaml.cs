@@ -20,6 +20,8 @@ public sealed partial class SettingsPage : Page
         // PasswordBox.Password 不可绑定,手动同步
         TokenBox.Password = _vm.AuthToken;
         TokenBox.PasswordChanged += (_, _) => _vm.AuthToken = TokenBox.Password;
+        // 打开设置页即加载设备列表
+        Loaded += async (_, _) => await _vm.RefreshDevicesCommand.ExecuteAsync(null);
     }
 
     /// <summary>剪贴板热键捕获。</summary>

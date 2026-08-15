@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.UI.Xaml;
 using SyncClipboard.Desktop.Services;
 
 namespace SyncClipboard.Desktop.ViewModels;
@@ -26,25 +27,45 @@ public partial class HistoryViewModel : ObservableObject
         ? (string.IsNullOrWhiteSpace(SearchText) && FilterIndex == 0 ? "暂无剪贴板历史" : "没有匹配的条目")
         : "";
 
+    /// <summary>空态提示可见性:无提示文本时整行隐藏,不占底部空间。</summary>
+    public Visibility EmptyHintVisibility => string.IsNullOrEmpty(EmptyHint)
+        ? Visibility.Collapsed
+        : Visibility.Visible;
+
     public HistoryViewModel(AppServices svc)
     {
         _svc = svc;
         Items.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(EmptyHint));
+            OnPropertyChanged(nameof(EmptyHintVisibility));
         };
     }
 
+    partial void OnSearchTextChanged(string value)
+    {
+        OnPropertyChanged(nameof(EmptyHint));
+        OnPropertyChanged(nameof(EmptyHintVisibility));
+        _ = RefreshAsync();
+    }
+
+    partial void OnFilterIndexChanged(int value)
+    {
+        OnPropertyChanged(nameof(EmptyHint));
+        OnPropertyChanged(nameof(EmptyHintVisibility));
+        _ = RefreshAsync();
+    }
+
+    private bool _attached;
+
     public void AttachEngine(SyncEngine engine)
     {
+        if (_attached) return;
+        _attached = true;
         _engine = engine;
         // 上传/推送后自动刷新列表
         engine.EntryUpdated += (_, _, _) => _ = RefreshAsync();
     }
-
-    partial void OnSearchTextChanged(string value) => _ = RefreshAsync();
-
-    partial void OnFilterIndexChanged(int value) => _ = RefreshAsync();
 
     public async Task RefreshAsync()
     {

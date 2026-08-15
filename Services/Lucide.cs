@@ -23,6 +23,7 @@ public static class Lucide
     private static ImageSource? _image;
     private static ImageSource? _settings;
     private static ImageSource? _search;
+    private static ImageSource? _refreshCw;
 
     public static ImageSource Clipboard => _clipboard ??= Load("clipboard", "TextFillColorPrimaryBrush");
     public static ImageSource Copy => _copy ??= Load("copy", "TextFillColorSecondaryBrush");
@@ -33,6 +34,7 @@ public static class Lucide
     public static ImageSource Image => _image ??= Load("image", "TextFillColorSecondaryBrush");
     public static ImageSource Settings => _settings ??= Load("settings", "TextFillColorPrimaryBrush");
     public static ImageSource Search => _search ??= Load("search", "TextFillColorSecondaryBrush");
+    public static ImageSource RefreshCw => _refreshCw ??= Load("refresh-cw", "TextFillColorPrimaryBrush");
 
     private static SvgImageSource Load(string name, string color)
     {

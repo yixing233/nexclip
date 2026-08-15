@@ -122,6 +122,46 @@ public sealed class ServerApi
         return await response.Content.ReadAsByteArrayAsync(ct);
     }
 
+    /// <summary>GET /api/devices:设备列表(含在线状态)。失败返回空列表。</summary>
+    public async Task<List<DeviceInfo>> GetDevicesAsync(
+        string serverUrl, string token, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, Endpoint(serverUrl, "/api/devices"));
+        var json = await SendAsync<JsonElement>(request, token, ct);
+        return json.Deserialize<List<DeviceInfo>>(new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? new();
+    }
+
+    /// <summary>PUT /api/devices/{id}:重命名设备(204 无内容)。</summary>
+    public async Task RenameDeviceAsync(
+        string serverUrl, string token, string deviceId, string newName, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Put, Endpoint(serverUrl, "/api/devices/" + Uri.EscapeDataString(deviceId)))
+        {
+            Content = JsonContent.Create(new { name = newName }),
+        };
+        await SendNoContentAsync(request, token, ct);
+    }
+
+    /// <summary>DELETE /api/devices/{id}:移除设备(204 无内容)。</summary>
+    public async Task RemoveDeviceAsync(
+        string serverUrl, string token, string deviceId, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Delete, Endpoint(serverUrl, "/api/devices/" + Uri.EscapeDataString(deviceId)));
+        await SendNoContentAsync(request, token, ct);
+    }
+
+    private static async Task SendNoContentAsync(
+        HttpRequestMessage request, string token, CancellationToken ct = default)
+    {
+        ApplyAuth(request, token);
+        using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            throw new ApiException("令牌无效(401)", response.StatusCode);
+        }
+        response.EnsureSuccessStatusCode();
+    }
+
     /// <summary>连接测试:GET 当前剪贴板,任何 200/204 即通过。</summary>
     public async Task<(bool Ok, string Message)> TestConnectionAsync(string serverUrl, string token, CancellationToken ct = default)
     {

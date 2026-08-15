@@ -15,6 +15,29 @@ internal static class NativeMethods
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     internal static extern bool IsWindowVisible(IntPtr hwnd);
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    internal static extern bool IsWindow(IntPtr hwnd);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    internal static extern IntPtr GetForegroundWindow();
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    internal static extern bool SetForegroundWindow(IntPtr hwnd);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    internal static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    internal static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
+    /// <summary>绕过 Windows 前台锁定:模拟一次 ALT 键(经典技巧),再请求前台。</summary>
+    internal static void ForceForeground(IntPtr hwnd)
+    {
+        keybd_event(0x12 /* VK_MENU */, 0, 0, UIntPtr.Zero);
+        keybd_event(0x12, 0, 0x0002 /* KEYEVENTF_KEYUP */, UIntPtr.Zero);
+        SetForegroundWindow(hwnd);
+    }
+
     [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
     internal static extern long GetWindowLongPtr(IntPtr hwnd, int index);
 

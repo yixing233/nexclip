@@ -25,9 +25,6 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                <Image Source="{x:Bind services:Lucide.Clipboard}" Width="15" Height="15" />
-                <TextBlock Text="SyncClipboard" Style="{ThemeResource BodyStrongTextBlockStyle}" />
-                <Rectangle Width="1" Height="14" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" VerticalAlignment="Center" />
                 <Ellipse Width="8" Height="8" VerticalAlignment="Center">
                     <Ellipse.Fill>
                         <SolidColorBrush Color="#10B981" />
@@ -37,12 +34,11 @@
                 <ProgressRing IsActive="{Binding IsBusy}" Width="14" Height="14" />
             </StackPanel>
             <StackPanel x:Name="TopButtons" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                <Button Content="同步当前剪贴板" Command="{Binding SyncCurrentClipboardCommand}" />
-                <Button Click="SettingsButton_Click">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <Image Source="{x:Bind services:Lucide.Settings}" Width="14" Height="14" />
-                        <TextBlock Text="设置" />
-                    </StackPanel>
+                <Button Command="{Binding SyncCurrentClipboardCommand}" Padding="8,6" Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="同步当前剪贴板">
+                    <Image Source="{x:Bind services:Lucide.RefreshCw}" Width="16" Height="16" />
+                </Button>
+                <Button Click="SettingsButton_Click" Padding="8,6" Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="设置">
+                    <Image Source="{x:Bind services:Lucide.Settings}" Width="16" Height="16" />
                 </Button>
             </StackPanel>
         </Grid>
@@ -85,9 +81,30 @@
                 <ListView.ItemContainerStyle>
                     <Style TargetType="ListViewItem">
                         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                        <Setter Property="Padding" Value="16,5" />
+                        <!-- 间距由卡片 Border 的 Margin 控制(ListViewItem Padding 对内容不生效) -->
+                        <Setter Property="Padding" Value="0" />
                         <Setter Property="Background" Value="Transparent" />
                         <Setter Property="MinHeight" Value="0" />
+                        <!-- 重写模板:禁用默认 PointerOver/Pressed/Selected 灰色遮罩,hover 效果由条目自身的线框呈现。
+                             注意:只引用 WinUI 3 仍然存在的资源,避免 presenter 测量崩溃(E_FAIL)。 -->
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListViewItem">
+                                    <ListViewItemPresenter
+                                        Content="{TemplateBinding Content}"
+                                        ContentTemplate="{TemplateBinding ContentTemplate}"
+                                        HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                        VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                                        Padding="{TemplateBinding Padding}"
+                                        SelectionCheckMarkVisualEnabled="False"
+                                        PointerOverBackground="Transparent"
+                                        PressedBackground="Transparent"
+                                        SelectedBackground="Transparent"
+                                        SelectedPointerOverBackground="Transparent"
+                                        FocusVisualMargin="{TemplateBinding FocusVisualMargin}" />
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
                     </Style>
                 </ListView.ItemContainerStyle>
                 <ListView.ItemTemplate>
@@ -95,10 +112,11 @@
                         <Border
                             CornerRadius="8"
                             Padding="14,10"
+                            Margin="24,12"
                             PointerEntered="Item_PointerEntered"
                             PointerExited="Item_PointerExited"
-                            BorderThickness="{x:Bind BorderThicknessFor(IsSelected), Mode=OneWay}"
-                            BorderBrush="{x:Bind BorderBrushFor(IsSelected), Mode=OneWay}"
+                            BorderThickness="{x:Bind BorderThicknessFor(IsSelected, IsHovered), Mode=OneWay}"
+                            BorderBrush="{x:Bind BorderBrushFor(IsSelected, IsHovered), Mode=OneWay}"
                             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
                             <StackPanel Spacing="6">
                                 <!-- 元信息行 + 操作按钮(hover/选中显示,位于条目右上角) -->
@@ -116,7 +134,8 @@
                                         <TextBlock Text="{x:Bind DeviceName}" FontSize="12" Foreground="#2563EB" />
                                     </StackPanel>
                                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center"
-                                        Visibility="{x:Bind ActionVisibilityFor(IsHovered, IsSelected), Mode=OneWay}">
+                                        Opacity="{x:Bind ActionOpacityFor(IsHovered, IsSelected), Mode=OneWay}"
+                                        IsHitTestVisible="{x:Bind ActionHitTestFor(IsHovered, IsSelected), Mode=OneWay}">
                                         <Button Padding="6,3" Background="Transparent" BorderThickness="0" Command="{x:Bind CopyCommand}" ToolTipService.ToolTip="复制">
                                             <Image Source="{x:Bind services:Lucide.Copy}" Width="14" Height="14" />
                                         </Button>
@@ -142,10 +161,11 @@
                     </DataTemplate>
                 </ListView.ItemTemplate>
             </ListView>
-            <!-- 空态 -->
+            <!-- 空态(无提示文本时整行隐藏,不占底部空间) -->
             <TextBlock
                 Grid.Row="1"
                 Text="{Binding EmptyHint}"
+                Visibility="{Binding EmptyHintVisibility}"
                 Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                 HorizontalAlignment="Center"
                 Margin="0,12,0,8" />
