@@ -1,6 +1,7 @@
 package clip.yixing.sync.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -26,6 +28,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.style.TextOverflow
@@ -33,8 +36,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import clip.yixing.sync.cardContentPadding
 import clip.yixing.sync.data.DeviceInfo
+import clip.yixing.sync.data.PairingCode
 import clip.yixing.sync.data.SyncApi
 import clip.yixing.sync.service.ClipboardMonitorService
 import clip.yixing.sync.util.SyncSettings
@@ -46,6 +51,8 @@ import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
+import top.yukonga.miuix.kmp.overlay.OverlayDialog
 import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.icon.MiuixIcons
@@ -64,11 +71,23 @@ internal fun SettingsPage(scrollBehavior: ScrollBehavior, topPadding: Dp, bottom
 
     // 服务器配置输入
     val urlState = remember { TextFieldState(SyncSettings.serverUrl(context)) }
-    val tokenState = remember { TextFieldState(SyncSettings.serverToken(context)) }
     var saved by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var testing by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+    var pairing by remember { mutableStateOf(false) }
+    var pairResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+
+    // 配对对话框:输入配对码用对话框完成
+    var showPairDialog by remember { mutableStateOf(false) }
+    val dialogCodeState = remember { TextFieldState("") }
+
+    // 配对码管理(已配对设备可直接生成,无需管理令牌)
+    var generatingCode by remember { mutableStateOf(false) }
+    var genResult by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
+    var generatedCode by remember { mutableStateOf<PairingCode?>(null) }
+    // 生成的配对码用底部弹层查看;关闭底部弹层即作废(不按时间失效)
+    var showCodeSheet by remember { mutableStateOf(false) }
 
     // 设备列表(服务端登记的设备,含在线状态)
     var devices by remember { mutableStateOf<List<DeviceInfo>>(emptyList()) }
@@ -82,7 +101,7 @@ internal fun SettingsPage(scrollBehavior: ScrollBehavior, topPadding: Dp, bottom
             devicesLoading = devices.isEmpty()
             devicesError = null
             try {
-                val api = SyncApi(SyncSettings.serverUrl(context), SyncSettings.serverToken(context))
+                val api = SyncApi(SyncSettings.serverUrl(context))
                 devices = withContext(Dispatchers.IO) { api.getDevices() }
             } catch (e: Exception) {
                 devicesError = e.message ?: "加载失败"
@@ -127,20 +146,11 @@ internal fun SettingsPage(scrollBehavior: ScrollBehavior, topPadding: Dp, bottom
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(Modifier.height(8.dp))
-                    TextField(
-                        state = tokenState,
-                        label = "访问令牌",
-                        useLabelAsPlaceholder = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Button(
                             onClick = {
                                 prefs.edit()
-                                    .putString(SyncSettings.KEY_SERVER_URL, urlState.text.toString())
-                                    .putString(SyncSettings.KEY_SERVER_TOKEN, tokenState.text.toString())
+                                    .putString(SyncSettings.KEY_SERVER_URL, urlState.text.toString().trim())
                                     .apply()
                                 saved = true
                             },
@@ -152,15 +162,13 @@ internal fun SettingsPage(scrollBehavior: ScrollBehavior, topPadding: Dp, bottom
                             onClick = {
                                 val url = urlState.text.toString().trim()
                                     .ifEmpty { SyncSettings.serverUrl(context) }
-                                val token = tokenState.text.toString()
-                                    .ifEmpty { SyncSettings.serverToken(context) }
                                 if (url.isEmpty()) {
                                     testResult = false to "请先填写服务器地址"
                                     return@Button
                                 }
                                 testing = true
                                 testResult = null
-                                val api = SyncApi(url, token)
+                                val api = SyncApi(url)
                                 scope.launch {
                                     val (ok, msg) = withContext(Dispatchers.IO) {
                                         api.testConnection()
@@ -194,6 +202,78 @@ internal fun SettingsPage(scrollBehavior: ScrollBehavior, topPadding: Dp, bottom
                         Text(
                             text = "已保存",
                             color = MiuixTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+            item {
+                Card(modifier = Modifier.fillMaxWidth(), insideMargin = cardContentPadding) {
+                    Text("配对管理")
+                    Spacer(Modifier.height(10.dp))
+                    // 生成配对码 → 底部弹层查看
+                    Button(
+                        onClick = {
+                            val url = urlState.text.toString().trim()
+                                .ifEmpty { SyncSettings.serverUrl(context) }
+                            if (url.isEmpty()) {
+                                genResult = false to "请先填写服务器地址"
+                                return@Button
+                            }
+                            generatingCode = true
+                            genResult = null
+                            // 生成配对码免认证:任何设备(含未配对的新设备)都可直接生成;
+                            // 携带本机设备信息,服务端登记生成方设备
+                            val api = SyncApi(url)
+                            val genDeviceId = SyncSettings.ensureDeviceId(context)
+                            val genDeviceName = SyncSettings.deviceName(context)
+                            scope.launch {
+                                val r = withContext(Dispatchers.IO) {
+                                    runCatching { api.createPairingCode(genDeviceId, genDeviceName) }
+                                }
+                                generatingCode = false
+                                r.onSuccess {
+                                    generatedCode = it
+                                    genResult = true to "配对码已生成"
+                                    // 生成成功:弹出底部弹层查看配对码
+                                    showCodeSheet = true
+                                }.onFailure { e ->
+                                    genResult = false to (e.message ?: "生成失败")
+                                }
+                            }
+                        },
+                        enabled = !generatingCode,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (generatingCode) "生成中…" else "生成配对码")
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    // 输入配对码 → 对话框配对
+                    Button(
+                        onClick = { showPairDialog = true },
+                        enabled = !pairing,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (pairing) "配对中…" else "输入配对码")
+                    }
+                    if (pairing) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = "正在与服务器配对…",
+                            color = MiuixTheme.colorScheme.onBackgroundVariant
+                        )
+                    }
+                    genResult?.let { (ok, msg) ->
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = msg,
+                            color = if (ok) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.error
+                        )
+                    }
+                    pairResult?.let { (ok, msg) ->
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = msg,
+                            color = if (ok) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.error
                         )
                     }
                 }
@@ -293,6 +373,151 @@ internal fun SettingsPage(scrollBehavior: ScrollBehavior, topPadding: Dp, bottom
                 Spacer(Modifier.height(bottomInnerPadding))
             }
         }
+
+    // 配对对话框:输入配对码完成配对
+    OverlayDialog(
+        show = showPairDialog,
+        title = "设备配对",
+        summary = "输入另一台设备生成的配对码(10 分钟有效,一码一设备)",
+        onDismissRequest = { showPairDialog = false }
+    ) {
+        TextField(
+            state = dialogCodeState,
+            label = "配对码",
+            useLabelAsPlaceholder = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Button(
+                onClick = { showPairDialog = false },
+                enabled = !pairing,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("取消")
+            }
+            Button(
+                onClick = {
+                    val url = urlState.text.toString().trim()
+                        .ifEmpty { SyncSettings.serverUrl(context) }
+                    val code = dialogCodeState.text.toString().trim().uppercase()
+                    if (url.isEmpty()) {
+                        pairResult = false to "请先填写服务器地址"
+                        return@Button
+                    }
+                    if (code.isEmpty()) {
+                        pairResult = false to "请输入配对码"
+                        return@Button
+                    }
+                    pairing = true
+                    pairResult = null
+                    showPairDialog = false
+                    val api = SyncApi(url) // 配对接口无需认证
+                    val deviceId = SyncSettings.ensureDeviceId(context)
+                    val deviceName = SyncSettings.deviceName(context)
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            runCatching { api.pair(code, deviceId, deviceName) }
+                        }
+                        pairing = false
+                        result.onSuccess { r ->
+                            prefs.edit()
+                                .putString(SyncSettings.KEY_SERVER_URL, url)
+                                .apply()
+                            SyncSettings.setPaired(context, true)
+                            pairResult = true to "配对成功"
+                            dialogCodeState.edit { replace(0, length, "") }
+                            // 本机已由服务端登记:立即刷新设备列表
+                            devicesReload++
+                            // 监听服务若在运行,重启以用新令牌重连 SignalR,本机保持在线
+                            if (ClipboardMonitorService.isRunning.value) {
+                                ClipboardMonitorService.stop(context)
+                                ClipboardMonitorService.start(context)
+                            }
+                        }.onFailure { e ->
+                            pairResult = false to (e.message ?: "配对失败")
+                        }
+                    }
+                },
+                enabled = !pairing,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(if (pairing) "配对中…" else "确认配对")
+            }
+        }
+    }
+
+    // 生成的配对码用底部弹层查看(大号展示 + 倒计时 + 复制)
+    OverlayBottomSheet(
+        show = showCodeSheet,
+        title = "配对码",
+        onDismissRequest = {
+            showCodeSheet = false
+            // 关闭底部弹层 → 配对码立即作废
+            val revokeCode = generatedCode?.code
+            generatedCode = null
+            if (revokeCode != null) {
+                scope.launch {
+                    withContext(Dispatchers.IO) {
+                        runCatching { SyncApi(SyncSettings.serverUrl(context)).revokePairingCode(revokeCode) }
+                    }
+                }
+            }
+        }
+    ) {
+        generatedCode?.let { code ->
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MiuixTheme.colorScheme.surfaceContainer)
+                        .padding(vertical = 20.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = code.code,
+                        style = MiuixTheme.textStyles.title1
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "关闭后此配对码立即失效",
+                        color = MiuixTheme.colorScheme.onBackgroundVariant
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Text(
+                        text = "复制",
+                        color = MiuixTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clickable { copyPairingCode(context, code.code) }
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "把此码输入到新设备的配对框即可接入,一次性使用",
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    fontSize = 12.sp
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -331,7 +556,7 @@ private fun DeviceRow(device: DeviceInfo, isSelf: Boolean) {
                 text = buildString {
                     append(device.platform)
                     device.version?.let { append(" v$it") }
-                    device.ip?.let { append(" · " + it.removePrefix("::ffff:")) }
+                    device.ip?.let { append(" · $it") }   // 数据层已规范化(去 ::ffff: 前缀)
                     val t = relativeTime(device.lastSeenAt)
                     if (t.isNotEmpty()) append(" · $t")
                 },
@@ -363,6 +588,12 @@ private fun relativeTime(iso: String): String = try {
     }
 } catch (_: Exception) {
     ""
+}
+
+private fun copyPairingCode(context: android.content.Context, code: String) {
+    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+    cm.setPrimaryClip(android.content.ClipData.newPlainText("PairingCode", code))
+    android.widget.Toast.makeText(context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
 }
 
 private fun appVersion(context: android.content.Context): String {

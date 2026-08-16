@@ -11,7 +11,7 @@ object SyncSettings {
     const val PREFS_NAME = "sync_clipboard"
 
     const val KEY_SERVER_URL = "server_url"
-    const val KEY_SERVER_TOKEN = "server_token"
+    const val KEY_PAIRED = "paired"
     const val KEY_DEVICE_ID = "device_id"
     const val KEY_DEVICE_NAME = "device_name"
     const val KEY_BOOT_START_ENABLED = "boot_start_enabled"
@@ -28,9 +28,13 @@ object SyncSettings {
     fun serverUrl(context: Context): String =
         prefs(context).getString(KEY_SERVER_URL, "http://192.168.0.102:5033") ?: "http://192.168.0.102:5033"
 
-    /** 访问令牌(与 Web/桌面端共用) */
-    fun serverToken(context: Context): String =
-        prefs(context).getString(KEY_SERVER_TOKEN, "clipsync-demo-token") ?: "clipsync-demo-token"
+    /** 是否已完成配对(配对码配对;设备同步免令牌,配对仅用于登记) */
+    fun isPaired(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_PAIRED, false)
+
+    fun setPaired(context: Context, paired: Boolean) {
+        prefs(context).edit().putBoolean(KEY_PAIRED, paired).apply()
+    }
 
     fun ensureDeviceId(context: Context): String {
         val p = prefs(context)

@@ -3,7 +3,6 @@ package clip.yixing.sync.data
 import com.microsoft.signalr.HubConnection
 import com.microsoft.signalr.HubConnectionBuilder
 import com.microsoft.signalr.HubConnectionState
-import io.reactivex.rxjava3.core.Single
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -12,10 +11,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * SignalR 推送客户端:/hubs/clipboard + Bearer token。
+ * SignalR 推送客户端:/hubs/clipboard(免认证,配对码即接入凭据)。
  * Java 客户端 9.x 无内置自动重连,这里手动实现指数退避重连。
  */
-class PushClient(private val serverUrl: String, private val token: String, private val deviceId: String) {
+class PushClient(private val serverUrl: String, private val deviceId: String) {
     private var connection: HubConnection? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var reconnectAttempt = 0
@@ -29,11 +28,9 @@ class PushClient(private val serverUrl: String, private val token: String, priva
     fun connect() {
         if (started) return
         started = true
-        // 带 deviceId:服务端登记设备 + 心跳,在线状态可见
+        // 带 deviceId:服务端登记设备 + 心跳,在线状态可见(hub 免认证,无令牌)
         val hubUrl = serverUrl.trimEnd('/') + "/hubs/clipboard?deviceId=" + java.net.URLEncoder.encode(deviceId, "UTF-8")
-        val conn = HubConnectionBuilder.create(hubUrl)
-            .withAccessTokenProvider(Single.just(token))
-            .build()
+        val conn = HubConnectionBuilder.create(hubUrl).build()
         connection = conn
         conn.on("ClipboardUpdated", { raw ->
             // Class<T> 重载:回调直接收到反序列化后的条目对象(LinkedHashMap)

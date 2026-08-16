@@ -32,20 +32,23 @@ data class DeviceInfo(
     val lastSeenAt: String,
 )
 
+/** 配对结果(POST /api/pair) */
+data class PairResult(val deviceId: String, val deviceToken: String)
+
+/** 配对码(POST /api/pairing-codes) */
+data class PairingCode(val code: String, val expiresAt: String)
+
 class ApiException(message: String, val statusCode: Int? = null) : Exception(message)
 
-/** REST 客户端:与 SyncClipboard Server 契约一致(Bearer token) */
-class SyncApi(private val serverUrl: String, private val token: String) {
+/** REST 客户端:与 SyncClipboard Server 契约一致(设备同步接口免认证,无令牌) */
+class SyncApi(private val serverUrl: String) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    private fun builder(method: String, path: String): Request.Builder {
-        val b = Request.Builder().url(serverUrl.trimEnd('/') + path)
-        if (token.isNotBlank()) b.header("Authorization", "Bearer " + token)
-        return b
-    }
+    private fun builder(method: String, path: String): Request.Builder =
+        Request.Builder().url(serverUrl.trimEnd('/') + path)
 
     private fun parseEntry(o: JSONObject) = ClipboardEntry(
         id = o.optLong("id"),
@@ -60,7 +63,17 @@ class SyncApi(private val serverUrl: String, private val token: String) {
     private fun execute(req: Request): okhttp3.Response {
         val resp = client.newCall(req).execute()
         if (resp.code == 401) throw ApiException("令牌无效(401)", 401)
-        if (!resp.isSuccessful) throw ApiException("服务器返回 " + resp.code + " " + resp.message, resp.code)
+        if (!resp.isSuccessful) {
+            // 优先透传服务端 { error: "..." } 消息(如"配对码无效或已过期")
+            val body = resp.body?.string()
+            val msg = try {
+                JSONObject(body ?: "{}").optString("error")
+                    .ifBlank { "服务器返回 " + resp.code + " " + resp.message }
+            } catch (_: Exception) {
+                "服务器返回 " + resp.code + " " + resp.message
+            }
+            throw ApiException(msg, resp.code)
+        }
         return resp
     }
 
@@ -116,12 +129,60 @@ class SyncApi(private val serverUrl: String, private val token: String) {
                     id = o.optString("id"),
                     name = o.optString("name", "未知设备"),
                     platform = o.optString("platform", "Unknown"),
-                    ip = if (o.isNull("ip")) null else o.optString("ip"),
+                    ip = normalizeIp(if (o.isNull("ip")) null else o.optString("ip")),
                     version = if (o.isNull("version")) null else o.optString("version"),
                     online = o.optBoolean("online"),
                     lastSeenAt = o.optString("lastSeenAt"),
                 )
             }
+        }
+    }
+
+    /** POST /api/pairing-codes → 生成一次性配对码(使用当前设备令牌,已配对即可生成) */
+    /** 生成一次性配对码:免认证;携带本机设备信息,服务端同步登记生成方设备 */
+    fun createPairingCode(deviceId: String, deviceName: String): PairingCode {
+        val json = JSONObject().apply {
+            put("deviceId", deviceId)
+            put("deviceName", deviceName)
+        }.toString()
+        val req = builder("POST", "/api/pairing-codes")
+            .header("Content-Type", "application/json")
+            .post(json.toRequestBody("application/json".toMediaType()))
+            .build()
+        val resp = execute(req)
+        resp.use {
+            val o = JSONObject(it.body?.string() ?: "{}")
+            return PairingCode(
+                code = o.optString("code"),
+                expiresAt = o.optString("expiresAt"),
+            )
+        }
+    }
+
+    /** DELETE /api/pairing-codes/{code} → 作废配对码(关闭底部弹层后调用,码立即失效) */
+    fun revokePairingCode(code: String) {
+        val req = builder("DELETE", "/api/pairing-codes/" + java.net.URLEncoder.encode(code, "UTF-8")).build()
+        execute(req).use { }
+    }
+
+    /** POST /api/pair → 用一次性配对码换取设备专属令牌(配对接口无需认证) */
+    fun pair(pairingCode: String, deviceId: String, deviceName: String): PairResult {
+        val json = JSONObject().apply {
+            put("pairingCode", pairingCode)
+            put("deviceId", deviceId)
+            put("deviceName", deviceName)
+        }.toString()
+        val req = builder("POST", "/api/pair")
+            .header("Content-Type", "application/json")
+            .post(json.toRequestBody("application/json".toMediaType()))
+            .build()
+        val resp = execute(req)
+        resp.use {
+            val o = JSONObject(it.body?.string() ?: "{}")
+            return PairResult(
+                deviceId = o.optString("deviceId", deviceId),
+                deviceToken = o.optString("deviceToken"),
+            )
         }
     }
 
@@ -155,4 +216,12 @@ class SyncApi(private val serverUrl: String, private val token: String) {
     } catch (e: Exception) {
         false to "连接失败: " + (e.message ?: e.javaClass.simpleName)
     }
+}
+
+/** IP 规范化:去 ::ffff: 前缀;IPv6 回环 → 127.0.0.1 */
+private fun normalizeIp(ip: String?): String? {
+    if (ip.isNullOrBlank()) return null
+    val mapped = Regex("^::ffff:(\\d+\\.\\d+\\.\\d+\\.\\d+)$").find(ip)
+    if (mapped != null) return mapped.groupValues[1]
+    return if (ip == "::1") "127.0.0.1" else ip
 }

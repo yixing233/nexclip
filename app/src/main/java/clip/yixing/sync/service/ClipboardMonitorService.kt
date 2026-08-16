@@ -69,7 +69,6 @@ class ClipboardMonitorService : Service() {
         push?.disconnect()
         val client = PushClient(
             SyncSettings.serverUrl(ctx),
-            SyncSettings.serverToken(ctx),
             SyncSettings.ensureDeviceId(ctx),
         )
         client.onEntryReceived = { entry ->
@@ -88,7 +87,7 @@ class ClipboardMonitorService : Service() {
 
     private fun pullAndApply() {
         try {
-            val api = SyncApi(SyncSettings.serverUrl(this), SyncSettings.serverToken(this))
+            val api = SyncApi(SyncSettings.serverUrl(this))
             val cur = api.getCurrent() ?: return
             if (!cur.text.isNullOrBlank() && captured.value.firstOrNull()?.text != cur.text) {
                 addCaptured(this, cur.text)
@@ -111,7 +110,7 @@ class ClipboardMonitorService : Service() {
             delay(600) // 去抖
             val ctx = this@ClipboardMonitorService
             try {
-                val api = SyncApi(SyncSettings.serverUrl(ctx), SyncSettings.serverToken(ctx))
+                val api = SyncApi(SyncSettings.serverUrl(ctx))
                 api.putText(text, SyncSettings.ensureDeviceId(ctx), SyncSettings.deviceName(ctx))
             } catch (_: Exception) {
                 // 失败静默,下一条变化再试
