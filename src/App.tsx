@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import {
   Layout, Menu, Button, Input, Avatar, Dropdown, Badge, Tooltip, message, theme as antdTheme, ConfigProvider,
 } from 'antd'
 import {
-  Home, FileText, Monitor, Clock, Settings, RefreshCw, Search, LogOut, Cloud,
+  Home, FileText, Monitor, Clock, Settings, RefreshCw, Search, LogOut, Cloud, Users,
 } from 'lucide-react'
 import type { MenuProps } from 'antd'
 import LoginPage from './pages/LoginPage'
@@ -12,13 +13,15 @@ import ClipboardPage from './pages/ClipboardPage'
 import DevicesPage from './pages/DevicesPage'
 import SyncRecordsPage from './pages/SyncRecordsPage'
 import SettingsPage from './pages/SettingsPage'
+import UsersPage from './pages/UsersPage'
+import UserPage from './pages/UserPage'
 import { connectHub, disconnectHub } from './hub'
-import { getThemeMode, setToken, logout as apiLogout, deviceId } from './api'
+import { getThemeMode, logout as apiLogout, deviceId, getRole } from './api'
 import { addIncoming } from './chatStore'
 
 const { Header, Sider, Content } = Layout
 
-type PageKey = 'overview' | 'clipboard' | 'devices' | 'records' | 'settings'
+type PageKey = 'overview' | 'clipboard' | 'devices' | 'records' | 'settings' | 'users'
 
 /** 两套主题的语义色板:所有自定义颜色统一从这里取,保证明暗模式协调一致 */
 const LIGHT = {
@@ -67,12 +70,105 @@ const DARK = {
   avatarText: '#C9D1D9',
 }
 
+interface AdminConsoleProps {
+  page: PageKey
+  menuItems: MenuProps['items']
+  pageEl: React.ReactNode
+  statusBadge: React.ReactNode
+  isDark: boolean
+  c: typeof LIGHT
+  onChangePage: (k: PageKey) => void
+  onLogout: () => void
+  contentRef: React.RefObject<HTMLDivElement | null>
+}
+
+/** 管理台主框架(/pro) */
+function AdminConsole({ page, menuItems, pageEl, statusBadge, isDark, c, onChangePage, onLogout, contentRef }: AdminConsoleProps) {
+  return (
+    <Layout id="clipsync-app" className="clipsync-app" style={{ height: '100vh' }}>
+      <Sider
+        id="clipsync-sidebar"
+        className="clipsync-sidebar"
+        width={216}
+        theme={isDark ? 'dark' : 'light'}
+        style={{ borderRight: '1px solid ' + c.border, position: 'relative' }}
+      >
+        <div id="clipsync-sidebar-logo" className="clipsync-sidebar-logo" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '18px 20px' }}>
+          <Cloud size={26} color="#2563EB" />
+          <span style={{ fontSize: 18, fontWeight: 700, color: c.text }}>ClipSync</span>
+        </div>
+        <Menu
+          id="clipsync-sidebar-menu"
+          className="clipsync-sidebar-menu"
+          mode="inline"
+          selectedKeys={[page]}
+          items={menuItems}
+          onClick={({ key }) => onChangePage(key as PageKey)}
+          style={{ borderInlineEnd: 'none' }}
+        />
+        <div id="clipsync-sidebar-footer" className="clipsync-sidebar-footer" style={{ position: 'absolute', bottom: 16, left: 16, right: 16 }}>
+          <div id="clipsync-service-status" className="clipsync-service-status" style={{ background: c.serviceBg, border: '1px solid ' + c.serviceBorder, borderRadius: 12, padding: '10px 12px', marginBottom: 12 }}>
+            <div style={{ color: c.serviceText, fontWeight: 600, fontSize: 13 }}>
+              <Badge status="success" /> 服务运行中
+            </div>
+            <div style={{ color: c.textTertiary, fontSize: 12, marginTop: 2 }}>版本 0.1.0</div>
+          </div>
+          <Dropdown
+            menu={{
+              items: [{ key: 'logout', icon: <LogOut size={16} />, label: '退出登录', onClick: onLogout }],
+            }}
+          >
+            <div id="clipsync-user-info" className="clipsync-user-info" style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '6px 4px' }}>
+              <Avatar size={34} style={{ background: c.avatarBg, color: c.avatarText }}>A</Avatar>
+              <div>
+                <div style={{ fontWeight: 600, color: c.text, fontSize: 13 }}>admin</div>
+                <div style={{ color: c.textTertiary, fontSize: 12 }}>超级管理员</div>
+              </div>
+            </div>
+          </Dropdown>
+        </div>
+      </Sider>
+      <Layout style={{ position: 'relative' }}>
+        <Header
+          id="clipsync-header"
+          className="clipsync-header"
+          style={{
+            background: c.surfaceGlass, backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)',
+            position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20,
+            padding: '0 24px', borderBottom: '1px solid ' + c.border,
+            height: 64, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 16,
+          }}
+        >
+          <div id="clipsync-header-title" className="clipsync-header-title" style={{ flex: 1 }}>
+            <div style={{ fontSize: 18, fontWeight: 700, color: c.text }}>剪贴板共享服务端</div>
+          </div>
+          <span id="clipsync-header-server-status" className="clipsync-header-server-status" style={{ color: c.success, fontWeight: 600, fontSize: 13 }}>
+            <Badge status="success" /> 服务运行正常
+          </span>
+          {statusBadge}
+          <Input id="clipsync-header-search" className="clipsync-header-search" prefix={<Search size={16} color="#9CA3AF" />} placeholder="搜索" allowClear style={{ width: 200 }} />
+          <Tooltip title="刷新">
+            <Button id="clipsync-header-refresh" className="clipsync-header-refresh" icon={<RefreshCw size={16} />} onClick={() => { /* 各页自行刷新 */ }}>刷新</Button>
+          </Tooltip>
+          <Tooltip title="服务设置">
+            <Button id="clipsync-header-settings" className="clipsync-header-settings" icon={<Settings size={16} />} onClick={() => onChangePage('settings')} />
+          </Tooltip>
+        </Header>
+        <Content id="clipsync-content" className="clipsync-content" ref={contentRef} style={{ overflow: 'auto', height: '100%', padding: '88px 24px 24px' }}>
+          {pageEl}
+        </Content>
+      </Layout>
+    </Layout>
+  )
+}
+
 export default function App() {
   const [authed, setAuthed] = useState<boolean>(() => !!localStorage.getItem('clipsync_token'))
   const [page, setPage] = useState<PageKey>('overview')
   const [hubStatus, setHubStatus] = useState<'connected' | 'reconnecting' | 'disconnected'>('disconnected')
   const [refreshTick, setRefreshTick] = useState(0)
   const [themeMode, setThemeModeState] = useState<'light' | 'dark' | 'system'>(getThemeMode())
+  const [userFilter, setUserFilter] = useState<string | null>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const scrollPositions = useRef<Record<string, number>>({})
 
@@ -86,7 +182,6 @@ export default function App() {
     if (contentRef.current) contentRef.current.scrollTop = scrollPositions.current[page] ?? 0
   }, [page])
 
-
   // 令牌失效(被吊销/过期):强制回到登录页
   useEffect(() => {
     const onUnauthorized = () => {
@@ -97,13 +192,13 @@ export default function App() {
     return () => window.removeEventListener('clipsync:unauthorized', onUnauthorized)
   }, [])
 
+  // hub:任一角色登录后连接(设备变更/剪贴板实时刷新)
   useEffect(() => {
     if (!authed) return
     connectHub({
       onClipboardUpdated: (entry) => {
         const e = entry as { text?: string; deviceName?: string; deviceId?: string } | null
         if (e?.deviceId && e.deviceId === deviceId()) {
-          // 自己发起的推送:不再回显到聊天,仅刷新列表
           setRefreshTick(t => t + 1)
           return
         }
@@ -132,20 +227,24 @@ export default function App() {
     setAuthed(false)
   }
 
+  const role = getRole()
+
   const menuItems: MenuProps['items'] = [
     { key: 'overview', icon: <Home size={16} />, label: '总览' },
     { key: 'clipboard', icon: <FileText size={16} />, label: '剪贴板' },
     { key: 'devices', icon: <Monitor size={16} />, label: '设备管理' },
     { key: 'records', icon: <Clock size={16} />, label: '同步记录' },
+    { key: 'users', icon: <Users size={16} />, label: '用户管理' },
     { key: 'settings', icon: <Settings size={16} />, label: '设置' },
   ]
 
   const pageEl = useMemo(() => {
     switch (page) {
       case 'overview': return <OverviewPage refreshTick={refreshTick} />
-      case 'clipboard': return <ClipboardPage refreshTick={refreshTick} />
-      case 'devices': return <DevicesPage refreshTick={refreshTick} />
-      case 'records': return <SyncRecordsPage />
+      case 'clipboard': return <ClipboardPage refreshTick={refreshTick} userFilter={userFilter} onUserFilterChange={setUserFilter} />
+      case 'devices': return <DevicesPage refreshTick={refreshTick} userFilter={userFilter} onUserFilterChange={setUserFilter} />
+      case 'records': return <SyncRecordsPage userFilter={userFilter} onUserFilterChange={setUserFilter} />
+      case 'users': return <UsersPage onViewUser={(uid) => { setUserFilter(uid); changePage('clipboard') }} />
       default: return <SettingsPage onThemeChange={setThemeModeState} themeMode={themeMode} />
     }
   }, [page, refreshTick, themeMode])
@@ -153,14 +252,9 @@ export default function App() {
   const isDark = themeMode === 'dark' || (themeMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
   const c = isDark ? DARK : LIGHT
 
-  // 同步 data-theme 到 <html>,供 index.css 切换深浅色滚动条
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light')
   }, [isDark])
-
-  if (!authed) {
-    return <LoginPage onLogin={() => setAuthed(true)} />
-  }
 
   const statusBadge =
     hubStatus === 'connected' ? <Badge status="success" text="实时连接" /> :
@@ -212,80 +306,64 @@ export default function App() {
         },
       }}
     >
-      <Layout id="clipsync-app" className="clipsync-app" style={{ height: '100vh' }}>
-        <Sider
-          id="clipsync-sidebar"
-          className="clipsync-sidebar"
-          width={216}
-          theme={isDark ? 'dark' : 'light'}
-          style={{ borderRight: '1px solid ' + c.border, position: 'relative' }}
-        >
-          <div id="clipsync-sidebar-logo" className="clipsync-sidebar-logo" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '18px 20px' }}>
-            <Cloud size={26} color="#2563EB" />
-            <span style={{ fontSize: 18, fontWeight: 700, color: c.text }}>ClipSync</span>
-          </div>
-          <Menu
-            id="clipsync-sidebar-menu"
-            className="clipsync-sidebar-menu"
-            mode="inline"
-            selectedKeys={[page]}
-            items={menuItems}
-            onClick={({ key }) => changePage(key as PageKey)}
-            style={{ borderInlineEnd: 'none' }}
-          />
-          <div id="clipsync-sidebar-footer" className="clipsync-sidebar-footer" style={{ position: 'absolute', bottom: 16, left: 16, right: 16 }}>
-            <div id="clipsync-service-status" className="clipsync-service-status" style={{ background: c.serviceBg, border: '1px solid ' + c.serviceBorder, borderRadius: 12, padding: '10px 12px', marginBottom: 12 }}>
-              <div style={{ color: c.serviceText, fontWeight: 600, fontSize: 13 }}>
-                <Badge status="success" /> 服务运行中
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<Navigate to="/index" replace />} />
+          {/* 用户端:/index(已登录=用户页;未登录跳 /index/login) */}
+          <Route path="/index" element={
+            !authed ? (
+              <Navigate to="/index/login" replace />
+            ) : role === 'user' ? (
+              <div style={{ minHeight: '100vh', background: '#F3F4F6', padding: 24 }}>
+                <UserPage refreshTick={refreshTick} onLogout={logout} />
               </div>
-              <div style={{ color: c.textTertiary, fontSize: 12, marginTop: 2 }}>版本 0.1.0</div>
-            </div>
-            <Dropdown
-              menu={{
-                items: [{ key: 'logout', icon: <LogOut size={16} />, label: '退出登录', onClick: logout }],
-              }}
-            >
-              <div id="clipsync-user-info" className="clipsync-user-info" style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '6px 4px' }}>
-                <Avatar size={34} style={{ background: c.avatarBg, color: c.avatarText }}>A</Avatar>
-                <div>
-                  <div style={{ fontWeight: 600, color: c.text, fontSize: 13 }}>admin</div>
-                  <div style={{ color: c.textTertiary, fontSize: 12 }}>超级管理员</div>
-                </div>
-              </div>
-            </Dropdown>
-          </div>
-        </Sider>
-        <Layout style={{ position: 'relative' }}>
-          <Header
-            id="clipsync-header"
-            className="clipsync-header"
-            style={{
-              background: c.surfaceGlass, backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)',
-              position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20,
-              padding: '0 24px', borderBottom: '1px solid ' + c.border,
-              height: 64, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 16,
-            }}
-          >
-            <div id="clipsync-header-title" className="clipsync-header-title" style={{ flex: 1 }}>
-              <div style={{ fontSize: 18, fontWeight: 700, color: c.text }}>剪贴板共享服务端</div>
-            </div>
-            <span id="clipsync-header-server-status" className="clipsync-header-server-status" style={{ color: c.success, fontWeight: 600, fontSize: 13 }}>
-              <Badge status="success" /> 服务运行正常,延迟 18ms
-            </span>
-            {statusBadge}
-            <Input id="clipsync-header-search" className="clipsync-header-search" prefix={<Search size={16} color="#9CA3AF" />} placeholder="搜索" allowClear style={{ width: 200 }} />
-              <Tooltip title="刷新">
-              <Button id="clipsync-header-refresh" className="clipsync-header-refresh" icon={<RefreshCw size={16} />} onClick={() => setRefreshTick(t => t + 1)}>刷新</Button>
-            </Tooltip>
-            <Tooltip title="服务设置">
-              <Button id="clipsync-header-settings" className="clipsync-header-settings" icon={<Settings size={16} />} onClick={() => changePage('settings')} />
-            </Tooltip>
-          </Header>
-          <Content id="clipsync-content" className="clipsync-content" ref={contentRef} style={{ overflow: 'auto', height: '100%', padding: '88px 24px 24px' }}>
-            {pageEl}
-          </Content>
-        </Layout>
-        </Layout>
+            ) : (
+              <Navigate to="/pro" replace />
+            )
+          } />
+          {/* 用户端登录页 */}
+          <Route path="/index/login" element={
+            !authed ? (
+              <LoginPage mode="user" onLogin={() => setAuthed(true)} />
+            ) : role === 'user' ? (
+              <Navigate to="/index" replace />
+            ) : (
+              <Navigate to="/pro" replace />
+            )
+          } />
+          {/* 管理端:/pro(已登录=管理台;未登录跳 /pro/login) */}
+          <Route path="/pro" element={
+            !authed ? (
+              <Navigate to="/pro/login" replace />
+            ) : role === 'user' ? (
+              <Navigate to="/index" replace />
+            ) : (
+              <AdminConsole
+                page={page}
+                menuItems={menuItems}
+                pageEl={pageEl}
+                statusBadge={statusBadge}
+                isDark={isDark}
+                c={c}
+                onChangePage={changePage}
+                onLogout={logout}
+                contentRef={contentRef}
+              />
+            )
+          } />
+          {/* 管理端登录页 */}
+          <Route path="/pro/login" element={
+            !authed ? (
+              <LoginPage mode="admin" onLogin={() => setAuthed(true)} />
+            ) : role === 'user' ? (
+              <Navigate to="/index" replace />
+            ) : (
+              <Navigate to="/pro" replace />
+            )
+          } />
+          <Route path="*" element={<Navigate to="/index" replace />} />
+        </Routes>
+      </BrowserRouter>
     </ConfigProvider>
   )
 }

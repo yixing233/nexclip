@@ -1,43 +1,71 @@
 import { useEffect, useRef, useState } from 'react'
-import { Card, Table, Tag, Button, Space, Image as AntImage, Typography, Empty, message, Popconfirm, Drawer } from 'antd'
+import { Card, Table, Tag, Button, Space, Image as AntImage, Typography, Empty, message, Popconfirm, Drawer, Skeleton, Select } from 'antd'
 import { Copy, Trash2, Share2 } from 'lucide-react'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
-import { getHistory, deleteEntry, imageUrl, type ClipboardEntry } from '../api'
+import { getHistory, deleteEntry, imageUrl, listUsers, type ClipboardEntry } from '../api'
 
 dayjs.extend(relativeTime)
 const { Text } = Typography
 
-export default function ClipboardPage({ refreshTick }: { refreshTick: number }) {
+const PAGE_SIZE = 20
+
+/** 剪贴板历史:限高内滚 + 滚动到底自动加载更多(懒加载)+ 骨架屏 */
+export default function ClipboardPage({ refreshTick, userFilter, onUserFilterChange }: {
+  refreshTick: number
+  userFilter: string | null
+  onUserFilterChange: (v: string | null) => void
+}) {
   const [data, setData] = useState<ClipboardEntry[]>([])
   const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
-  const [loading, setLoading] = useState(false)
+  const [firstLoading, setFirstLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [detail, setDetail] = useState<ClipboardEntry | null>(null)
-  const pageSize = 20
+  const [users, setUsers] = useState<Array<{ id: string; name: string }>>([])
   const wrapRef = useRef<HTMLDivElement>(null)
-  const [scrollY, setScrollY] = useState(360)
+  const offsetRef = useRef(0)
+  const hasMoreRef = useRef(true)
 
-  // 卡片填满视口:表格 body 高度 = 容器高度 - 表头/分页等固定开销
-  useEffect(() => {
-    const measure = () => {
-      const el = wrapRef.current
-      if (el) setScrollY(Math.max(200, el.clientHeight - 140))
+  // 用户筛选下拉(管理端)
+  useEffect(() => { listUsers().then(setUsers).catch(() => {}) }, [])
+
+  const fetchPage = async (offset: number, first: boolean) => {
+    if (first) setFirstLoading(true); else setLoadingMore(true)
+    try {
+      const res = await getHistory(offset, PAGE_SIZE, userFilter)
+      setTotal(res.total)
+      setData(prev => first
+        ? res.items
+        : [...prev, ...res.items.filter(n => !prev.some(o => o.id === n.id))])
+      offsetRef.current = offset + res.items.length
+      if (offset + res.items.length >= res.total) hasMoreRef.current = false
+      else hasMoreRef.current = true
+    } finally {
+      setFirstLoading(false)
+      setLoadingMore(false)
     }
-    measure()
-    const t = setTimeout(measure, 60)
-    window.addEventListener('resize', measure)
-    return () => { clearTimeout(t); window.removeEventListener('resize', measure) }
-  }, [loading])
-
-  const load = (p: number) => {
-    setLoading(true)
-    getHistory((p - 1) * pageSize, pageSize)
-      .then(res => { setData(res.items); setTotal(res.total) })
-      .finally(() => setLoading(false))
   }
-  useEffect(() => { load(page) }, [page, refreshTick]) // eslint-disable-line
+
+  // 首次/刷新/用户筛选变化:重置并加载第一页
+  useEffect(() => {
+    offsetRef.current = 0
+    hasMoreRef.current = true
+    fetchPage(0, true)
+  }, [refreshTick, userFilter]) // eslint-disable-line
+
+  const onScroll = (e: React.UIEvent<HTMLElement>) => {
+    const el = e.currentTarget
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 100 && !loadingMore && hasMoreRef.current) {
+      fetchPage(offsetRef.current, false)
+    }
+  }
+
+  const doDelete = async (id: number) => {
+    await deleteEntry(id)
+    message.success('已删除')
+    fetchPage(0, false) // 刷新当前列表(不闪骨架)
+  }
 
   const columns: ColumnsType<ClipboardEntry> = [
     {
@@ -72,11 +100,7 @@ export default function ClipboardPage({ refreshTick }: { refreshTick: number }) 
           />
           <Popconfirm
             title="确定删除这条记录?"
-            onConfirm={async () => {
-              await deleteEntry(r.id)
-              message.success('已删除')
-              load(page)
-            }}
+            onConfirm={() => doDelete(r.id)}
           >
             <Button type="link" size="small" danger icon={<Trash2 size={16} />} />
           </Popconfirm>
@@ -90,29 +114,42 @@ export default function ClipboardPage({ refreshTick }: { refreshTick: number }) 
     <Card
       id="clipsync-clipboard-page"
       className="clipsync-page-card"
-      title="剪贴板历史"
+      title={'剪贴板历史' + (total > 0 ? ' (' + data.length + ' / ' + total + ')' : '')}
+      extra={
+        <Select
+          allowClear
+          placeholder="全部用户"
+          style={{ width: 180 }}
+          value={userFilter ?? undefined}
+          onChange={(v) => onUserFilterChange(v ?? null)}
+          options={users.map(u => ({ value: u.id, label: u.name }))}
+        />
+      }
       style={{ borderRadius: 14, height: 'calc(100vh - 112px)', display: 'flex', flexDirection: 'column' }}
       styles={{ body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }}
     >
-      <div ref={wrapRef} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <Table<ClipboardEntry>
-        id="clipsync-clipboard-history-table"
-        className="clipsync-table"
-        rowKey="id"
-        columns={columns}
-        dataSource={data}
-        loading={loading}
-        scroll={{ y: scrollY }}
-        pagination={{
-          current: page,
-          total,
-          pageSize,
-          showSizeChanger: false,
-          onChange: setPage,
-          showTotal: t => `共 ${t} 条`,
-        }}
-        locale={{ emptyText: <Empty description="暂无剪贴板记录" /> }}
-      />
+      <div
+        ref={wrapRef}
+        onScroll={onScroll}
+        style={{ flex: 1, minHeight: 0, overflow: 'auto', paddingRight: 4 }}
+      >
+        {firstLoading && data.length === 0 ? (
+          <Skeleton active paragraph={{ rows: 8 }} style={{ paddingTop: 8 }} />
+        ) : (
+          <Table<ClipboardEntry>
+            id="clipsync-clipboard-history-table"
+            className="clipsync-table"
+            rowKey="id"
+            columns={columns}
+            dataSource={data}
+            loading={loadingMore}
+            pagination={false}
+            locale={{ emptyText: <Empty description="暂无剪贴板记录" /> }}
+          />
+        )}
+        {!hasMoreRef.current && data.length > 0 ? (
+          <div style={{ textAlign: 'center', color: '#9CA3AF', fontSize: 12, padding: '8px 0' }}>已加载全部 {data.length} 条</div>
+        ) : null}
       </div>
       <Drawer
         id="clipsync-clipboard-detail-drawer"

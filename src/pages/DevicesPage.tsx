@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Card, Table, Tag, Badge, Typography, Space, Button, Input, Modal, Form, Popconfirm,
-  message, Select, Empty,
+  message, Select, Empty, Skeleton,
 } from 'antd'
 import { Monitor, Pencil, Trash2, RefreshCw, KeyRound, Copy, RotateCcw } from 'lucide-react'
 import type { ColumnsType } from 'antd/es/table'
@@ -12,7 +12,11 @@ import { getDevices, renameDevice, removeDevice, createPairingCode, revokePairin
 dayjs.extend(relativeTime)
 const { Text } = Typography
 
-export default function DevicesPage({ refreshTick }: { refreshTick: number }) {
+export default function DevicesPage({ refreshTick, userFilter, onUserFilterChange }: {
+  refreshTick: number
+  userFilter: string | null
+  onUserFilterChange: (v: string | null) => void
+}) {
   const [devices, setDevices] = useState<DeviceInfo[]>([])
   const [loading, setLoading] = useState(false)
   const [filter, setFilter] = useState<'all' | 'online' | 'offline'>('all')
@@ -26,6 +30,7 @@ export default function DevicesPage({ refreshTick }: { refreshTick: number }) {
   // 生成配对码弹窗
   const [pairOpen, setPairOpen] = useState(false)
   const [pairCode, setPairCode] = useState<{ code: string; expiresAt: number } | null>(null)
+  const [pairUserId, setPairUserId] = useState<string | null>(null)
   const [pairLoading, setPairLoading] = useState(false)
   const [nowTs, setNowTs] = useState(Date.now())
 
@@ -36,6 +41,7 @@ export default function DevicesPage({ refreshTick }: { refreshTick: number }) {
       if (pairCode) revokePairingCode(pairCode.code).catch(() => {})
       const r = await createPairingCode()
       setPairCode({ code: r.code, expiresAt: Date.parse(r.expiresAt) })
+      setPairUserId(r.userId ?? null)
       setNowTs(Date.now())
     } catch {
       message.error('生成配对码失败')
@@ -85,6 +91,7 @@ export default function DevicesPage({ refreshTick }: { refreshTick: number }) {
     let list = devices
     if (filter === 'online') list = list.filter(d => d.online)
     if (filter === 'offline') list = list.filter(d => !d.online)
+    if (userFilter) list = list.filter(d => d.userId === userFilter)
     if (keyword.trim()) {
       const k = keyword.trim().toLowerCase()
       list = list.filter(d =>
@@ -94,7 +101,7 @@ export default function DevicesPage({ refreshTick }: { refreshTick: number }) {
       )
     }
     return list
-  }, [devices, filter, keyword])
+  }, [devices, filter, keyword, userFilter])
 
   const onlineCount = devices.filter(d => d.online).length
 
@@ -120,8 +127,8 @@ export default function DevicesPage({ refreshTick }: { refreshTick: number }) {
       render: (o: boolean) => <Badge status={o ? 'success' : 'default'} text={o ? '在线' : '离线'} />,
     },
     {
-      title: '配对', dataIndex: 'paired', width: 90,
-      render: (v?: boolean) => (v ? <Tag color="green">已配对</Tag> : <Tag>未配对</Tag>),
+      title: '绑定', dataIndex: 'bound', width: 110,
+      render: (v?: boolean, r?: DeviceInfo) => (v ? <Tag color="green">已绑定 {r?.userId}</Tag> : <Tag>未绑定</Tag>),
     },
     {
       title: '最后活跃', dataIndex: 'lastSeenAt', width: 120,
@@ -182,12 +189,21 @@ export default function DevicesPage({ refreshTick }: { refreshTick: number }) {
             id="clipsync-devices-filter"
             value={filter}
             onChange={setFilter}
-            style={{ width: 120 }}
+            style={{ width: 110 }}
             options={[
               { value: 'all', label: '全部设备' },
               { value: 'online', label: '在线' },
               { value: 'offline', label: '离线' },
             ]}
+          />
+          <Select
+            id="clipsync-devices-user-filter"
+            allowClear
+            placeholder="全部用户"
+            style={{ width: 140 }}
+            value={userFilter ?? undefined}
+            onChange={(v) => onUserFilterChange(v ?? null)}
+            options={[...new Map(devices.filter(x => x.userId).map(x => [x.userId, { value: x.userId!, label: x.userId! }])).values()]}
           />
           <Input
             id="clipsync-devices-search"
@@ -212,17 +228,21 @@ export default function DevicesPage({ refreshTick }: { refreshTick: number }) {
       }
     >
       <div ref={wrapRef} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      {loading && devices.length === 0 ? (
+        <Skeleton active paragraph={{ rows: 7 }} style={{ paddingTop: 8 }} />
+      ) : (
       <Table<DeviceInfo>
         id="clipsync-devices-table"
         className="clipsync-table"
         rowKey="id"
         columns={columns}
         dataSource={filtered}
-        loading={loading}
+        loading={loading && devices.length > 0}
         scroll={{ y: scrollY }}
         pagination={{ pageSize: 10, showTotal: t => `共 ${t} 台设备` }}
         locale={{ emptyText: <Empty description="没有匹配的设备" /> }}
       />
+      )}
       </div>
 
       <Modal
@@ -258,7 +278,7 @@ export default function DevicesPage({ refreshTick }: { refreshTick: number }) {
         {pairCode ? (
           <div style={{ textAlign: 'center', padding: '8px 0 4px' }}>
             <div style={{ color: '#9CA3AF', fontSize: 13, marginBottom: 12 }}>
-              一次性配对码 · 10 分钟内有效 · 每台设备一个码
+              一次性配对码 · 10 分钟内有效 · 新设备需同时输入 用户ID + 配对码
             </div>
             <div
               style={{
@@ -267,6 +287,9 @@ export default function DevicesPage({ refreshTick }: { refreshTick: number }) {
               }}
             >
               {pairCode.code}
+            </div>
+            <div style={{ fontSize: 13, color: '#6B7280', marginBottom: 4 }}>
+              用户ID: <Text strong style={{ fontFamily: 'Consolas, monospace' }}>{pairUserId ?? '-'}</Text>
             </div>
             <div style={{ fontSize: 13, color: expired ? '#EF4444' : '#6B7280', marginBottom: 16 }}>
               {expired ? '已过期' : '剩余有效时间: ' + countdown}

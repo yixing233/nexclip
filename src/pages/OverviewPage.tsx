@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Row, Col, Card, Table, Tag, Typography, Button,
-  Timeline, Empty, Space, Image as AntImage, message, Badge, Divider, Tooltip, theme, Select,
+  Timeline, Empty, Space, Image as AntImage, message, Badge, Divider, Tooltip, theme, Select, Skeleton,
 } from 'antd'
 import { Bubble, Sender, Conversations } from '@ant-design/x'
 import {
-  Monitor, ArrowUpDown, FileText, ShieldCheck, Signal, Send, Copy, Trash2, Share2,
+  Monitor, Users, ArrowUpDown, FileText, ShieldCheck, Signal, Send, Copy, Trash2, Share2,
   Download, Upload, Server, Cloud, Maximize2, Minimize2,
 } from 'lucide-react'
 import type { ColumnsType } from 'antd/es/table'
@@ -260,18 +260,26 @@ export default function OverviewPage({ refreshTick }: { refreshTick: number }) {
     <div>
       {/* 统计卡片:Row/Col 栅格,与下方各行共用同一 gutter 体系,边缘对齐 */}
       <Row id="clipsync-overview-stats" className="clipsync-overview-stats" gutter={[16, 16]}>
-        {[
+        {stats === null ? (
+          Array.from({ length: 5 }).map((_, i) => (
+            <Col key={'sk' + i} flex="1 1 180px" style={{ minWidth: 180 }}>
+              <Card style={{ borderRadius: 14, height: 132 }}>
+                <Skeleton active paragraph={{ rows: 1 }} style={{ marginTop: 6 }} />
+              </Card>
+            </Col>
+          ))
+        ) : [
           <StatCard
-            key="devices"
-            id="clipsync-stat-devices"
-            title="在线设备"
-            value={stats ? `${stats.onlineDevices} / ${stats.totalDevices}` : '-'}
+            key="users"
+            id="clipsync-stat-users"
+            title="在线用户"
+            value={stats ? `${stats.onlineUsers} / ${stats.totalUsers}` : '-'}
             valueColor="#2563EB"
-            helper={stats ? `${stats.onlineDevices} 台在线` : ''}
-            icon={<Monitor size={16} />}
+            helper={stats ? `${stats.onlineUsers} 个用户在线` : ''}
+            icon={<Users size={16} />}
             iconBg="rgba(37, 99, 235, 0.12)"
             iconColor="#2563EB"
-            sparkline={stats?.sparklines.devices}
+            sparkline={stats?.sparklines.users}
             sparklineColor="#2563EB"
           />,
           <StatCard
@@ -340,7 +348,7 @@ export default function OverviewPage({ refreshTick }: { refreshTick: number }) {
             className="clipsync-panel-card"
             title={<Space><FileText size={16} color="#2563EB" /> 最近剪贴板</Space>}
             extra={<a onClick={reloadClipboard} style={{ color: '#2563EB' }}>刷新</a>}
-            style={{ borderRadius: 14, height: '100%', flex: 1, display: 'flex', flexDirection: 'column' }}
+            style={{ borderRadius: 14, height: 360, flex: 1, display: 'flex', flexDirection: 'column' }}
             styles={{ body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } }}
           >
             <div ref={wrapRef} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -366,7 +374,7 @@ export default function OverviewPage({ refreshTick }: { refreshTick: number }) {
             className="clipsync-panel-card"
             title={<Space><Monitor size={16} color="#2563EB" /> 已连接设备</Space>}
             extra={<a style={{ color: '#2563EB' }}>管理设备</a>}
-            style={{ borderRadius: 14, height: '100%', flex: 1, display: 'flex', flexDirection: 'column' }}
+            style={{ borderRadius: 14, height: 360, flex: 1, display: 'flex', flexDirection: 'column' }}
             styles={{ body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } }}
           >
             <Conversations
@@ -427,7 +435,7 @@ export default function OverviewPage({ refreshTick }: { refreshTick: number }) {
           >
             <Timeline
               className="clipsync-timeline"
-              style={{ marginTop: 8 }}
+              style={{ marginTop: 8, maxHeight: 320, overflow: 'auto' }}
               items={activities.map(a => ({
                 color: a.action === 'push' ? '#10B981' : a.action === 'receive' ? '#2563EB' : a.action === 'connect' ? '#9333EA' : '#EF4444',
                 children: (
