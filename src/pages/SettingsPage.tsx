@@ -3,10 +3,10 @@ import {
   Card, Form, Input, InputNumber, Button, Segmented, Typography, Tag, Popconfirm, Space, message,
 } from 'antd'
 import {
-  Sun, Moon, Monitor, Server, KeyRound, History, Database, Info, Save, Trash2, Palette, ShieldCheck, Shuffle, Copy,
+  Sun, Moon, Monitor, Server, History, Database, Info, Save, Trash2, Palette, ShieldCheck,
 } from 'lucide-react'
 import {
-  getToken, setToken, getMaxHistory, setMaxHistory, clearHistory,
+  getMaxHistory, setMaxHistory, clearHistory,
   getThemeMode, setThemeMode, type ThemeMode,
 } from '../api'
 
@@ -53,8 +53,7 @@ export default function SettingsPage({ themeMode, onThemeChange }: SettingsPageP
     }
   }
 
-  const handleSaveServer = (values: { token?: string; maxHistory?: number }) => {
-    setToken(values.token?.trim() || null)
+  const handleSaveServer = (values: { maxHistory?: number }) => {
     setMaxHistory(values.maxHistory ?? 1000)
     message.success('服务端设置已保存,刷新页面后生效')
   }
@@ -98,27 +97,10 @@ export default function SettingsPage({ themeMode, onThemeChange }: SettingsPageP
             form={form}
             layout="vertical"
             initialValues={{
-              token: getToken() ?? '',
               maxHistory: getMaxHistory(),
             }}
             onFinish={handleSaveServer}
           >
-            <Form.Item
-              name="token"
-              label={<Space size={6}><KeyRound size={14} />访问令牌</Space>}
-              extra="各端使用同一令牌"
-              rules={[{ required: true, message: '请输入访问令牌' }]}
-            >
-              <Input.Password id="clipsync-settings-token" className="clipsync-settings-token" />
-            </Form.Item>
-            <Space size={8} style={{ marginBottom: 24 }}>
-              <Button id="clipsync-settings-token-generate" className="clipsync-settings-token-generate" icon={<Shuffle size={15} />} onClick={handleGenerateToken}>
-                生成随机令牌
-              </Button>
-              <Button id="clipsync-settings-token-copy" className="clipsync-settings-token-copy" icon={<Copy size={15} />} onClick={handleCopyToken}>
-                复制令牌
-              </Button>
-            </Space>
             <Form.Item
               name="maxHistory"
               label={<Space size={6}><History size={14} />历史上限</Space>}

@@ -13,7 +13,7 @@ import DevicesPage from './pages/DevicesPage'
 import SyncRecordsPage from './pages/SyncRecordsPage'
 import SettingsPage from './pages/SettingsPage'
 import { connectHub, disconnectHub } from './hub'
-import { getThemeMode, setToken, deviceId } from './api'
+import { getThemeMode, setToken, logout as apiLogout, deviceId } from './api'
 import { addIncoming } from './chatStore'
 
 const { Header, Sider, Content } = Layout
@@ -87,6 +87,16 @@ export default function App() {
   }, [page])
 
 
+  // 令牌失效(被吊销/过期):强制回到登录页
+  useEffect(() => {
+    const onUnauthorized = () => {
+      setAuthed(false)
+      message.warning('登录已失效,请重新登录')
+    }
+    window.addEventListener('clipsync:unauthorized', onUnauthorized)
+    return () => window.removeEventListener('clipsync:unauthorized', onUnauthorized)
+  }, [])
+
   useEffect(() => {
     if (!authed) return
     connectHub({
@@ -105,6 +115,9 @@ export default function App() {
         message.info('剪贴板历史已清空')
         setRefreshTick(t => t + 1)
       },
+      onDevicesChanged: () => {
+        setRefreshTick(t => t + 1)
+      },
       onStatusChange: (s) => {
         if (s === 'connected' || s === 'reconnecting' || s === 'disconnected') {
           setHubStatus(s)
@@ -115,7 +128,7 @@ export default function App() {
   }, [authed])
 
   const logout = () => {
-    setToken(null)
+    apiLogout()
     setAuthed(false)
   }
 
@@ -131,7 +144,7 @@ export default function App() {
     switch (page) {
       case 'overview': return <OverviewPage refreshTick={refreshTick} />
       case 'clipboard': return <ClipboardPage refreshTick={refreshTick} />
-      case 'devices': return <DevicesPage />
+      case 'devices': return <DevicesPage refreshTick={refreshTick} />
       case 'records': return <SyncRecordsPage />
       default: return <SettingsPage onThemeChange={setThemeModeState} themeMode={themeMode} />
     }

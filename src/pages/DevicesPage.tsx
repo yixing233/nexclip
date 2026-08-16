@@ -3,16 +3,16 @@ import {
   Card, Table, Tag, Badge, Typography, Space, Button, Input, Modal, Form, Popconfirm,
   message, Select, Empty,
 } from 'antd'
-import { Monitor, Pencil, Trash2, RefreshCw } from 'lucide-react'
+import { Monitor, Pencil, Trash2, RefreshCw, KeyRound, Copy, RotateCcw } from 'lucide-react'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
-import { getDevices, renameDevice, removeDevice, type DeviceInfo } from '../api'
+import { getDevices, renameDevice, removeDevice, createPairingCode, revokePairingCode, type DeviceInfo } from '../api'
 
 dayjs.extend(relativeTime)
 const { Text } = Typography
 
-export default function DevicesPage() {
+export default function DevicesPage({ refreshTick }: { refreshTick: number }) {
   const [devices, setDevices] = useState<DeviceInfo[]>([])
   const [loading, setLoading] = useState(false)
   const [filter, setFilter] = useState<'all' | 'online' | 'offline'>('all')
@@ -23,11 +23,49 @@ export default function DevicesPage() {
   const [renameForm] = Form.useForm()
   const [renaming, setRenaming] = useState(false)
 
+  // 生成配对码弹窗
+  const [pairOpen, setPairOpen] = useState(false)
+  const [pairCode, setPairCode] = useState<{ code: string; expiresAt: number } | null>(null)
+  const [pairLoading, setPairLoading] = useState(false)
+  const [nowTs, setNowTs] = useState(Date.now())
+
+  const openPairing = async () => {
+    setPairLoading(true)
+    try {
+      // 重新生成前先作废旧码(未使用的话)
+      if (pairCode) revokePairingCode(pairCode.code).catch(() => {})
+      const r = await createPairingCode()
+      setPairCode({ code: r.code, expiresAt: Date.parse(r.expiresAt) })
+      setNowTs(Date.now())
+    } catch {
+      message.error('生成配对码失败')
+    } finally {
+      setPairLoading(false)
+    }
+  }
+
+  const closePairing = () => {
+    if (pairCode) revokePairingCode(pairCode.code).catch(() => {})
+    setPairCode(null)
+    setPairOpen(false)
+  }
+
+  // 倒计时(每秒刷新)
+  useEffect(() => {
+    if (!pairOpen || !pairCode) return
+    const t = setInterval(() => setNowTs(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [pairOpen, pairCode])
+
+  const remaining = pairCode ? Math.max(0, Math.floor((pairCode.expiresAt - nowTs) / 1000)) : 0
+  const expired = pairCode ? remaining <= 0 : false
+  const countdown = String(Math.floor(remaining / 60)).padStart(2, '0') + ':' + String(remaining % 60).padStart(2, '0')
+
   const load = () => {
     setLoading(true)
     getDevices().then(setDevices).finally(() => setLoading(false))
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [refreshTick]) // eslint-disable-line
 
   const wrapRef = useRef<HTMLDivElement>(null)
   const [scrollY, setScrollY] = useState(360)
@@ -82,6 +120,10 @@ export default function DevicesPage() {
       render: (o: boolean) => <Badge status={o ? 'success' : 'default'} text={o ? '在线' : '离线'} />,
     },
     {
+      title: '配对', dataIndex: 'paired', width: 90,
+      render: (v?: boolean) => (v ? <Tag color="green">已配对</Tag> : <Tag>未配对</Tag>),
+    },
+    {
       title: '最后活跃', dataIndex: 'lastSeenAt', width: 120,
       render: (v: string) => <Text type="secondary">{dayjs(v).fromNow()}</Text>,
     },
@@ -97,7 +139,7 @@ export default function DevicesPage() {
           </Button>
           <Popconfirm
             title={`确定移除设备「${r.name}」?`}
-            description="移除后该设备需重新注册"
+            description="移除后设备 Token 立即失效,需重新配对"
             okText="移除"
             okButtonProps={{ danger: true }}
             onConfirm={async () => {
@@ -157,6 +199,15 @@ export default function DevicesPage() {
             onChange={e => setKeyword(e.target.value)}
           />
           <Button id="clipsync-devices-refresh" icon={<RefreshCw size={16} />} onClick={load}>刷新</Button>
+          <Button
+            id="clipsync-devices-pair"
+            type="primary"
+            icon={<KeyRound size={16} />}
+            loading={pairLoading}
+            onClick={() => { setPairOpen(true); if (!pairCode) openPairing() }}
+          >
+            生成配对码
+          </Button>
         </Space>
       }
     >
@@ -194,6 +245,52 @@ export default function DevicesPage() {
             <Input id="clipsync-device-rename-input" placeholder="请输入新的设备名称" maxLength={32} />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        rootClassName="clipsync-pairing-modal"
+        title={<Space><KeyRound size={16} color="#2563EB" />生成配对码</Space>}
+        open={pairOpen}
+        onCancel={closePairing}
+        footer={null}
+        styles={{ mask: { backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)' } }}
+      >
+        {pairCode ? (
+          <div style={{ textAlign: 'center', padding: '8px 0 4px' }}>
+            <div style={{ color: '#9CA3AF', fontSize: 13, marginBottom: 12 }}>
+              一次性配对码 · 10 分钟内有效 · 每台设备一个码
+            </div>
+            <div
+              style={{
+                fontFamily: 'Consolas, monospace', fontSize: 34, letterSpacing: 6, fontWeight: 700,
+                color: expired ? '#EF4444' : '#2563EB', userSelect: 'all', marginBottom: 8,
+              }}
+            >
+              {pairCode.code}
+            </div>
+            <div style={{ fontSize: 13, color: expired ? '#EF4444' : '#6B7280', marginBottom: 16 }}>
+              {expired ? '已过期' : '剩余有效时间: ' + countdown}
+            </div>
+            <Space>
+              <Button
+                icon={<Copy size={15} />}
+                onClick={() => { navigator.clipboard.writeText(pairCode.code); message.success('已复制配对码') }}
+              >
+                复制
+              </Button>
+              <Button icon={<RotateCcw size={15} />} loading={pairLoading} onClick={openPairing}>
+                重新生成
+              </Button>
+            </Space>
+            <div style={{ color: '#9CA3AF', fontSize: 12, marginTop: 16 }}>
+              在目标设备设置页输入此配对码完成配对;关闭窗口将作废未使用的码
+            </div>
+          </div>
+        ) : (
+          <div style={{ textAlign: 'center', padding: '24px 0' }}>
+            <Button type="primary" loading={pairLoading} onClick={openPairing}>生成配对码</Button>
+          </div>
+        )}
       </Modal>
     </Card>
   )

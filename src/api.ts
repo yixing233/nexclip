@@ -20,7 +20,13 @@ export interface DeviceInfo {
   ip?: string | null;
   version?: string | null;
   online: boolean;
+  paired?: boolean;
   lastSeenAt: string;
+}
+
+export interface PairingCode {
+  code: string;
+  expiresAt: string;
 }
 
 export type ActivityAction = 'push' | 'receive' | 'connect' | 'delete';
@@ -92,7 +98,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { ...init, headers });
   if (res.status === 401) {
     setToken(null);
-    window.location.hash = '#/login';
+    window.dispatchEvent(new Event('clipsync:unauthorized'));
     throw new Error('未授权');
   }
   if (!res.ok) throw new Error('请求失败: ' + res.status + ' ' + res.statusText);
@@ -101,16 +107,34 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 // ---------- API 函数 ----------
-/** 登录:设置令牌后请求一次接口验证,401 则清除 */
-export async function login(token: string): Promise<boolean> {
-  setToken(token.trim());
+/** 管理台账密登录:换取会话令牌 */
+export async function login(username: string, password: string): Promise<boolean> {
   try {
-    await request('/api/clipboard');
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    if (res.status === 401) return false;
+    if (!res.ok) throw new Error('登录失败(' + res.status + ')');
+    const j = (await res.json()) as { token: string };
+    setToken(j.token);
     return true;
-  } catch {
-    setToken(null);
+  } catch (e) {
+    console.error('login error', e);
     return false;
   }
+}
+
+/** 登出:注销会话令牌 */
+export async function logout(): Promise<void> {
+  const token = getToken();
+  if (token) {
+    try {
+      await fetch('/api/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + token } });
+    } catch { /* 忽略 */ }
+  }
+  setToken(null);
 }
 
 export function getStats(): Promise<Stats> {
@@ -157,6 +181,32 @@ export function renameDevice(id: string, name: string): Promise<void> {
 
 export function removeDevice(id: string): Promise<void> {
   return request('/api/devices/' + encodeURIComponent(id), { method: 'DELETE' });
+}
+
+/** 生成一次性配对码(免认证;携带本端设备信息,服务端登记生成方设备;10 分钟有效,一码一设备) */
+export function createPairingCode(): Promise<PairingCode> {
+  return request<PairingCode>('/api/pairing-codes', {
+    method: 'POST',
+    body: JSON.stringify({ deviceId: deviceId(), deviceName: 'Web 管理页' }),
+  });
+}
+
+/** 配对:用一次性配对码换取本设备专属 Token(免认证接口) */
+export async function pairDevice(pairingCode: string, deviceName: string): Promise<{ deviceId: string; deviceToken: string }> {
+  const res = await fetch('/api/pair', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pairingCode, deviceId: deviceId(), deviceName }),
+  });
+  let err = '';
+  try { err = (await res.json()).error ?? '' } catch { /* ignore */ }
+  if (!res.ok) throw new Error(err || '配对失败(' + res.status + ')');
+  return res.json();
+}
+
+/** 作废未使用的配对码 */
+export function revokePairingCode(code: string): Promise<void> {
+  return request('/api/pairing-codes/' + encodeURIComponent(code), { method: 'DELETE' });
 }
 
 export function getActivities(limit = 20): Promise<ActivityLog[]> {

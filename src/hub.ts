@@ -4,6 +4,7 @@ import { getToken, deviceId } from './api'
 export interface HubEvents {
   onClipboardUpdated: (entry: unknown) => void
   onClipboardCleared: () => void
+  onDevicesChanged: () => void
   onStatusChange: (status: string) => void
 }
 
@@ -25,6 +26,10 @@ export function connectHub(events: HubEvents): void {
 
   connection.on('ClipboardCleared', () => {
     events.onClipboardCleared()
+  })
+
+  connection.on('DevicesChanged', () => {
+    events.onDevicesChanged()
   })
 
   connection.onreconnecting(() => events.onStatusChange('reconnecting'))
