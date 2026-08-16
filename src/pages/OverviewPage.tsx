@@ -28,7 +28,7 @@ const { Text } = Typography
 
 function useStats() {
   const [stats, setStats] = useState<Stats | null>(null)
-  const load = () => getStats().then(setStats).catch(() => {})
+  const load = () => getStats().then(setStats).catch(e => message.error('统计数据加载失败:' + (e as Error).message))
   useEffect(() => { load() }, [])
   return { stats, reload: load }
 }
@@ -37,8 +37,8 @@ function useClipboard() {
   const [current, setCurrent] = useState<ClipboardEntry | null>(null)
   const [history, setHistory] = useState<ClipboardEntry[]>([])
   const load = () => {
-    getCurrentClipboard().then(setCurrent)
-    getHistory(0, 5).then(p => setHistory(p.items))
+    getCurrentClipboard().then(setCurrent).catch(e => message.error('剪贴板数据加载失败:' + (e as Error).message))
+    getHistory(0, 5).then(p => setHistory(p.items)).catch(() => {})
   }
   useEffect(() => { load() }, [])
   return { current, history, reload: load }
@@ -46,7 +46,7 @@ function useClipboard() {
 
 function useDevices() {
   const [devices, setDevices] = useState<DeviceInfo[]>([])
-  useEffect(() => { getDevices().then(setDevices).catch(() => {}) }, [])
+  useEffect(() => { getDevices().then(setDevices).catch(e => message.error('设备列表加载失败:' + (e as Error).message)) }, [])
   return devices
 }
 

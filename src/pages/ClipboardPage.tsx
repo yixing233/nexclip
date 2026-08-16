@@ -11,11 +11,12 @@ const { Text } = Typography
 
 const PAGE_SIZE = 20
 
-/** 剪贴板历史:限高内滚 + 滚动到底自动加载更多(懒加载)+ 骨架屏 */
-export default function ClipboardPage({ refreshTick, userFilter, onUserFilterChange }: {
+/** 剪贴板历史:限高内滚 + 滚动到底自动加载更多(懒加载)+ 骨架屏;search 为顶栏全局搜索(服务端文本过滤) */
+export default function ClipboardPage({ refreshTick, userFilter, onUserFilterChange, search = '' }: {
   refreshTick: number
   userFilter: string | null
   onUserFilterChange: (v: string | null) => void
+  search?: string
 }) {
   const [data, setData] = useState<ClipboardEntry[]>([])
   const [total, setTotal] = useState(0)
@@ -27,13 +28,20 @@ export default function ClipboardPage({ refreshTick, userFilter, onUserFilterCha
   const offsetRef = useRef(0)
   const hasMoreRef = useRef(true)
 
+  // 搜索关键字防抖(顶栏连续输入时避免每键一次请求)
+  const [debouncedSearch, setDebouncedSearch] = useState(search)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(t)
+  }, [search])
+
   // 用户筛选下拉(管理端)
-  useEffect(() => { listUsers().then(setUsers).catch(() => {}) }, [])
+  useEffect(() => { listUsers().then(setUsers).catch(() => message.error('用户列表加载失败')) }, [])
 
   const fetchPage = async (offset: number, first: boolean) => {
     if (first) setFirstLoading(true); else setLoadingMore(true)
     try {
-      const res = await getHistory(offset, PAGE_SIZE, userFilter)
+      const res = await getHistory(offset, PAGE_SIZE, userFilter, debouncedSearch)
       setTotal(res.total)
       setData(prev => first
         ? res.items
@@ -41,18 +49,20 @@ export default function ClipboardPage({ refreshTick, userFilter, onUserFilterCha
       offsetRef.current = offset + res.items.length
       if (offset + res.items.length >= res.total) hasMoreRef.current = false
       else hasMoreRef.current = true
+    } catch (e) {
+      if (first) message.error('剪贴板历史加载失败:' + (e as Error).message)
     } finally {
       setFirstLoading(false)
       setLoadingMore(false)
     }
   }
 
-  // 首次/刷新/用户筛选变化:重置并加载第一页
+  // 首次/刷新/用户筛选或搜索变化:重置并加载第一页
   useEffect(() => {
     offsetRef.current = 0
     hasMoreRef.current = true
     fetchPage(0, true)
-  }, [refreshTick, userFilter]) // eslint-disable-line
+  }, [refreshTick, userFilter, debouncedSearch]) // eslint-disable-line
 
   const onScroll = (e: React.UIEvent<HTMLElement>) => {
     const el = e.currentTarget
@@ -62,9 +72,13 @@ export default function ClipboardPage({ refreshTick, userFilter, onUserFilterCha
   }
 
   const doDelete = async (id: number) => {
-    await deleteEntry(id)
-    message.success('已删除')
-    fetchPage(0, false) // 刷新当前列表(不闪骨架)
+    try {
+      await deleteEntry(id)
+      message.success('已删除')
+      fetchPage(0, false) // 刷新当前列表(不闪骨架)
+    } catch (e) {
+      message.error('删除失败:' + (e as Error).message)
+    }
   }
 
   const columns: ColumnsType<ClipboardEntry> = [

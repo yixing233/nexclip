@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Card, Timeline, Typography, Empty, Skeleton, theme, Select } from 'antd'
+import { Card, Timeline, Typography, Empty, Skeleton, theme, Select, message } from 'antd'
 import { Upload, Download, Monitor, Trash2 } from 'lucide-react'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
@@ -11,7 +11,8 @@ const { Text } = Typography
 const PAGE_SIZE = 30
 
 /** 同步记录:限高 + 内部滚动 + 滚到底自动加载更多 + 骨架屏 */
-export default function SyncRecordsPage({ userFilter, onUserFilterChange }: {
+export default function SyncRecordsPage({ refreshTick, userFilter, onUserFilterChange }: {
+  refreshTick: number
   userFilter: string | null
   onUserFilterChange: (v: string | null) => void
 }) {
@@ -24,7 +25,7 @@ export default function SyncRecordsPage({ userFilter, onUserFilterChange }: {
   const wrapRef = useRef<HTMLDivElement>(null)
   const offsetRef = useRef(0)
 
-  useEffect(() => { listUsers().then(setUsers).catch(() => {}) }, [])
+  useEffect(() => { listUsers().then(setUsers).catch(() => message.error('用户列表加载失败')) }, [])
 
   const load = async (append: boolean) => {
     if (append) setLoadingMore(true); else setFirstLoading(true)
@@ -33,15 +34,16 @@ export default function SyncRecordsPage({ userFilter, onUserFilterChange }: {
       setItems(prev => append ? [...prev, ...more] : more)
       offsetRef.current += more.length
       if (more.length < PAGE_SIZE) setHasMore(false)
-    } catch {
-      // 静默失败,下次滚动重试
+    } catch (e) {
+      // 首次加载提示失败;追加失败静默,下次滚动重试
+      if (!append) message.error('同步记录加载失败:' + (e as Error).message)
     } finally {
       setFirstLoading(false)
       setLoadingMore(false)
     }
   }
 
-  useEffect(() => { load(false) }, [userFilter]) // eslint-disable-line
+  useEffect(() => { load(false) }, [refreshTick, userFilter]) // eslint-disable-line
 
   const onScroll = () => {
     const el = wrapRef.current

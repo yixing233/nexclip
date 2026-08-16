@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Card, Table, Tag, Typography, Space, Button, Input, Modal, Form, Popconfirm, message, Empty, Divider } from 'antd'
+import { useEffect, useMemo, useState } from 'react'
+import { Card, Table, Tag, Typography, Space, Button, Input, Modal, Form, Popconfirm, message, Empty, Divider, Select } from 'antd'
 import { Users, Pencil, Trash2, RefreshCw, ShieldCheck, Monitor } from 'lucide-react'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
@@ -12,22 +12,47 @@ const { Text } = Typography
 interface UserRow { id: string; name: string; createdAt: string; deviceCount: number }
 interface AuditRow { id: number; action: string; detail: string | null; ip: string | null; createdAt: string }
 
+/** 审计事件 → 标签颜色(登录/锁定=红系,配对=蓝系,删除=橙系,其余默认) */
+const AUDIT_COLORS: Record<string, string> = {
+  login_ok: 'green',
+  login_fail: 'red',
+  login_locked: 'red',
+  pair_code: 'blue',
+  pair_request: 'geekblue',
+  pair_approve: 'green',
+  pair_reject: 'orange',
+  user_rename: 'purple',
+  user_delete: 'orange',
+  history_clear: 'orange',
+  settings_update: 'cyan',
+}
+
 export default function UsersPage({ onViewUser }: { onViewUser: (uid: string) => void }) {
   const [users, setUsers] = useState<UserRow[]>([])
   const [audit, setAudit] = useState<AuditRow[]>([])
   const [loading, setLoading] = useState(false)
+  const [auditLoading, setAuditLoading] = useState(false)
+  const [auditLimit, setAuditLimit] = useState(50)
+  const [actionFilter, setActionFilter] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<UserRow | null>(null)
   const [renameForm] = Form.useForm()
   const [renaming, setRenaming] = useState(false)
 
-  const load = () => {
+  const loadUsers = () => {
     setLoading(true)
-    Promise.all([listUsers(), getAudit(50)])
-      .then(([u, a]) => { setUsers(u); setAudit(a) })
-      .catch(() => {})
+    listUsers()
+      .then(setUsers)
+      .catch(e => message.error('用户列表加载失败:' + (e as Error).message))
       .finally(() => setLoading(false))
   }
-  useEffect(() => { load() }, [])
+  const loadAudit = (limit: number) => {
+    setAuditLoading(true)
+    getAudit(limit)
+      .then(setAudit)
+      .catch(e => message.error('审计日志加载失败:' + (e as Error).message))
+      .finally(() => setAuditLoading(false))
+  }
+  useEffect(() => { loadUsers(); loadAudit(auditLimit) }, []) // eslint-disable-line
 
   const doRename = async () => {
     if (!renameTarget) return
@@ -37,9 +62,19 @@ export default function UsersPage({ onViewUser }: { onViewUser: (uid: string) =>
       await renameUser(renameTarget.id, values.name.trim())
       message.success('用户ID已修改')
       setRenameTarget(null)
-      load()
+      loadUsers()
     } catch (e) { message.error((e as Error).message) }
     finally { setRenaming(false) }
+  }
+
+  const doDelete = async (r: UserRow) => {
+    try {
+      await deleteUser(r.id)
+      message.success('已删除')
+      loadUsers()
+    } catch (e) {
+      message.error('删除失败:' + (e as Error).message)
+    }
   }
 
   const columns: ColumnsType<UserRow> = [
@@ -53,7 +88,7 @@ export default function UsersPage({ onViewUser }: { onViewUser: (uid: string) =>
         <Space size={4}>
           <Button type="link" size="small" icon={<Monitor size={15} />} onClick={() => onViewUser(r.id)}>查看</Button>
           <Button type="link" size="small" icon={<Pencil size={15} />} onClick={() => { setRenameTarget(r); renameForm.setFieldsValue({ name: r.name }) }}>改名</Button>
-          <Popconfirm title={'删除用户「' + r.name + '」?'} description="其设备将解绑,用户网页将无法登录" okText="删除" okButtonProps={{ danger: true }} onConfirm={async () => { await deleteUser(r.id); message.success('已删除'); load() }}>
+          <Popconfirm title={'删除用户「' + r.name + '」?'} description="其设备将解绑,用户网页将无法登录" okText="删除" okButtonProps={{ danger: true }} onConfirm={() => doDelete(r)}>
             <Button type="link" size="small" danger icon={<Trash2 size={15} />} />
           </Popconfirm>
         </Space>
@@ -61,9 +96,22 @@ export default function UsersPage({ onViewUser }: { onViewUser: (uid: string) =>
     },
   ]
 
+  const auditActions = useMemo(() => [...new Set(audit.map(a => a.action))], [audit])
+  const filteredAudit = useMemo(
+    () => (actionFilter ? audit.filter(a => a.action === actionFilter) : audit),
+    [audit, actionFilter],
+  )
+  const canLoadMore = audit.length >= auditLimit && auditLimit < 500
+
+  const loadMoreAudit = () => {
+    const next = Math.min(auditLimit * 2, 500)
+    setAuditLimit(next)
+    loadAudit(next)
+  }
+
   const auditCols: ColumnsType<AuditRow> = [
     { title: '时间', dataIndex: 'createdAt', width: 130, render: (v: string) => <Text type="secondary">{dayjs(v).format('MM-DD HH:mm:ss')}</Text> },
-    { title: '事件', dataIndex: 'action', width: 120, render: (v: string) => <Tag>{v}</Tag> },
+    { title: '事件', dataIndex: 'action', width: 130, render: (v: string) => <Tag color={AUDIT_COLORS[v] ?? 'default'}>{v}</Tag> },
     { title: '详情', dataIndex: 'detail', render: (v: string | null) => v ?? '-' },
     { title: 'IP', dataIndex: 'ip', width: 150, render: (v: string | null) => <Text type="secondary">{v ?? '-'}</Text> },
   ]
@@ -73,7 +121,7 @@ export default function UsersPage({ onViewUser }: { onViewUser: (uid: string) =>
       <Card
         id="clipsync-users-card"
         title={<Space><Users size={16} color="#2563EB" />用户管理</Space>}
-        extra={<Button icon={<RefreshCw size={15} />} onClick={load}>刷新</Button>}
+        extra={<Button icon={<RefreshCw size={15} />} onClick={() => { loadUsers(); loadAudit(auditLimit) }}>刷新</Button>}
         style={{ borderRadius: 14 }}
       >
         <Table<UserRow> rowKey="id" columns={columns} dataSource={users} loading={loading} pagination={false} size="middle"
@@ -84,8 +132,25 @@ export default function UsersPage({ onViewUser }: { onViewUser: (uid: string) =>
         </div>
       </Card>
 
-      <Card id="clipsync-audit-card" title={<Space><ShieldCheck size={16} color="#10B981" />审计日志</Space>} style={{ borderRadius: 14 }}>
-        <Table<AuditRow> rowKey="id" columns={auditCols} dataSource={audit} pagination={{ pageSize: 15, showTotal: t => '共 ' + t + ' 条' }} size="small" />
+      <Card
+        id="clipsync-audit-card"
+        title={<Space><ShieldCheck size={16} color="#10B981" />审计日志</Space>}
+        extra={
+          <Space>
+            <Select
+              allowClear
+              placeholder="全部事件"
+              style={{ width: 160 }}
+              value={actionFilter ?? undefined}
+              onChange={v => setActionFilter(v ?? null)}
+              options={auditActions.map(a => ({ value: a, label: a }))}
+            />
+            {canLoadMore ? <Button size="small" loading={auditLoading} onClick={loadMoreAudit}>加载更多</Button> : null}
+          </Space>
+        }
+        style={{ borderRadius: 14 }}
+      >
+        <Table<AuditRow> rowKey="id" columns={auditCols} dataSource={filteredAudit} loading={auditLoading} pagination={{ pageSize: 15, showTotal: t => '共 ' + t + ' 条' }} size="small" />
       </Card>
 
       <Modal

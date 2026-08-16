@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useParams, useNavigate } from 'react-router-dom'
 import {
   Layout, Menu, Button, Input, Avatar, Dropdown, Badge, Tooltip, message, theme as antdTheme, ConfigProvider,
 } from 'antd'
@@ -16,12 +16,13 @@ import SettingsPage from './pages/SettingsPage'
 import UsersPage from './pages/UsersPage'
 import UserPage from './pages/UserPage'
 import { connectHub, disconnectHub } from './hub'
-import { getThemeMode, logout as apiLogout, deviceId, getRole } from './api'
+import { getThemeMode, logout as apiLogout, deviceId, getRole, getMe, getHealth } from './api'
 import { addIncoming } from './chatStore'
 
 const { Header, Sider, Content } = Layout
 
-type PageKey = 'overview' | 'clipboard' | 'devices' | 'records' | 'settings' | 'users'
+type PageKey = 'overview' | 'clipboard' | 'devices' | 'records' | 'users' | 'settings'
+const PAGE_KEYS: PageKey[] = ['overview', 'clipboard', 'devices', 'records', 'users', 'settings']
 
 /** 两套主题的语义色板:所有自定义颜色统一从这里取,保证明暗模式协调一致 */
 const LIGHT = {
@@ -71,19 +72,82 @@ const DARK = {
 }
 
 interface AdminConsoleProps {
-  page: PageKey
-  menuItems: MenuProps['items']
-  pageEl: React.ReactNode
+  refreshTick: number
+  onRefresh: () => void
+  userFilter: string | null
+  onUserFilterChange: (v: string | null) => void
   statusBadge: React.ReactNode
   isDark: boolean
   c: typeof LIGHT
-  onChangePage: (k: PageKey) => void
+  themeMode: 'light' | 'dark' | 'system'
+  onThemeChange: (m: 'light' | 'dark' | 'system') => void
   onLogout: () => void
-  contentRef: React.RefObject<HTMLDivElement | null>
 }
 
-/** 管理台主框架(/pro) */
-function AdminConsole({ page, menuItems, pageEl, statusBadge, isDark, c, onChangePage, onLogout, contentRef }: AdminConsoleProps) {
+/** 管理台主框架(/pro/:page),页面进 URL:可刷新/深链/前进后退 */
+function AdminConsole({
+  refreshTick, onRefresh, userFilter, onUserFilterChange, statusBadge, isDark, c, themeMode, onThemeChange, onLogout,
+}: AdminConsoleProps) {
+  const navigate = useNavigate()
+  const { pageKey } = useParams()
+  const page: PageKey = PAGE_KEYS.includes(pageKey as PageKey) ? (pageKey as PageKey) : 'overview'
+  const contentRef = useRef<HTMLDivElement>(null)
+  const scrollPositions = useRef<Record<string, number>>({})
+  const [search, setSearch] = useState('')
+  const [username, setUsername] = useState<string | null>(null)
+  const [version, setVersion] = useState('')
+  const [serviceOk, setServiceOk] = useState<boolean | null>(null)
+
+  // 会话信息:侧栏展示真实登录用户名
+  useEffect(() => {
+    getMe().then(m => setUsername(m.username)).catch(() => {})
+  }, [])
+
+  // 服务健康 + 版本:进入与每次手动刷新时探测(不再写死"运行正常")
+  useEffect(() => {
+    getHealth().then(h => {
+      setServiceOk(true)
+      if (h.version) setVersion(h.version)
+    }).catch(() => setServiceOk(false))
+  }, [refreshTick])
+
+  /** 切页:先保存当前页滚动位置,再改路由;useEffect 恢复目标页自己的位置 */
+  const go = (key: PageKey) => {
+    if (key === page) return
+    if (contentRef.current) scrollPositions.current[page] = contentRef.current.scrollTop
+    navigate('/pro/' + key)
+  }
+
+  useEffect(() => {
+    if (contentRef.current) contentRef.current.scrollTop = scrollPositions.current[page] ?? 0
+  }, [page])
+
+  /** 顶栏搜索:输入即跳剪贴板页,并作为内容关键字过滤(服务端 LIKE) */
+  const onSearchInput = (v: string) => {
+    setSearch(v)
+    if (v && page !== 'clipboard') go('clipboard')
+  }
+
+  const menuItems: MenuProps['items'] = [
+    { key: 'overview', icon: <Home size={16} />, label: '总览' },
+    { key: 'clipboard', icon: <FileText size={16} />, label: '剪贴板' },
+    { key: 'devices', icon: <Monitor size={16} />, label: '设备管理' },
+    { key: 'records', icon: <Clock size={16} />, label: '同步记录' },
+    { key: 'users', icon: <Users size={16} />, label: '用户管理' },
+    { key: 'settings', icon: <Settings size={16} />, label: '设置' },
+  ]
+
+  const pageEl = useMemo(() => {
+    switch (page) {
+      case 'overview': return <OverviewPage refreshTick={refreshTick} />
+      case 'clipboard': return <ClipboardPage refreshTick={refreshTick} userFilter={userFilter} onUserFilterChange={onUserFilterChange} search={search} />
+      case 'devices': return <DevicesPage refreshTick={refreshTick} userFilter={userFilter} onUserFilterChange={onUserFilterChange} />
+      case 'records': return <SyncRecordsPage refreshTick={refreshTick} userFilter={userFilter} onUserFilterChange={onUserFilterChange} />
+      case 'users': return <UsersPage onViewUser={(uid) => { onUserFilterChange(uid); go('clipboard') }} />
+      default: return <SettingsPage onThemeChange={onThemeChange} themeMode={themeMode} onRefresh={onRefresh} />
+    }
+  }, [page, refreshTick, themeMode, userFilter, search]) // eslint-disable-line
+
   return (
     <Layout id="clipsync-app" className="clipsync-app" style={{ height: '100vh' }}>
       <Sider
@@ -103,15 +167,23 @@ function AdminConsole({ page, menuItems, pageEl, statusBadge, isDark, c, onChang
           mode="inline"
           selectedKeys={[page]}
           items={menuItems}
-          onClick={({ key }) => onChangePage(key as PageKey)}
+          onClick={({ key }) => go(key as PageKey)}
           style={{ borderInlineEnd: 'none' }}
         />
         <div id="clipsync-sidebar-footer" className="clipsync-sidebar-footer" style={{ position: 'absolute', bottom: 16, left: 16, right: 16 }}>
-          <div id="clipsync-service-status" className="clipsync-service-status" style={{ background: c.serviceBg, border: '1px solid ' + c.serviceBorder, borderRadius: 12, padding: '10px 12px', marginBottom: 12 }}>
-            <div style={{ color: c.serviceText, fontWeight: 600, fontSize: 13 }}>
-              <Badge status="success" /> 服务运行中
+          <div
+            id="clipsync-service-status"
+            className="clipsync-service-status"
+            style={{
+              background: serviceOk === false ? 'rgba(239, 68, 68, 0.10)' : c.serviceBg,
+              border: '1px solid ' + (serviceOk === false ? 'rgba(239, 68, 68, 0.40)' : c.serviceBorder),
+              borderRadius: 12, padding: '10px 12px', marginBottom: 12,
+            }}
+          >
+            <div style={{ color: serviceOk === false ? c.danger : c.serviceText, fontWeight: 600, fontSize: 13 }}>
+              <Badge status={serviceOk === false ? 'error' : 'success'} /> {serviceOk === false ? '服务不可用' : '服务运行中'}
             </div>
-            <div style={{ color: c.textTertiary, fontSize: 12, marginTop: 2 }}>版本 0.1.0</div>
+            <div style={{ color: c.textTertiary, fontSize: 12, marginTop: 2 }}>版本 {version || '…'}</div>
           </div>
           <Dropdown
             menu={{
@@ -119,10 +191,10 @@ function AdminConsole({ page, menuItems, pageEl, statusBadge, isDark, c, onChang
             }}
           >
             <div id="clipsync-user-info" className="clipsync-user-info" style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '6px 4px' }}>
-              <Avatar size={34} style={{ background: c.avatarBg, color: c.avatarText }}>A</Avatar>
+              <Avatar size={34} style={{ background: c.avatarBg, color: c.avatarText }}>{(username ?? 'A').slice(0, 1).toUpperCase()}</Avatar>
               <div>
-                <div style={{ fontWeight: 600, color: c.text, fontSize: 13 }}>admin</div>
-                <div style={{ color: c.textTertiary, fontSize: 12 }}>超级管理员</div>
+                <div style={{ fontWeight: 600, color: c.text, fontSize: 13 }}>{username ?? '管理员'}</div>
+                <div style={{ color: c.textTertiary, fontSize: 12 }}>管理员</div>
               </div>
             </div>
           </Dropdown>
@@ -142,16 +214,31 @@ function AdminConsole({ page, menuItems, pageEl, statusBadge, isDark, c, onChang
           <div id="clipsync-header-title" className="clipsync-header-title" style={{ flex: 1 }}>
             <div style={{ fontSize: 18, fontWeight: 700, color: c.text }}>剪贴板共享服务端</div>
           </div>
-          <span id="clipsync-header-server-status" className="clipsync-header-server-status" style={{ color: c.success, fontWeight: 600, fontSize: 13 }}>
-            <Badge status="success" /> 服务运行正常
-          </span>
+          {serviceOk === false ? (
+            <span style={{ color: c.danger, fontWeight: 600, fontSize: 13 }}><Badge status="error" /> 服务异常</span>
+          ) : serviceOk === null ? (
+            <span style={{ color: c.textTertiary, fontWeight: 600, fontSize: 13 }}><Badge status="default" /> 检测中</span>
+          ) : (
+            <span id="clipsync-header-server-status" className="clipsync-header-server-status" style={{ color: c.success, fontWeight: 600, fontSize: 13 }}>
+              <Badge status="success" /> 服务运行正常
+            </span>
+          )}
           {statusBadge}
-          <Input id="clipsync-header-search" className="clipsync-header-search" prefix={<Search size={16} color="#9CA3AF" />} placeholder="搜索" allowClear style={{ width: 200 }} />
-          <Tooltip title="刷新">
-            <Button id="clipsync-header-refresh" className="clipsync-header-refresh" icon={<RefreshCw size={16} />} onClick={() => { /* 各页自行刷新 */ }}>刷新</Button>
+          <Input
+            id="clipsync-header-search"
+            className="clipsync-header-search"
+            prefix={<Search size={16} color="#9CA3AF" />}
+            placeholder="搜索剪贴板内容"
+            allowClear
+            style={{ width: 220 }}
+            value={search}
+            onChange={e => onSearchInput(e.target.value)}
+          />
+          <Tooltip title="刷新全部数据">
+            <Button id="clipsync-header-refresh" className="clipsync-header-refresh" icon={<RefreshCw size={16} />} onClick={onRefresh}>刷新</Button>
           </Tooltip>
           <Tooltip title="服务设置">
-            <Button id="clipsync-header-settings" className="clipsync-header-settings" icon={<Settings size={16} />} onClick={() => onChangePage('settings')} />
+            <Button id="clipsync-header-settings" className="clipsync-header-settings" icon={<Settings size={16} />} onClick={() => go('settings')} />
           </Tooltip>
         </Header>
         <Content id="clipsync-content" className="clipsync-content" ref={contentRef} style={{ overflow: 'auto', height: '100%', padding: '88px 24px 24px' }}>
@@ -164,23 +251,13 @@ function AdminConsole({ page, menuItems, pageEl, statusBadge, isDark, c, onChang
 
 export default function App() {
   const [authed, setAuthed] = useState<boolean>(() => !!localStorage.getItem('clipsync_token'))
-  const [page, setPage] = useState<PageKey>('overview')
   const [hubStatus, setHubStatus] = useState<'connected' | 'reconnecting' | 'disconnected'>('disconnected')
   const [refreshTick, setRefreshTick] = useState(0)
   const [themeMode, setThemeModeState] = useState<'light' | 'dark' | 'system'>(getThemeMode())
   const [userFilter, setUserFilter] = useState<string | null>(null)
-  const contentRef = useRef<HTMLDivElement>(null)
-  const scrollPositions = useRef<Record<string, number>>({})
 
-  /** 切页:先保存当前页滚动位置,再切换;useEffect 恢复目标页自己的位置 */
-  const changePage = (key: PageKey) => {
-    if (contentRef.current) scrollPositions.current[page] = contentRef.current.scrollTop
-    setPage(key)
-  }
-
-  useEffect(() => {
-    if (contentRef.current) contentRef.current.scrollTop = scrollPositions.current[page] ?? 0
-  }, [page])
+  /** 手动刷新:驱动全部页面的 refreshTick 重新拉取 */
+  const refreshAll = () => setRefreshTick(t => t + 1)
 
   // 令牌失效(被吊销/过期):强制回到登录页
   useEffect(() => {
@@ -192,7 +269,7 @@ export default function App() {
     return () => window.removeEventListener('clipsync:unauthorized', onUnauthorized)
   }, [])
 
-  // hub:任一角色登录后连接(设备变更/剪贴板实时刷新)
+  // hub:任一角色登录后连接(设备变更/剪贴板实时刷新;用户会话连接已被服务端标记剪贴板静默)
   useEffect(() => {
     if (!authed) return
     connectHub({
@@ -228,26 +305,6 @@ export default function App() {
   }
 
   const role = getRole()
-
-  const menuItems: MenuProps['items'] = [
-    { key: 'overview', icon: <Home size={16} />, label: '总览' },
-    { key: 'clipboard', icon: <FileText size={16} />, label: '剪贴板' },
-    { key: 'devices', icon: <Monitor size={16} />, label: '设备管理' },
-    { key: 'records', icon: <Clock size={16} />, label: '同步记录' },
-    { key: 'users', icon: <Users size={16} />, label: '用户管理' },
-    { key: 'settings', icon: <Settings size={16} />, label: '设置' },
-  ]
-
-  const pageEl = useMemo(() => {
-    switch (page) {
-      case 'overview': return <OverviewPage refreshTick={refreshTick} />
-      case 'clipboard': return <ClipboardPage refreshTick={refreshTick} userFilter={userFilter} onUserFilterChange={setUserFilter} />
-      case 'devices': return <DevicesPage refreshTick={refreshTick} userFilter={userFilter} onUserFilterChange={setUserFilter} />
-      case 'records': return <SyncRecordsPage userFilter={userFilter} onUserFilterChange={setUserFilter} />
-      case 'users': return <UsersPage onViewUser={(uid) => { setUserFilter(uid); changePage('clipboard') }} />
-      default: return <SettingsPage onThemeChange={setThemeModeState} themeMode={themeMode} />
-    }
-  }, [page, refreshTick, themeMode])
 
   const isDark = themeMode === 'dark' || (themeMode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
   const c = isDark ? DARK : LIGHT
@@ -318,7 +375,7 @@ export default function App() {
                 <UserPage refreshTick={refreshTick} onLogout={logout} />
               </div>
             ) : (
-              <Navigate to="/pro" replace />
+              <Navigate to="/pro/overview" replace />
             )
           } />
           {/* 用户端登录页 */}
@@ -328,26 +385,28 @@ export default function App() {
             ) : role === 'user' ? (
               <Navigate to="/index" replace />
             ) : (
-              <Navigate to="/pro" replace />
+              <Navigate to="/pro/overview" replace />
             )
           } />
-          {/* 管理端:/pro(已登录=管理台;未登录跳 /pro/login) */}
-          <Route path="/pro" element={
+          {/* 管理端:/pro → /pro/overview(页面进 URL,支持刷新/深链/后退) */}
+          <Route path="/pro" element={<Navigate to="/pro/overview" replace />} />
+          <Route path="/pro/:pageKey" element={
             !authed ? (
               <Navigate to="/pro/login" replace />
             ) : role === 'user' ? (
               <Navigate to="/index" replace />
             ) : (
               <AdminConsole
-                page={page}
-                menuItems={menuItems}
-                pageEl={pageEl}
+                refreshTick={refreshTick}
+                onRefresh={refreshAll}
+                userFilter={userFilter}
+                onUserFilterChange={setUserFilter}
                 statusBadge={statusBadge}
                 isDark={isDark}
                 c={c}
-                onChangePage={changePage}
+                themeMode={themeMode}
+                onThemeChange={setThemeModeState}
                 onLogout={logout}
-                contentRef={contentRef}
               />
             )
           } />
@@ -358,7 +417,7 @@ export default function App() {
             ) : role === 'user' ? (
               <Navigate to="/index" replace />
             ) : (
-              <Navigate to="/pro" replace />
+              <Navigate to="/pro/overview" replace />
             )
           } />
           <Route path="*" element={<Navigate to="/index" replace />} />

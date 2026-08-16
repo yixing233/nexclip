@@ -52,6 +52,7 @@ export interface Stats {
   status: 'running';
   uptime: string;
   avgLatencyMs: number;
+  version?: string;
   sparklines: {
     devices: number[];
     users: number[];
@@ -67,14 +68,6 @@ export interface HistoryPage {
 }
 
 export type ThemeMode = 'light' | 'dark' | 'system'
-
-export function getMaxHistory(): number {
-  return Number(localStorage.getItem('clipsync_max_history') ?? '1000')
-}
-
-export function setMaxHistory(n: number) {
-  localStorage.setItem('clipsync_max_history', String(n))
-}
 
 export function getThemeMode(): ThemeMode {
   return (localStorage.getItem('clipsync_theme') as ThemeMode) ?? 'light'
@@ -97,11 +90,17 @@ export function getUserId(): string | null {
   return localStorage.getItem('clipsync_user_id');
 }
 
-export function setSession(token: string, role: 'user' | 'admin', userId?: string) {
+export function setSession(token: string, role: 'user' | 'admin', userId?: string, username?: string) {
   localStorage.setItem('clipsync_token', token);
   localStorage.setItem('clipsync_role', role);
   if (userId) localStorage.setItem('clipsync_user_id', userId);
   else localStorage.removeItem('clipsync_user_id');
+  if (username) localStorage.setItem('clipsync_username', username);
+  else localStorage.removeItem('clipsync_username');
+}
+
+export function getUsername(): string | null {
+  return localStorage.getItem('clipsync_username');
 }
 
 export function setToken(t: string | null) {
@@ -110,6 +109,7 @@ export function setToken(t: string | null) {
     localStorage.removeItem('clipsync_token');
     localStorage.removeItem('clipsync_role');
     localStorage.removeItem('clipsync_user_id');
+    localStorage.removeItem('clipsync_username');
   }
 }
 
@@ -142,8 +142,8 @@ export async function login(username: string, password: string): Promise<boolean
     });
     if (res.status === 401) return false;
     if (!res.ok) throw new Error('登录失败(' + res.status + ')');
-    const j = (await res.json()) as { token: string; role?: 'admin' | 'user' };
-    setSession(j.token, j.role ?? 'admin');
+    const j = (await res.json()) as { token: string; role?: 'admin' | 'user'; username?: string };
+    setSession(j.token, j.role ?? 'admin', undefined, j.username);
     return true;
   } catch (e) {
     console.error('login error', e);
@@ -162,6 +162,16 @@ export async function logout(): Promise<void> {
   setToken(null);
 }
 
+/** 当前会话信息(用户名/角色/服务端版本) */
+export function getMe(): Promise<{ role: 'admin' | 'user'; username: string | null; userId: string | null; deviceId: string | null; version: string }> {
+  return request('/api/me');
+}
+
+/** 健康检查(免认证,含版本号) */
+export function getHealth(): Promise<{ status: string; version: string; time: string }> {
+  return request('/api/health');
+}
+
 export function getStats(): Promise<Stats> {
   return request<Stats>('/api/stats');
 }
@@ -174,9 +184,10 @@ export async function getCurrentClipboard(): Promise<ClipboardEntry | null> {
   }
 }
 
-export function getHistory(offset = 0, limit = 20, userId?: string | null): Promise<HistoryPage> {
+export function getHistory(offset = 0, limit = 20, userId?: string | null, q?: string): Promise<HistoryPage> {
   const u = userId ? '&userId=' + encodeURIComponent(userId) : '';
-  return request<HistoryPage>('/api/clipboard/history?offset=' + offset + '&limit=' + limit + u);
+  const s = q && q.trim() ? '&q=' + encodeURIComponent(q.trim()) : '';
+  return request<HistoryPage>('/api/clipboard/history?offset=' + offset + '&limit=' + limit + u + s);
 }
 
 export function pushText(text: string, deviceId: string, deviceName: string): Promise<ClipboardEntry> {
@@ -294,6 +305,15 @@ export function deleteUser(uid: string): Promise<void> {
 /** 审计日志(管理端) */
 export function getAudit(limit = 50): Promise<Array<{ id: number; action: string; detail: string | null; ip: string | null; createdAt: string }>> {
   return request('/api/admin/audit?limit=' + limit);
+}
+
+/** 管理台运行设置:历史上限(服务端持久化,修改立即生效) */
+export function getAdminSettings(): Promise<{ maxHistoryCount: number }> {
+  return request('/api/admin/settings');
+}
+
+export function putAdminSettings(maxHistoryCount: number): Promise<{ maxHistoryCount: number }> {
+  return request('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ maxHistoryCount }) });
 }
 
 export function getActivities(limit = 20, userId?: string | null): Promise<ActivityLog[]> {

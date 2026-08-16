@@ -69,7 +69,10 @@ export default function DevicesPage({ refreshTick, userFilter, onUserFilterChang
 
   const load = () => {
     setLoading(true)
-    getDevices().then(setDevices).finally(() => setLoading(false))
+    getDevices()
+      .then(setDevices)
+      .catch(e => message.error('设备列表加载失败:' + (e as Error).message))
+      .finally(() => setLoading(false))
   }
   useEffect(() => { load() }, [refreshTick]) // eslint-disable-line
 
@@ -150,9 +153,13 @@ export default function DevicesPage({ refreshTick, userFilter, onUserFilterChang
             okText="移除"
             okButtonProps={{ danger: true }}
             onConfirm={async () => {
-              await removeDevice(r.id)
-              message.success('已移除设备')
-              load()
+              try {
+                await removeDevice(r.id)
+                message.success('已移除设备')
+                load()
+              } catch (e) {
+                message.error('移除失败:' + (e as Error).message)
+              }
             }}
           >
             <Button type="link" size="small" danger icon={<Trash2 size={16} />} />
@@ -171,6 +178,8 @@ export default function DevicesPage({ refreshTick, userFilter, onUserFilterChang
       message.success('已重命名')
       setRenameTarget(null)
       load()
+    } catch (e) {
+      message.error('重命名失败:' + (e as Error).message)
     } finally {
       setRenaming(false)
     }

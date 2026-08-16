@@ -37,12 +37,13 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
   const load = () => {
     setFirstLoading(true)
     if (uid) {
-      getUser(uid).then(u => { setUserName(u.name); setNameInput(u.name) }).catch(() => {})
+      getUser(uid).then(u => { setUserName(u.name); setNameInput(u.name) }).catch(e => message.error('用户信息加载失败:' + (e as Error).message))
       listPairingRequests().then(setRequests).catch(() => {})
       getActivities(15).then(setActivities).catch(() => {})
     }
-    getDevices().then(list => setDevices(list.filter(d => d.userId === uid))).catch(() => {})
-    setTimeout(() => setFirstLoading(false), 400) // 首屏骨架至少展示 400ms,避免闪烁
+    getDevices().then(list => setDevices(list.filter(d => d.userId === uid)))
+      .catch(e => message.error('设备列表加载失败:' + (e as Error).message))
+      .finally(() => setTimeout(() => setFirstLoading(false), 400)) // 首屏骨架至少展示 400ms,避免闪烁
   }
   useEffect(() => { load() }, [refreshTick, uid]) // eslint-disable-line
 
@@ -54,6 +55,14 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
 
   const remaining = pairing ? Math.max(0, Math.floor((pairing.expiresAt - nowTs) / 1000)) : 0
   const countdown = String(Math.floor(remaining / 60)).padStart(2, '0') + ':' + String(remaining % 60).padStart(2, '0')
+
+  // 配对码过期:自动清空并提示,避免界面停留在 00:00
+  useEffect(() => {
+    if (pairing && remaining <= 0) {
+      setPairing(null)
+      message.warning('配对码已过期,请重新生成')
+    }
+  }, [pairing, remaining]) // eslint-disable-line
 
   const genCode = async () => {
     setPairLoading(true)
@@ -86,6 +95,16 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
     } catch (e) { message.error((e as Error).message) }
   }
 
+  const removeDev = async (id: string, name: string) => {
+    try {
+      await removeDevice(id)
+      message.success('已移除「' + name + '」')
+      load()
+    } catch (e) {
+      message.error('移除失败:' + (e as Error).message)
+    }
+  }
+
   const devCols: ColumnsType<DeviceInfo> = [
     { title: '设备', dataIndex: 'name', render: (v: string, r) => <Space><Monitor size={15} color="#2563EB" />{v} {r.online ? <Badge status="success" /> : null}</Space> },
     { title: '平台', dataIndex: 'platform', width: 100, render: (v: string) => <Tag>{v}</Tag> },
@@ -94,7 +113,7 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
     {
       title: '操作', key: 'action', width: 90,
       render: (_, r) => (
-        <Popconfirm title={'移除设备「' + r.name + '」?'} okText="移除" okButtonProps={{ danger: true }} onConfirm={async () => { await removeDevice(r.id); message.success('已移除'); load() }}>
+        <Popconfirm title={'移除设备「' + r.name + '」?'} okText="移除" okButtonProps={{ danger: true }} onConfirm={() => removeDev(r.id, r.name)}>
           <Button type="link" size="small" danger icon={<Trash2 size={15} />} />
         </Popconfirm>
       ),
