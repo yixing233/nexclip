@@ -40,6 +40,10 @@ function loadDotEnv(file: string): Record<string, string> {
 
 const dotEnv = loadDotEnv(join(rootDir, '.env'));
 
+/** 服务端版本(package.json,接口返回给前端展示) */
+export const SERVER_VERSION: string =
+  (JSON.parse(readFileSync(join(rootDir, 'package.json'), 'utf8')) as { version?: string }).version ?? '0.0.0';
+
 export function loadConfig(): AppConfig {
   const cfgPath = join(rootDir, 'config.json');
   let file: Record<string, unknown> = {};

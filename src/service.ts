@@ -19,11 +19,33 @@ export class PairError extends Error {
 }
 
 export class SyncService {
+  /** 历史上限:启动时取配置,管理台可改(持久化到 Settings 表) */
+  private maxHistoryCount: number;
+
   constructor(
     private readonly db: DatabaseSync,
     private readonly cfg: AppConfig,
     private readonly hub: SignalRHub,
-  ) {}
+  ) {
+    this.maxHistoryCount = cfg.maxHistoryCount;
+    const saved = this.db.prepare('SELECT "Value" FROM "Settings" WHERE "Key" = ?').get('maxHistoryCount') as { Value: string } | undefined;
+    if (saved && Number.isFinite(Number(saved.Value)) && Number(saved.Value) >= 100) {
+      this.maxHistoryCount = Math.floor(Number(saved.Value));
+    }
+  }
+
+  /** 管理台:读取/修改历史上限(修改即持久化,重启保留) */
+  getMaxHistoryCount(): number {
+    return this.maxHistoryCount;
+  }
+
+  setMaxHistoryCount(n: number): number {
+    this.maxHistoryCount = Math.max(100, Math.min(100_000, Math.floor(n)));
+    this.db.prepare('INSERT OR REPLACE INTO "Settings" ("Key","Value") VALUES (\'maxHistoryCount\', ?)')
+      .run(String(this.maxHistoryCount));
+    this.trimHistory();
+    return this.maxHistoryCount;
+  }
 
   // ---------- 条目序列化 ----------
   private toDto(e: EntryRow): EntryDto {
@@ -46,18 +68,33 @@ export class SyncService {
     return this.db.prepare('SELECT * FROM "Entries" WHERE "Id" = ?').get(id) as unknown as EntryRow | null;
   }
 
-  getHistory(offset: number, limit: number, userId: string | null = null): { items: EntryDto[]; total: number } {
+  getHistory(offset: number, limit: number, userId: string | null = null, q: string | null = null): { items: EntryDto[]; total: number } {
     limit = clamp(limit, 1, 200);
     offset = Math.max(0, offset);
+    // 文本搜索:LIKE 转义 %/_
+    const like = q && q.trim() ? '%' + q.trim().replace(/[\\%_]/g, ch => '\\' + ch) + '%' : null;
     if (userId) {
       // 按用户过滤:条目来源设备归属该用户
-      const total = Number((this.db.prepare('SELECT COUNT(*) AS c FROM "Entries" e JOIN "Devices" d ON d."Id" = e."DeviceId" WHERE d."UserId" = ?').get(userId) as { c: number }).c);
-      const rows = this.db.prepare('SELECT e.* FROM "Entries" e JOIN "Devices" d ON d."Id" = e."DeviceId" WHERE d."UserId" = ? ORDER BY e."Id" DESC LIMIT ? OFFSET ?')
-        .all(userId, limit, offset) as unknown as EntryRow[];
+      const total = Number((this.db.prepare(
+        like
+          ? 'SELECT COUNT(*) AS c FROM "Entries" e JOIN "Devices" d ON d."Id" = e."DeviceId" WHERE d."UserId" = ? AND e."Text" LIKE ? ESCAPE \'\\\''
+          : 'SELECT COUNT(*) AS c FROM "Entries" e JOIN "Devices" d ON d."Id" = e."DeviceId" WHERE d."UserId" = ?',
+      ).get(...(like ? [userId, like] : [userId])) as { c: number }).c);
+      const rows = this.db.prepare(
+        like
+          ? 'SELECT e.* FROM "Entries" e JOIN "Devices" d ON d."Id" = e."DeviceId" WHERE d."UserId" = ? AND e."Text" LIKE ? ESCAPE \'\\\' ORDER BY e."Id" DESC LIMIT ? OFFSET ?'
+          : 'SELECT e.* FROM "Entries" e JOIN "Devices" d ON d."Id" = e."DeviceId" WHERE d."UserId" = ? ORDER BY e."Id" DESC LIMIT ? OFFSET ?',
+      ).all(...(like ? [userId, like, limit, offset] : [userId, limit, offset])) as unknown as EntryRow[];
       return { items: rows.map(r => this.toDto(r)), total };
     }
-    const total = Number((this.db.prepare('SELECT COUNT(*) AS c FROM "Entries"').get() as { c: number }).c);
-    const rows = this.db.prepare('SELECT * FROM "Entries" ORDER BY "Id" DESC LIMIT ? OFFSET ?').all(limit, offset) as unknown as EntryRow[];
+    const total = Number((this.db.prepare(
+      like ? 'SELECT COUNT(*) AS c FROM "Entries" WHERE "Text" LIKE ? ESCAPE \'\\\'' : 'SELECT COUNT(*) AS c FROM "Entries"',
+    ).get(...(like ? [like] : [])) as { c: number }).c);
+    const rows = this.db.prepare(
+      like
+        ? 'SELECT * FROM "Entries" WHERE "Text" LIKE ? ESCAPE \'\\\' ORDER BY "Id" DESC LIMIT ? OFFSET ?'
+        : 'SELECT * FROM "Entries" ORDER BY "Id" DESC LIMIT ? OFFSET ?',
+    ).all(...(like ? [like, limit, offset] : [limit, offset])) as unknown as EntryRow[];
     return { items: rows.map(r => this.toDto(r)), total };
   }
 
@@ -142,9 +179,9 @@ export class SyncService {
   /** 超上限删除最旧条目(含图片文件) */
   private trimHistory(): void {
     const total = Number((this.db.prepare('SELECT COUNT(*) AS c FROM "Entries"').get() as { c: number }).c);
-    if (total <= this.cfg.maxHistoryCount) return;
+    if (total <= this.maxHistoryCount) return;
     const overflow = this.db.prepare('SELECT * FROM "Entries" ORDER BY "Id" ASC LIMIT ?')
-      .all(total - this.cfg.maxHistoryCount) as unknown as EntryRow[];
+      .all(total - this.maxHistoryCount) as unknown as EntryRow[];
     for (const e of overflow) if (e.ImageRef) this.tryDeleteImage(e.ImageRef);
     for (const e of overflow) this.db.prepare('DELETE FROM "Entries" WHERE "Id" = ?').run(e.Id);
   }

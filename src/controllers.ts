@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { resolve, join } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import type { AppConfig } from './config.js';
+import { SERVER_VERSION } from './config.js';
 import type { SyncService } from './service.js';
 import { PairError } from './service.js';
 import type { SessionStore, SessionPayload } from './sessions.js';
@@ -79,9 +80,9 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     }
     if (username === cfg.adminUsername && password === cfg.adminPassword) {
       ctx.rate.reset('login:' + username + ':' + ip);
-      const token = ctx.sessions.create({ role: 'admin' }, cfg.sessionTtlHours);
+      const token = ctx.sessions.create({ role: 'admin', username }, cfg.sessionTtlHours);
       svc.addAudit('login_ok', '管理台登录: ' + username, ip);
-      sendJson(res, 200, { token, role: 'admin', expiresAt: new Date(Date.now() + cfg.sessionTtlHours * 3600_000).toISOString() });
+      sendJson(res, 200, { token, role: 'admin', username, expiresAt: new Date(Date.now() + cfg.sessionTtlHours * 3600_000).toISOString() });
     } else {
       svc.addAudit('login_fail', '登录失败: ' + username + ' (IP ' + ip + ')', ip);
       sendJson(res, 401, { error: '用户名或密码错误' });
@@ -92,6 +93,19 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     const token = extractToken(req);
     if (token) ctx.sessions.revoke(token);
     sendNoContent(res);
+    return true;
+  }
+
+  // 当前会话信息(侧栏展示用户名/角色)
+  if (p === '/api/me' && method === 'GET') {
+    if (!ctx.actor) { sendJson(res, 401, { error: 'unauthorized' }); return true; }
+    sendJson(res, 200, {
+      role: ctx.actor.role,
+      username: ctx.actor.username ?? null,
+      userId: ctx.actor.userId ?? null,
+      deviceId: ctx.actor.deviceId ?? null,
+      version: SERVER_VERSION,
+    });
     return true;
   }
 
@@ -144,7 +158,8 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     const offset = Number(url.searchParams.get('offset') ?? 0);
     const limit = Number(url.searchParams.get('limit') ?? 20);
     const userId = url.searchParams.get('userId')?.trim() || null;
-    sendJson(res, 200, svc.getHistory(Number.isFinite(offset) ? offset : 0, Number.isFinite(limit) ? limit : 20, userId));
+    const q = url.searchParams.get('q');
+    sendJson(res, 200, svc.getHistory(Number.isFinite(offset) ? offset : 0, Number.isFinite(limit) ? limit : 20, userId, q));
     return true;
   }
 
@@ -183,6 +198,15 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
       return true;
     }
     if (method === 'DELETE') {
+      // 用户会话只能删除自己组的条目;管理端任意
+      if (ctx.actor?.role === 'user') {
+        const e = svc.getById(id);
+        const dev = e ? svc.getDevice(e.DeviceId) : null;
+        if (!dev || dev.UserId !== ctx.actor.userId) {
+          sendJson(res, 403, { error: '无权删除该条目' });
+          return true;
+        }
+      }
       svc.deleteEntry(id);
       sendNoContent(res);
       return true;
@@ -424,9 +448,31 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     return true;
   }
 
+  // 管理台运行设置:历史上限(读取/修改,修改即持久化并立即生效)
+  if (p === '/api/admin/settings' && method === 'GET') {
+    if (ctx.actor?.role !== 'admin') { sendJson(res, 401, { error: 'unauthorized' }); return true; }
+    sendJson(res, 200, { maxHistoryCount: svc.getMaxHistoryCount() });
+    return true;
+  }
+  if (p === '/api/admin/settings' && method === 'PUT') {
+    if (ctx.actor?.role !== 'admin') { sendJson(res, 401, { error: 'unauthorized' }); return true; }
+    const body = await readBody(req, 16 * 1024);
+    let json: Record<string, unknown>;
+    try { json = JSON.parse(body.toString('utf8')); } catch { sendJson(res, 400, { error: '无效的 JSON' }); return true; }
+    const n = Number(json.maxHistoryCount);
+    if (!Number.isFinite(n) || n < 100 || n > 100_000) {
+      sendJson(res, 400, { error: '历史上限需在 100 - 100000 之间' });
+      return true;
+    }
+    const applied = svc.setMaxHistoryCount(n);
+    svc.addAudit('settings_update', '历史上限 → ' + applied, remoteIp(req));
+    sendJson(res, 200, { maxHistoryCount: applied });
+    return true;
+  }
+
   // ============ /api/stats /api/activities /api/health ============
   if (p === '/api/stats' && method === 'GET') {
-    sendJson(res, 200, svc.stats({ avgMs: ctx.latency.avgMs, last12: ctx.latency.last12 }));
+    sendJson(res, 200, { ...svc.stats({ avgMs: ctx.latency.avgMs, last12: ctx.latency.last12 }), version: SERVER_VERSION });
     return true;
   }
   if (p === '/api/activities' && method === 'GET') {
@@ -436,7 +482,7 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     return true;
   }
   if (p === '/api/health' && method === 'GET') {
-    sendJson(res, 200, { status: 'ok', time: new Date().toISOString() });
+    sendJson(res, 200, { status: 'ok', version: SERVER_VERSION, time: new Date().toISOString() });
     return true;
   }
 

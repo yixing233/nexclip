@@ -57,7 +57,9 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 
   // negotiate(必须走统一鉴权:query access_token 也接受)
   if (p === '/hubs/clipboard/negotiate') {
-    const r = hub.negotiate(url);
+    // 用户网页会话:标记为"剪贴板静默"(全站推送对其是噪音),设备/管理台连接不受影响
+    const sessionActor = checkSession(req, sessions);
+    const r = hub.negotiate(url, { mutedClipboard: sessionActor?.role === 'user' });
     sendJson(res, r.status, r.body);
     return;
   }

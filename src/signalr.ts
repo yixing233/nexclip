@@ -13,6 +13,8 @@ export interface HubConn {
   deviceId: string | null;
   ws: WebSocket;
   lastActivity: number;
+  /** 用户网页会话:不接收剪贴板推送(全站广播对其是噪音),仅保留设备变更通知 */
+  mutedClipboard: boolean;
 }
 
 const PING_INTERVAL_MS = 15_000;
@@ -24,15 +26,18 @@ function trimRecordSeparator(s: string): string {
 
 export class SignalRHub {
   private readonly conns = new Map<string, HubConn>(); // token -> conn
+  /** negotiate 时标记的"剪贴板静默"连接令牌(用户网页会话),WS 建立时消费 */
+  private readonly mutedTokens = new Set<string>();
   private wss: WebSocketServer | null = null;
   private pingTimer: NodeJS.Timeout | null = null;
 
   /** 连接登记回调(设备 upsert + connect 活动日志),由 server 注入 */
   onConnected: ((deviceId: string | null, deviceName: string | null, platform: string | null, version: string | null) => void) | null = null;
 
-  /** negotiate 处理:返回响应体或 401 标记 */
-  negotiate(url: URL): { status: number; body: unknown } {
+  /** negotiate 处理:返回响应体;mutedClipboard=true 标记该连接不收剪贴板推送(用户会话) */
+  negotiate(url: URL, opts: { mutedClipboard?: boolean } = {}): { status: number; body: unknown } {
     const token = randomHex(16); // 64 hex
+    if (opts.mutedClipboard) this.mutedTokens.add(token);
     return {
       status: 200,
       body: {
@@ -88,7 +93,8 @@ export class SignalRHub {
         ws.close(1008, 'Missing connection id');
         return;
       }
-      const conn: HubConn = { token, deviceId, ws, lastActivity: Date.now() };
+      const mutedClipboard = this.mutedTokens.delete(token);
+      const conn: HubConn = { token, deviceId, ws, lastActivity: Date.now(), mutedClipboard };
       // 同一 token 重复连接:先清理旧连接
       const old = this.conns.get(token);
       if (old && old.ws !== ws) {
@@ -132,10 +138,12 @@ export class SignalRHub {
     }
   }
 
-  /** 全员广播 ClipboardUpdated */
+  /** 全员广播 ClipboardUpdated(用户网页会话连接除外) */
   broadcastUpdated(entry: unknown): void {
     const msg = { type: 1, target: 'ClipboardUpdated', arguments: [entry] };
-    for (const conn of this.conns.values()) this.sendJson(conn.ws, msg);
+    for (const conn of this.conns.values()) {
+      if (!conn.mutedClipboard) this.sendJson(conn.ws, msg);
+    }
   }
 
   /** 定向推送:只通知指定 deviceId 的在线连接 */
@@ -146,10 +154,12 @@ export class SignalRHub {
     }
   }
 
-  /** 全员广播 ClipboardCleared */
+  /** 全员广播 ClipboardCleared(用户网页会话连接除外) */
   broadcastCleared(): void {
     const msg = { type: 1, target: 'ClipboardCleared', arguments: [] };
-    for (const conn of this.conns.values()) this.sendJson(conn.ws, msg);
+    for (const conn of this.conns.values()) {
+      if (!conn.mutedClipboard) this.sendJson(conn.ws, msg);
+    }
   }
 
   /** 全员广播设备列表变更(配对/重命名/移除),各端收到后自行刷新列表 */

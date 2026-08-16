@@ -3,6 +3,8 @@ import { randomBytes } from 'node:crypto';
 /** 会话载荷:admin = 管理台;user = 用户网页(绑定用户ID + 设备) */
 export interface SessionPayload {
   role: 'admin' | 'user';
+  /** 管理台:登录用户名(界面展示) */
+  username?: string;
   userId?: string;
   deviceId?: string;
 }

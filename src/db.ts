@@ -82,6 +82,10 @@ CREATE TABLE IF NOT EXISTS "AuditLog" (
   "Ip" TEXT NULL,
   "CreatedAt" TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS "Settings" (
+  "Key" TEXT NOT NULL PRIMARY KEY,
+  "Value" TEXT NOT NULL
+);
 `);
   // Devices 增量加列(老库兼容):设备专属 Token 哈希 + 配对时间
   const devCols = new Set((db.prepare('PRAGMA table_info("Devices")').all() as { name: string }[]).map(c => c.name));

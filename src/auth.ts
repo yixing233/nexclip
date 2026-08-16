@@ -10,27 +10,28 @@ export function extractToken(req: IncomingMessage): string {
 }
 
 /** 路由鉴权类别:
- *  open  = 免认证(设备同步、配对流程、hub、登录/登出)
+ *  open  = 免认证(设备同步、配对流程、hub、登录/登出、健康检查)
  *  user  = 需会话(用户网页或管理台)
  *  admin = 仅管理台会话
  */
 export function routeClass(method: string, p: string): 'open' | 'user' | 'admin' {
   // 管理台专属
   if (
-    p === '/api/stats' || p === '/api/health' ||
+    p === '/api/stats' ||
     p === '/api/users' ||
     p.startsWith('/api/admin/') ||
     p === '/api/clipboard/send' ||
     (p === '/api/clipboard/history' && method === 'DELETE') ||
-    (/^\/api\/clipboard\/\d+$/.test(p) && method === 'DELETE') ||
     (/^\/api\/users\/[^/]+$/.test(p) && method === 'DELETE')
   ) return 'admin';
-  // 用户/管理会话皆可(控制器内再按归属校验:自己的用户ID/组内设备)
+  // 用户/管理会话皆可(控制器内再按归属校验:自己的用户ID/组内设备/组内条目)
   if (
+    p === '/api/me' ||
     p === '/api/activities' ||
     /^\/api\/users\//.test(p) ||
     (/^\/api\/devices\//.test(p) && (method === 'PUT' || method === 'DELETE')) ||
-    (p === '/api/pairing-requests' && method === 'GET')
+    (p === '/api/pairing-requests' && method === 'GET') ||
+    (/^\/api\/clipboard\/\d+$/.test(p) && method === 'DELETE')
   ) return 'user';
   return 'open';
 }
