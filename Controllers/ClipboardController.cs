@@ -24,7 +24,7 @@ public class ClipboardController(ClipboardService svc) : ControllerBase
             return BadRequest(new { error = "text 不能为空且不超过 500KB" });
         var deviceId = string.IsNullOrEmpty(req.DeviceId) ? "web-" + Guid.NewGuid().ToString("N")[..8] : req.DeviceId;
         var deviceName = string.IsNullOrEmpty(req.DeviceName) ? deviceId : req.DeviceName;
-        var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
+        var ip = IpUtil.Normalize(HttpContext.Connection.RemoteIpAddress?.ToString());
         var (entry, unchanged) = await svc.UploadTextAsync(text, deviceId, deviceName, req.Platform, req.Version, ip);
         // 扁平条目 + unchanged 标记:web 端直接取条目字段,桌面端读 unchanged 判断是否新内容
         return Ok(new { entry!.Id, entry.Type, entry.Text, entry.ImageRef, entry.DeviceId, entry.DeviceName, entry.CreatedAt, unchanged });
@@ -43,7 +43,7 @@ public class ClipboardController(ClipboardService svc) : ControllerBase
         var did = string.IsNullOrEmpty(deviceId) ? "web-" + Guid.NewGuid().ToString("N")[..8] : deviceId;
         var dname = string.IsNullOrEmpty(deviceName) ? did : deviceName;
         await using var stream = file.OpenReadStream();
-        var entry = await svc.UploadImageAsync(stream, file.FileName, did, dname, HttpContext.Connection.RemoteIpAddress?.ToString());
+        var entry = await svc.UploadImageAsync(stream, file.FileName, did, dname, IpUtil.Normalize(HttpContext.Connection.RemoteIpAddress?.ToString()));
         return Ok(entry);
     }
 
@@ -92,7 +92,7 @@ public class ClipboardController(ClipboardService svc) : ControllerBase
         var deviceName = string.IsNullOrEmpty(req.DeviceName) ? deviceId : req.DeviceName;
         var targets = req.DeviceIds?.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().ToList() ?? [];
         var (entry, _) = await svc.UploadTextAsync(text, deviceId, deviceName, "Web", null,
-            HttpContext.Connection.RemoteIpAddress?.ToString(), broadcast: targets.Count == 0);
+            IpUtil.Normalize(HttpContext.Connection.RemoteIpAddress?.ToString()), broadcast: targets.Count == 0);
         if (entry is not null && targets.Count > 0)
             await svc.BroadcastAsync(entry, targets);
         return Ok(entry);

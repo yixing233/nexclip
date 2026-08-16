@@ -56,6 +56,18 @@ public class LatencyTracker
     }
 }
 
+/// <summary>IP 规范化:去 IPv4-mapped 前缀(::ffff:a.b.c.d → a.b.c.d),本机回环统一 127.0.0.1。</summary>
+public static class IpUtil
+{
+    public static string? Normalize(string? ip)
+    {
+        if (string.IsNullOrWhiteSpace(ip)) return null;
+        var m = System.Text.RegularExpressions.Regex.Match(ip, @"^::ffff:(d+.d+.d+.d+)$");
+        if (m.Success) return m.Groups[1].Value;
+        return ip == "::1" ? "127.0.0.1" : ip;
+    }
+}
+
 public class ClipboardService(
     AppDbContext db,
     IHubContext<ClipboardHub> hub,
