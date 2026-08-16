@@ -8,7 +8,6 @@
     x:Name="SettingsRoot">
     <Page.Resources>
         <converters:BoolToBrushConverter x:Key="BoolToBrush" />
-        <converters:NullToVisibilityConverter x:Key="NullToVisibility" />
     </Page.Resources>
     <ScrollViewer>
         <StackPanel Padding="28,20,28,28" Spacing="16">
@@ -28,8 +27,35 @@
                         PlaceholderText="http://127.0.0.1:5033"
                         Text="{Binding ServerUrl, Mode=TwoWay}" />
 
-                    <TextBlock Text="访问令牌" Style="{ThemeResource BodyStrongTextBlockStyle}" />
-                    <PasswordBox x:Name="TokenBox" PlaceholderText="与各端共享的访问令牌" />
+                    <!-- 设备配对:生成配对码给新设备 + 输入配对码接入 -->
+                    <TextBlock Text="设备配对" Style="{ThemeResource BodyStrongTextBlockStyle}" Margin="0,8,0,0" />
+
+                    <!-- ① 生成配对码(给另一台设备,弹对话框显示码) -->
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="新设备接入:生成配对码,在另一台设备上输入" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        <Button
+                            Content="生成配对码"
+                            Command="{Binding GeneratePairingCodeCommand}"
+                            HorizontalAlignment="Left" />
+                        <TextBlock Text="{Binding CodeExpiryText}" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                    </StackPanel>
+
+                    <!-- ② 输入配对码(本机接入) -->
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox
+                            PlaceholderText="输入另一台设备生成的配对码"
+                            Text="{Binding PairingCode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <Button
+                            Grid.Column="1"
+                            Content="配对"
+                            Command="{Binding PairDeviceCommand}"
+                            Style="{StaticResource AccentButtonStyle}" />
+                    </Grid>
+                    <TextBlock Text="{Binding PairResult}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
 
                     <TextBlock Text="设备名称" Style="{ThemeResource BodyStrongTextBlockStyle}" />
                     <TextBox
@@ -87,38 +113,14 @@
                                         <TextBlock Text="{x:Bind Subtitle}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                         <TextBlock Text="{x:Bind LastSeenText}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                     </StackPanel>
-                                    <!-- 操作 -->
-                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
-                                        <Button
-                                            Content="重命名"
-                                            Padding="8,4"
-                                            FontSize="12"
-                                            Command="{Binding ElementName=SettingsRoot, Path=DataContext.StartRenameCommand}"
-                                            CommandParameter="{x:Bind}" />
-                                        <Button
-                                            Content="移除"
-                                            Padding="8,4"
-                                            FontSize="12"
-                                            Command="{Binding ElementName=SettingsRoot, Path=DataContext.RemoveDeviceCommand}"
-                                            CommandParameter="{x:Bind}" />
-                                    </StackPanel>
                                 </Grid>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
-
-                    <!-- 行内重命名编辑 -->
-                    <Grid Visibility="{Binding RenamingDeviceId, Converter={StaticResource NullToVisibility}}" ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBox Text="{Binding RenameText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                            PlaceholderText="输入新设备名称" />
-                        <Button Grid.Column="1" Content="确定" Command="{Binding ConfirmRenameCommand}" />
-                        <Button Grid.Column="2" Content="取消" Command="{Binding CancelRenameCommand}" />
-                    </Grid>
+                    <TextBlock
+                        Text="设备移除/重命名请在网页端(账密登录)操作"
+                        FontSize="12"
+                        Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                 </StackPanel>
             </Border>
 

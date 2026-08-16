@@ -6,13 +6,15 @@ namespace SyncClipboard.Desktop.Services;
 
 /// <summary>
 /// 设置存储:%APPDATA%/SyncClipboard/settings.json。
-/// 访问令牌用 DPAPI(CurrentUser)加密落盘,其余字段明文。
+/// 新架构:设备接入用配对码登记,同步接口免认证;网页端管理用账密(桌面端不涉及)。
+/// IsPaired 为配对标记;AuthToken 字段保留仅为兼容旧版本(不再参与认证)。
 /// </summary>
 public sealed class SettingsStore
 {
     // ---- 设置项(默认值与设计文档 §7 一致) ----
     public string ServerUrl { get; set; } = "http://127.0.0.1:5033";
     public string AuthToken { get; set; } = "";
+    public bool IsPaired { get; set; }
     public string DeviceId { get; set; } = "";
     public string DeviceName { get; set; } = "";
     public string Hotkey { get; set; } = "Alt+V";            // 剪贴板窗口呼出
@@ -60,6 +62,8 @@ public sealed class SettingsStore
             AuthToken = dto.AuthTokenEncrypted is { Length: > 0 }
                 ? DpapiDecrypt(dto.AuthTokenEncrypted)
                 : "";
+            // 迁移兼容:旧版用 AuthToken 存在与否表示已配对
+            IsPaired = dto.IsPaired ?? (dto.AuthTokenEncrypted is { Length: > 0 });
             DeviceId = dto.DeviceId ?? DeviceId;
             DeviceName = dto.DeviceName ?? DeviceName;
             Hotkey = dto.Hotkey ?? Hotkey;
@@ -90,6 +94,7 @@ public sealed class SettingsStore
             {
                 ServerUrl = ServerUrl,
                 AuthTokenEncrypted = AuthToken.Length > 0 ? DpapiEncrypt(AuthToken) : null,
+                IsPaired = IsPaired,
                 DeviceId = DeviceId,
                 DeviceName = DeviceName,
                 Hotkey = Hotkey,
@@ -126,11 +131,12 @@ public sealed class SettingsStore
         return Encoding.UTF8.GetString(bytes);
     }
 
-    /// <summary>磁盘 JSON 结构(令牌已加密)。</summary>
+    /// <summary>磁盘 JSON 结构(设备凭证已加密)。</summary>
     private sealed class SettingsDto
     {
         public string? ServerUrl { get; set; }
         public string? AuthTokenEncrypted { get; set; }
+        public bool? IsPaired { get; set; }
         public string? DeviceId { get; set; }
         public string? DeviceName { get; set; }
         public string? Hotkey { get; set; }

@@ -63,7 +63,7 @@ public sealed class SyncEngine : IDisposable
     private async Task ConnectAsync()
     {
         var s = _svc.Settings;
-        if (string.IsNullOrWhiteSpace(s.ServerUrl) || string.IsNullOrWhiteSpace(s.AuthToken))
+        if (string.IsNullOrWhiteSpace(s.ServerUrl) || !s.IsPaired)
         {
             SetState(ConnState.NotConfigured, "");
             return;
@@ -71,8 +71,8 @@ public sealed class SyncEngine : IDisposable
         if (_push is null) return;
 
         SetState(ConnState.Connecting, "");
-        // 携带设备信息连接:服务端据此登记/更新设备列表(在线状态、名称、平台)
-        await _push.ConnectAsync(s.ServerUrl, s.AuthToken, s.DeviceId, s.DeviceName);
+        // 携带设备信息连接:服务端据此登记/更新设备列表(在线状态、名称、平台);同步接口免认证
+        await _push.ConnectAsync(s.ServerUrl, s.DeviceId, s.DeviceName, SystemInfo.Platform, SystemInfo.Version);
         // ConnectAsync 内部会触发 connected/disconnected 状态回调
         await PullCurrentAsync();
     }
@@ -106,7 +106,7 @@ public sealed class SyncEngine : IDisposable
         var s = _svc.Settings;
         if (clip.Hash == _lastUploadedHash) return;
         if (!s.MonitorEnabled) return;
-        if (string.IsNullOrWhiteSpace(s.ServerUrl) || string.IsNullOrWhiteSpace(s.AuthToken)) return; // 未配置不上传
+        if (string.IsNullOrWhiteSpace(s.ServerUrl) || !s.IsPaired) return; // 未配置/未配对不上传
 
         SetTransfer(true, TransferKind.Upload);
         try
@@ -182,7 +182,7 @@ public sealed class SyncEngine : IDisposable
         {
             try
             {
-                return await _svc.Api.PutTextAsync(s.ServerUrl, s.AuthToken, text, s.DeviceId, s.DeviceName, ct);
+                return await _svc.Api.PutTextAsync(s.ServerUrl, "", text, s.DeviceId, s.DeviceName, SystemInfo.Platform, SystemInfo.Version, ct);
             }
             catch (Exception ex) when (attempt < 3 && ex is not ApiException { StatusCode: System.Net.HttpStatusCode.Unauthorized })
             {
@@ -198,7 +198,7 @@ public sealed class SyncEngine : IDisposable
         {
             try
             {
-                return await _svc.Api.UploadImageAsync(s.ServerUrl, s.AuthToken, png, s.DeviceId, s.DeviceName, ct);
+                return await _svc.Api.UploadImageAsync(s.ServerUrl, "", png, s.DeviceId, s.DeviceName, SystemInfo.Platform, SystemInfo.Version, ct);
             }
             catch (Exception ex) when (attempt < 3 && ex is not ApiException { StatusCode: System.Net.HttpStatusCode.Unauthorized })
             {
@@ -225,7 +225,7 @@ public sealed class SyncEngine : IDisposable
             SetTransfer(true, TransferKind.Download);
             try
             {
-                var bytes = await _svc.Api.DownloadImageAsync(s.ServerUrl, s.AuthToken, entry.ImageRef!);
+                var bytes = await _svc.Api.DownloadImageAsync(s.ServerUrl, "", entry.ImageRef!);
                 if (bytes is not null)
                 {
                     imagePath = await ImageCodec.SavePngAsync(bytes, entry.Id);
@@ -283,10 +283,10 @@ public sealed class SyncEngine : IDisposable
     public async Task PullCurrentAsync()
     {
         var s = _svc.Settings;
-        if (string.IsNullOrWhiteSpace(s.ServerUrl) || string.IsNullOrWhiteSpace(s.AuthToken)) return;
+        if (string.IsNullOrWhiteSpace(s.ServerUrl) || !s.IsPaired) return;
         try
         {
-            var entry = await _svc.Api.GetCurrentAsync(s.ServerUrl, s.AuthToken);
+            var entry = await _svc.Api.GetCurrentAsync(s.ServerUrl, "");
             _dispatcher.TryEnqueue(() => EntryUpdated?.Invoke(entry!, null, false));
         }
         catch (Exception ex)
@@ -329,7 +329,7 @@ public sealed class SyncEngine : IDisposable
                 {
                     if (string.IsNullOrEmpty(item.ImageRef)) return;
                     var s = _svc.Settings;
-                    var bytes = await _svc.Api.DownloadImageAsync(s.ServerUrl, s.AuthToken, item.ImageRef);
+                    var bytes = await _svc.Api.DownloadImageAsync(s.ServerUrl, "", item.ImageRef);
                     if (bytes is null) return;
                     path = await ImageCodec.SavePngAsync(bytes, item.ServerId ?? item.Id);
                 }

@@ -20,7 +20,7 @@ public sealed class ApiException : Exception
 
 /// <summary>
 /// REST 客户端(设计文档 §6 API 契约)。
-/// 统一 Bearer 认证;401 抛 ApiException,由 UI 引导重新配置令牌。
+/// 统一 Bearer 认证(设备凭证);401 抛 ApiException,由 UI 引导重新配对。
 /// </summary>
 public sealed class ServerApi
 {
@@ -44,7 +44,7 @@ public sealed class ServerApi
         using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
-            throw new ApiException("令牌无效(401)", response.StatusCode);
+            throw new ApiException("未授权(401):设备未配对或已被移除,请在设置页重新配对", response.StatusCode);
         }
         if (!response.IsSuccessStatusCode)
         {
@@ -62,7 +62,7 @@ public sealed class ServerApi
         if (response.StatusCode == HttpStatusCode.NoContent) return null;
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
-            throw new ApiException("令牌无效(401)", response.StatusCode);
+            throw new ApiException("未授权(401):设备未配对或已被移除,请在设置页重新配对", response.StatusCode);
         }
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadFromJsonAsync<ClipboardEntry>(cancellationToken: ct);
@@ -71,9 +71,10 @@ public sealed class ServerApi
     /// <summary>PUT /api/clipboard:上传文本。返回新条目;内容未变化(unchanged)返回 null。</summary>
     public async Task<ClipboardEntry?> PutTextAsync(
         string serverUrl, string token, string text,
-        string deviceId, string deviceName, CancellationToken ct = default)
+        string deviceId, string deviceName,
+        string? platform = null, string? version = null, CancellationToken ct = default)
     {
-        var payload = new { type = "Text", text, deviceId, deviceName };
+        var payload = new { type = "Text", text, deviceId, deviceName, platform, version };
         using var request = new HttpRequestMessage(HttpMethod.Put, Endpoint(serverUrl, "/api/clipboard"))
         {
             Content = JsonContent.Create(payload),
@@ -90,12 +91,15 @@ public sealed class ServerApi
     /// <summary>POST /api/clipboard/image:上传图片(multipart),返回新条目。</summary>
     public async Task<ClipboardEntry?> UploadImageAsync(
         string serverUrl, string token, byte[] pngBytes,
-        string deviceId, string deviceName, CancellationToken ct = default)
+        string deviceId, string deviceName,
+        string? platform = null, string? version = null, CancellationToken ct = default)
     {
         using var form = new MultipartFormDataContent();
         form.Add(new ByteArrayContent(pngBytes), "file", "clipboard.png");
         form.Add(new StringContent(deviceId), "deviceId");
         form.Add(new StringContent(deviceName), "deviceName");
+        if (!string.IsNullOrWhiteSpace(platform)) form.Add(new StringContent(platform), "platform");
+        if (!string.IsNullOrWhiteSpace(version)) form.Add(new StringContent(version), "version");
         using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(serverUrl, "/api/clipboard/image"))
         {
             Content = form,
@@ -116,10 +120,57 @@ public sealed class ServerApi
         }
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
-            throw new ApiException("令牌无效(401)", response.StatusCode);
+            throw new ApiException("未授权(401):设备未配对或已被移除,请在设置页重新配对", response.StatusCode);
         }
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsByteArrayAsync(ct);
+    }
+
+    /// <summary>
+    /// POST /api/pairing-codes:生成一次性配对码(一码一设备,10 分钟有效)。
+    /// 携带本设备信息:服务端生成码的同时登记/更新生成方设备(设备列表可见)。
+    /// </summary>
+    public async Task<PairingCodeResult?> CreatePairingCodeAsync(
+        string serverUrl, string deviceId, string deviceName, CancellationToken ct = default)
+    {
+        var payload = new { deviceId, deviceName };
+        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(serverUrl, "/api/pairing-codes"))
+        {
+            Content = JsonContent.Create(payload),
+        };
+        var json = await SendAsync<JsonElement>(request, "", ct);
+        return json.Deserialize<PairingCodeResult>(new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    }
+
+    /// <summary>
+    /// DELETE /api/pairing-codes/{code}:作废配对码(204 无内容)。
+    /// 关闭展示对话框/底部弹层后调用,码立即失效。
+    /// </summary>
+    public async Task RevokePairingCodeAsync(
+        string serverUrl, string code, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Delete, Endpoint(serverUrl, "/api/pairing-codes/" + Uri.EscapeDataString(code)));
+        ApplyAuth(request, "");
+        using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        response.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>
+    /// POST /api/pair:用一次性配对码换取本设备专属 Token。
+    /// 服务端校验配对码(未过期/未使用)后签发 deviceToken,并登记/更新设备。
+    /// </summary>
+    public async Task<PairResult?> PairAsync(
+        string serverUrl, string pairingCode,
+        string deviceId, string deviceName, CancellationToken ct = default)
+    {
+        var payload = new { pairingCode, deviceId, deviceName };
+        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(serverUrl, "/api/pair"))
+        {
+            Content = JsonContent.Create(payload),
+        };
+        var json = await SendAsync<JsonElement>(request, "", ct);
+        return json.Deserialize<PairResult>(new JsonSerializerOptions(JsonSerializerDefaults.Web));
     }
 
     /// <summary>GET /api/devices:设备列表(含在线状态)。失败返回空列表。</summary>
@@ -131,36 +182,9 @@ public sealed class ServerApi
         return json.Deserialize<List<DeviceInfo>>(new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? new();
     }
 
-    /// <summary>PUT /api/devices/{id}:重命名设备(204 无内容)。</summary>
-    public async Task RenameDeviceAsync(
-        string serverUrl, string token, string deviceId, string newName, CancellationToken ct = default)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Put, Endpoint(serverUrl, "/api/devices/" + Uri.EscapeDataString(deviceId)))
-        {
-            Content = JsonContent.Create(new { name = newName }),
-        };
-        await SendNoContentAsync(request, token, ct);
-    }
-
-    /// <summary>DELETE /api/devices/{id}:移除设备(204 无内容)。</summary>
-    public async Task RemoveDeviceAsync(
-        string serverUrl, string token, string deviceId, CancellationToken ct = default)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Delete, Endpoint(serverUrl, "/api/devices/" + Uri.EscapeDataString(deviceId)));
-        await SendNoContentAsync(request, token, ct);
-    }
-
-    private static async Task SendNoContentAsync(
-        HttpRequestMessage request, string token, CancellationToken ct = default)
-    {
-        ApplyAuth(request, token);
-        using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-        if (response.StatusCode == HttpStatusCode.Unauthorized)
-        {
-            throw new ApiException("令牌无效(401)", response.StatusCode);
-        }
-        response.EnsureSuccessStatusCode();
-    }
+    /// <summary>
+    /// 注:设备移除/重命名属管理操作,由网页端(账密会话)执行,桌面端不提供。
+    /// </summary>
 
     /// <summary>连接测试:GET 当前剪贴板,任何 200/204 即通过。</summary>
     public async Task<(bool Ok, string Message)> TestConnectionAsync(string serverUrl, string token, CancellationToken ct = default)
@@ -174,7 +198,7 @@ public sealed class ServerApi
         }
         catch (ApiException ex) when (ex.StatusCode == HttpStatusCode.Unauthorized)
         {
-            return (false, "令牌无效(401),请检查访问令牌");
+            return (false, "认证失败(401):设备未配对或已被移除,请在设置页重新配对");
         }
         catch (Exception ex)
         {

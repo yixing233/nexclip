@@ -11,21 +11,44 @@ public partial class SettingsViewModel : ObservableObject
 {
     private readonly AppServices _svc;
 
+    /// <summary>配对码生成完成事件(码 + 过期时间),供页面弹出对话框展示。</summary>
+    public event Action<string, DateTime>? PairingCodeGenerated;
+
     // ---- 服务端连接(编辑态,点"保存设置"落盘) ----
     [ObservableProperty]
     private string serverUrl = "";
 
     [ObservableProperty]
-    private string authToken = "";
-
-    [ObservableProperty]
     private string deviceName = "";
+
+    /// <summary>已配对状态(配对码登记成功即视为已配对;同步接口免认证)。</summary>
+    public bool IsPaired => _svc.Settings.IsPaired;
 
     [ObservableProperty]
     private string testResult = "";
 
     [ObservableProperty]
     private bool isTesting;
+
+    // ---- 设备配对(配对码 → 设备专属 Token) ----
+    [ObservableProperty]
+    private string pairingCode = "";
+
+    [ObservableProperty]
+    private bool isPairing;
+
+    [ObservableProperty]
+    private string pairResult = "";
+
+    // ---- 配对码生成 ----
+    [ObservableProperty]
+    private string generatedCode = "";
+
+    [ObservableProperty]
+    private string codeExpiryText = "";
+
+    [ObservableProperty]
+    private bool isGeneratingCode;
 
     // ---- 行为开关(变更即保存) ----
     [ObservableProperty]
@@ -61,13 +84,6 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool isDevicesLoading;
 
-    /// <summary>当前编辑重命名的设备 id(非空时显示重命名输入)。</summary>
-    [ObservableProperty]
-    private string? renamingDeviceId;
-
-    [ObservableProperty]
-    private string renameText = "";
-
     // ---- 历史 / 外观 ----
     [ObservableProperty]
     private int maxHistoryIndex;
@@ -84,7 +100,6 @@ public partial class SettingsViewModel : ObservableObject
         _svc = svc;
         var s = svc.Settings;
         ServerUrl = s.ServerUrl;
-        AuthToken = s.AuthToken;
         DeviceName = s.DeviceName;
         // 开机自启动以注册表实际状态为准(老版本仅存设置未写注册表)
         var bootStart = StartupService.IsEnabled();
@@ -107,7 +122,6 @@ public partial class SettingsViewModel : ObservableObject
     {
         var s = _svc.Settings;
         s.ServerUrl = ServerUrl.Trim();
-        s.AuthToken = AuthToken.Trim();
         s.DeviceName = DeviceName.Trim();
         s.Save();
         _svc.Main.RefreshConnectionState();
@@ -146,12 +160,128 @@ public partial class SettingsViewModel : ObservableObject
         TestResult = "本地历史已清空";
     }
 
+    /// <summary>
+    /// <summary>
+    /// 生成一次性配对码(一码一设备,10 分钟有效),把码给另一台设备输入即可接入。
+    /// </summary>
+    [RelayCommand]
+    public async Task GeneratePairingCodeAsync()
+    {
+        var url = ServerUrl?.Trim();
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            PairResult = "请先填写服务器地址";
+            return;
+        }
+        IsGeneratingCode = true;
+        PairResult = "";
+        GeneratedCode = "";
+        try
+        {
+            // 携带本设备信息生成:服务端同步登记本设备,设备列表可看到本机
+            var result = await _svc.Api.CreatePairingCodeAsync(url, _svc.Settings.DeviceId, _svc.Settings.DeviceName);
+            if (result is null || string.IsNullOrWhiteSpace(result.Code))
+            {
+                PairResult = "生成失败:服务器未返回配对码";
+                return;
+            }
+            GeneratedCode = result.Code;
+            // 关闭即失效:不再按时间显示有效期
+            CodeExpiryText = "关闭对话框后此配对码立即失效";
+            PairResult = "配对码已生成:把此码输入到新设备的配对框即可接入";
+            PairingCodeGenerated?.Invoke(result.Code, result.ExpiresAt);
+            _ = RefreshDevicesAsync();
+        }
+        catch (Exception ex)
+        {
+            PairResult = $"生成失败:{ex.Message}";
+        }
+        finally
+        {
+            IsGeneratingCode = false;
+        }
+    }
+
+    /// <summary>
+    /// 作废当前配对码(关闭展示对话框后调用),码立即失效。
+    /// </summary>
+    public async Task RevokeGeneratedCodeAsync()
+    {
+        var code = GeneratedCode;
+        if (string.IsNullOrWhiteSpace(code)) return;
+        GeneratedCode = "";
+        CodeExpiryText = "";
+        try
+        {
+            await _svc.Api.RevokePairingCodeAsync(ServerUrl.Trim(), code);
+            PairResult = "配对码已作废(对话框关闭)";
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"配对码作废失败:{ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// 配对:输入另一台设备生成的配对码,完成本设备接入登记。
+    /// 新架构:配对仅登记,同步接口免认证;网页端管理用账密。
+    /// </summary>
+    [RelayCommand]
+    public async Task PairDeviceAsync()
+    {
+        var code = PairingCode?.Trim();
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            PairResult = "请输入配对码";
+            return;
+        }
+        var s = _svc.Settings;
+        if (string.IsNullOrWhiteSpace(ServerUrl))
+        {
+            PairResult = "请先填写服务器地址";
+            return;
+        }
+        IsPairing = true;
+        PairResult = "正在配对…";
+        try
+        {
+            var result = await _svc.Api.PairAsync(ServerUrl.Trim(), code, s.DeviceId, s.DeviceName);
+            if (result is null)
+            {
+                PairResult = "配对失败:服务器未返回设备信息";
+                return;
+            }
+            // 配对即登记:同步接口免认证,无需保存任何令牌
+            s.IsPaired = true;
+            s.Save();
+            _svc.Main.RefreshConnectionState();
+            PairResult = $"配对成功:设备 {result.DeviceId} 已绑定";
+            _ = _svc.Engine?.ReconfigureAsync();
+            _ = RefreshDevicesAsync();
+            OnPropertyChanged(nameof(IsPaired));
+        }
+        catch (ApiException ex)
+        {
+            PairResult = ex.StatusCode == System.Net.HttpStatusCode.BadRequest
+                ? "配对失败:配对码无效、已使用或已过期"
+                : $"配对失败:{ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            PairResult = $"配对失败:{ex.Message}";
+        }
+        finally
+        {
+            IsPairing = false;
+        }
+    }
+
     /// <summary>加载设备列表(GET /api/devices)。</summary>
     [RelayCommand]
     public async Task RefreshDevicesAsync()
     {
         var s = _svc.Settings;
-        if (string.IsNullOrWhiteSpace(s.ServerUrl) || string.IsNullOrWhiteSpace(s.AuthToken))
+        if (string.IsNullOrWhiteSpace(s.ServerUrl))
         {
             DeviceStatus = "未配置服务器,无法加载设备列表";
             return;
@@ -160,7 +290,8 @@ public partial class SettingsViewModel : ObservableObject
         DeviceStatus = "";
         try
         {
-            var list = await _svc.Api.GetDevicesAsync(s.ServerUrl, s.AuthToken);
+            // 设备列表 GET 免认证(管理操作在网页端)
+            var list = await _svc.Api.GetDevicesAsync(s.ServerUrl, "");
             Devices.Clear();
             foreach (var d in list) Devices.Add(d);
             DeviceStatus = list.Count == 0 ? "暂无设备" : $"共 {list.Count} 台设备";
@@ -175,55 +306,8 @@ public partial class SettingsViewModel : ObservableObject
         }
     }
 
-    /// <summary>开始重命名(设置编辑态)。</summary>
-    [RelayCommand]
-    public void StartRename(DeviceInfo device)
-    {
-        RenamingDeviceId = device.Id;
-        RenameText = device.Name ?? "";
-    }
-
-    /// <summary>取消重命名。</summary>
-    [RelayCommand]
-    public void CancelRename() => RenamingDeviceId = null;
-
-    /// <summary>提交重命名。</summary>
-    [RelayCommand]
-    public async Task ConfirmRenameAsync()
-    {
-        var id = RenamingDeviceId;
-        if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(RenameText)) return;
-        try
-        {
-            await _svc.Api.RenameDeviceAsync(_svc.Settings.ServerUrl, _svc.Settings.AuthToken, id, RenameText.Trim());
-            DeviceStatus = "设备已重命名";
-        }
-        catch (Exception ex)
-        {
-            DeviceStatus = $"重命名失败:{ex.Message}";
-        }
-        finally
-        {
-            RenamingDeviceId = null;
-            await RefreshDevicesAsync();
-        }
-    }
-
-    /// <summary>移除设备。</summary>
-    [RelayCommand]
-    public async Task RemoveDeviceAsync(DeviceInfo device)
-    {
-        try
-        {
-            await _svc.Api.RemoveDeviceAsync(_svc.Settings.ServerUrl, _svc.Settings.AuthToken, device.Id);
-            Devices.Remove(device);
-            DeviceStatus = "设备已移除";
-        }
-        catch (Exception ex)
-        {
-            DeviceStatus = $"移除失败:{ex.Message}";
-        }
-    }
+    // 注:设备移除/重命名属于管理操作,需网页端账密登录后执行;
+    // 桌面端设备列表仅作展示与刷新。
 
     /// <summary>设备展示文本(名称 + 平台/版本/IP)。</summary>
     public static string DeviceSubtitle(DeviceInfo d)
@@ -249,11 +333,17 @@ public partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     public async Task TestConnectionAsync()
     {
+        var s = _svc.Settings;
+        if (!s.IsPaired)
+        {
+            TestResult = "尚未配对:请先用配对码完成设备配对";
+            return;
+        }
         IsTesting = true;
         TestResult = "正在测试…";
         try
         {
-            var (ok, message) = await _svc.Api.TestConnectionAsync(ServerUrl.Trim(), AuthToken.Trim());
+            var (ok, message) = await _svc.Api.TestConnectionAsync(ServerUrl.Trim(), "");
             TestResult = message;
         }
         catch (Exception ex)

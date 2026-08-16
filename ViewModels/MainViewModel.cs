@@ -57,7 +57,7 @@ public partial class MainViewModel : ObservableObject
             IsConnected = state is SyncEngine.ConnState.Connected or SyncEngine.ConnState.Reconnecting;
             ConnectionText = state switch
             {
-                SyncEngine.ConnState.NotConfigured => "未配置服务器/令牌",
+                SyncEngine.ConnState.NotConfigured => "未配置或未配对",
                 SyncEngine.ConnState.Connecting => "连接中…",
                 SyncEngine.ConnState.Connected => "已连接",
                 SyncEngine.ConnState.Reconnecting => "重连中…",
@@ -74,9 +74,8 @@ public partial class MainViewModel : ObservableObject
     public void RefreshConnectionState()
     {
         var s = _svc.Settings;
-        IsConnected = !string.IsNullOrWhiteSpace(s.ServerUrl)
-                      && !string.IsNullOrWhiteSpace(s.AuthToken);
-        ConnectionText = IsConnected ? "已连接" : "未配置服务器/令牌";
+        IsConnected = !string.IsNullOrWhiteSpace(s.ServerUrl) && s.IsPaired;
+        ConnectionText = IsConnected ? "已连接" : "未配置或未配对";
     }
 
     private static BitmapImage? BuildImage(string? path)
@@ -104,11 +103,11 @@ public partial class MainViewModel : ObservableObject
     public async Task RefreshAsync()
     {
         var s = _svc.Settings;
-        if (string.IsNullOrWhiteSpace(s.ServerUrl) || string.IsNullOrWhiteSpace(s.AuthToken))
+        if (string.IsNullOrWhiteSpace(s.ServerUrl) || !s.IsPaired)
         {
             IsConnected = false;
-            ConnectionText = "未配置服务器/令牌";
-            StatusMessage = "请先在「设置」页填写服务器地址与访问令牌";
+            ConnectionText = "未配置或未配对";
+            StatusMessage = "请先在「设置」页填写服务器地址并完成设备配对";
             return;
         }
         IsBusy = true;
@@ -150,7 +149,7 @@ public partial class MainViewModel : ObservableObject
         StatusMessage = "";
         try
         {
-            var entry = await _svc.Api.PutTextAsync(s.ServerUrl, s.AuthToken, text, s.DeviceId, s.DeviceName);
+            var entry = await _svc.Api.PutTextAsync(s.ServerUrl, "", text, s.DeviceId, s.DeviceName);
             SyncText = "";
             if (entry is not null)
             {

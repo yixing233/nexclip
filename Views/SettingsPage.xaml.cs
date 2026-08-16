@@ -1,10 +1,12 @@
 using Microsoft.UI.Input;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using SyncClipboard.Desktop;
 using SyncClipboard.Desktop.ViewModels;
 using Windows.System;
 using Windows.UI.Core;
+using Windows.ApplicationModel.DataTransfer;
 
 namespace SyncClipboard.Desktop.Views;
 
@@ -17,11 +19,54 @@ public sealed partial class SettingsPage : Page
         InitializeComponent();
         _vm = App.Services.SettingsVm;
         DataContext = _vm;
-        // PasswordBox.Password 不可绑定,手动同步
-        TokenBox.Password = _vm.AuthToken;
-        TokenBox.PasswordChanged += (_, _) => _vm.AuthToken = TokenBox.Password;
         // 打开设置页即加载设备列表
         Loaded += async (_, _) => await _vm.RefreshDevicesCommand.ExecuteAsync(null);
+        // 配对码生成完成 → 弹出对话框展示(大号码 + 复制);关闭即作废
+        _vm.PairingCodeGenerated += async (code, expiresAt) =>
+        {
+            var codeBox = new TextBox
+            {
+                Text = code,
+                IsReadOnly = true,
+                FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                TextAlignment = TextAlignment.Center,
+                FontSize = 22,
+            };
+            var copyButton = new Button
+            {
+                Content = "复制",
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 12, 0, 0),
+            };
+            copyButton.Click += (_, _) =>
+            {
+                var pkg = new DataPackage();
+                pkg.SetText(code);
+                Clipboard.SetContent(pkg);
+            };
+
+            var panel = new StackPanel { Spacing = 8 };
+            panel.Children.Add(codeBox);
+            panel.Children.Add(new TextBlock
+            {
+                Text = "关闭对话框后此配对码立即失效",
+                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
+                HorizontalAlignment = HorizontalAlignment.Center,
+            });
+            panel.Children.Add(copyButton);
+
+            var dialog = new ContentDialog
+            {
+                Title = "配对码",
+                Content = panel,
+                PrimaryButtonText = "关闭",
+                XamlRoot = XamlRoot,
+            };
+            await dialog.ShowAsync();
+            // 对话框关闭(无论按钮/遮罩)→ 配对码作废
+            await _vm.RevokeGeneratedCodeAsync();
+        };
     }
 
     /// <summary>剪贴板热键捕获。</summary>
