@@ -9,23 +9,35 @@ export function extractToken(req: IncomingMessage): string {
   return u.searchParams.get('access_token') ?? '';
 }
 
-/**
- * 需登录的路径:仅管理台接口。
- * 设备同步接口(剪贴板/历史/设备列表/图片/hub/配对/配对码)一律免认证:
- * 设备接入只靠"配对码"完成登记,不再签发/校验设备令牌(设计变更)。
+/** 路由鉴权类别:
+ *  open  = 免认证(设备同步、配对流程、hub、登录/登出)
+ *  user  = 需会话(用户网页或管理台)
+ *  admin = 仅管理台会话
  */
-export function needsAuth(method: string, p: string): boolean {
+export function routeClass(method: string, p: string): 'open' | 'user' | 'admin' {
+  // 管理台专属
   if (
-    p === '/api/stats' || p === '/api/activities' || p === '/api/health' ||
-    (p === '/api/devices' && method === 'PUT') ||
-    (p === '/api/devices' && method === 'DELETE') ||
-    (/^\/api\/devices\//.test(p) && (method === 'PUT' || method === 'DELETE'))
-  ) return true;
-  return false;
+    p === '/api/stats' || p === '/api/health' ||
+    p === '/api/users' ||
+    p.startsWith('/api/admin/') ||
+    p === '/api/clipboard/send' ||
+    (p === '/api/clipboard/history' && method === 'DELETE') ||
+    (/^\/api\/clipboard\/\d+$/.test(p) && method === 'DELETE') ||
+    (/^\/api\/users\/[^/]+$/.test(p) && method === 'DELETE')
+  ) return 'admin';
+  // 用户/管理会话皆可(控制器内再按归属校验:自己的用户ID/组内设备)
+  if (
+    p === '/api/activities' ||
+    /^\/api\/users\//.test(p) ||
+    (/^\/api\/devices\//.test(p) && (method === 'PUT' || method === 'DELETE')) ||
+    (p === '/api/pairing-requests' && method === 'GET')
+  ) return 'user';
+  return 'open';
 }
 
-/** 管理台会话令牌(账密登录签发) */
-export function checkSessionToken(req: IncomingMessage, sessions: SessionStore): boolean {
+/** 校验会话令牌,返回载荷(admin/user);无效返回 null */
+export function checkSession(req: IncomingMessage, sessions: SessionStore) {
   const token = extractToken(req);
-  return !!token && sessions.validate(token);
+  if (!token) return null;
+  return sessions.validate(token);
 }

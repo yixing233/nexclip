@@ -46,11 +46,22 @@ export function serveStatic(root: string | null, req: IncomingMessage, res: Serv
     }
     res.statusCode = 200;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; font-src 'self' data:");
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
     createReadStream(idx).pipe(res);
     return true;
   }
   res.statusCode = 200;
-  res.setHeader('Content-Type', MIME[extname(full).toLowerCase()] ?? 'application/octet-stream');
+  const mime = MIME[extname(full).toLowerCase()] ?? 'application/octet-stream';
+  res.setHeader('Content-Type', mime);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (mime.startsWith('text/html')) {
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:; font-src 'self' data:");
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+  }
   createReadStream(full).pipe(res);
   return true;
 }

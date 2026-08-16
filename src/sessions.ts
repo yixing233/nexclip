@@ -1,32 +1,34 @@
-/** 管理台账密登录会话:内存态随机令牌 + TTL */
-export class SessionStore {
-  private readonly tokens = new Map<string, number>(); // token -> expiresAt(ms)
+import { randomBytes } from 'node:crypto';
 
-  /** 创建会话,返回 64hex 令牌 */
-  create(ttlHours: number): string {
-    const token = randomHexBytes(32);
-    this.tokens.set(token, Date.now() + ttlHours * 3600_000);
+/** 会话载荷:admin = 管理台;user = 用户网页(绑定用户ID + 设备) */
+export interface SessionPayload {
+  role: 'admin' | 'user';
+  userId?: string;
+  deviceId?: string;
+}
+
+/** 会话存储:内存态随机令牌 + TTL,携带角色载荷 */
+export class SessionStore {
+  private readonly tokens = new Map<string, { payload: SessionPayload; expiresAt: number }>();
+
+  create(payload: SessionPayload, ttlHours: number): string {
+    const token = randomBytes(32).toString('hex');
+    this.tokens.set(token, { payload, expiresAt: Date.now() + ttlHours * 3600_000 });
     return token;
   }
 
-  /** 校验会话(存在且未过期) */
-  validate(token: string): boolean {
-    const exp = this.tokens.get(token);
-    if (exp === undefined) return false;
-    if (exp < Date.now()) {
+  /** 校验并返回载荷;过期/不存在返回 null */
+  validate(token: string): SessionPayload | null {
+    const s = this.tokens.get(token);
+    if (!s) return null;
+    if (s.expiresAt < Date.now()) {
       this.tokens.delete(token);
-      return false;
+      return null;
     }
-    return true;
+    return s.payload;
   }
 
-  /** 注销会话 */
   revoke(token: string): void {
     this.tokens.delete(token);
   }
-}
-
-import { randomBytes } from 'node:crypto';
-function randomHexBytes(n: number): string {
-  return randomBytes(n).toString('hex');
 }

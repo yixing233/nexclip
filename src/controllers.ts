@@ -4,7 +4,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import type { AppConfig } from './config.js';
 import type { SyncService } from './service.js';
 import { PairError } from './service.js';
-import type { SessionStore } from './sessions.js';
+import type { SessionStore, SessionPayload } from './sessions.js';
+import { RateLimiter } from './rate.js';
 import { parseMultipart } from './multipart.js';
 import { clamp, randomHex } from './util.js';
 import { extractToken } from './auth.js';
@@ -13,10 +14,13 @@ export interface Ctx {
   cfg: AppConfig;
   svc: SyncService;
   sessions: SessionStore;
+  rate: RateLimiter;
   latency: { add(us: number): void; avgMs: number; last12: number[] };
   url: URL;
   req: IncomingMessage;
   res: ServerResponse;
+  /** 会话载荷(admin/user),未登录为 null */
+  actor: SessionPayload | null;
 }
 
 export function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -67,10 +71,19 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     try { json = JSON.parse(body.toString('utf8')); } catch { sendJson(res, 400, { error: '无效的 JSON' }); return true; }
     const username = typeof json.username === 'string' ? json.username.trim() : '';
     const password = typeof json.password === 'string' ? json.password : '';
+    const ip = remoteIp(req);
+    if (!ctx.rate.allow('login:' + username + ':' + ip, 5, 600_000)) {
+      svc.addAudit('login_locked', '用户 ' + username + ' 触发锁定(IP ' + ip + ')', ip);
+      sendJson(res, 429, { error: '尝试过于频繁,已锁定 10 分钟' });
+      return true;
+    }
     if (username === cfg.adminUsername && password === cfg.adminPassword) {
-      const token = ctx.sessions.create(cfg.sessionTtlHours);
-      sendJson(res, 200, { token, expiresAt: new Date(Date.now() + cfg.sessionTtlHours * 3600_000).toISOString() });
+      ctx.rate.reset('login:' + username + ':' + ip);
+      const token = ctx.sessions.create({ role: 'admin' }, cfg.sessionTtlHours);
+      svc.addAudit('login_ok', '管理台登录: ' + username, ip);
+      sendJson(res, 200, { token, role: 'admin', expiresAt: new Date(Date.now() + cfg.sessionTtlHours * 3600_000).toISOString() });
     } else {
+      svc.addAudit('login_fail', '登录失败: ' + username + ' (IP ' + ip + ')', ip);
       sendJson(res, 401, { error: '用户名或密码错误' });
     }
     return true;
@@ -130,7 +143,8 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
   if (p === '/api/clipboard/history' && method === 'GET') {
     const offset = Number(url.searchParams.get('offset') ?? 0);
     const limit = Number(url.searchParams.get('limit') ?? 20);
-    sendJson(res, 200, svc.getHistory(Number.isFinite(offset) ? offset : 0, Number.isFinite(limit) ? limit : 20));
+    const userId = url.searchParams.get('userId')?.trim() || null;
+    sendJson(res, 200, svc.getHistory(Number.isFinite(offset) ? offset : 0, Number.isFinite(limit) ? limit : 20, userId));
     return true;
   }
 
@@ -198,6 +212,14 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
   const mDev = /^\/api\/devices\/(.+)$/.exec(p);
   if (mDev) {
     const id = decodeURIComponent(mDev[1]);
+    // 用户会话只能操作自己组内的设备;管理端任意
+    if (ctx.actor?.role === 'user') {
+      const dev = svc.getDevice(id);
+      if (!dev || dev.UserId !== ctx.actor.userId) {
+        sendJson(res, 403, { error: '无权操作该设备' });
+        return true;
+      }
+    }
     if (method === 'PUT') {
       const body = await readBody(req, 64 * 1024);
       let name = '';
@@ -213,44 +235,192 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     }
   }
 
-  // ============ 设备配对(设计文档 §3.2) ============
-  // 生成配对码:免认证;可选 body { deviceId, deviceName } 用于登记生成方设备(自声明)
+  // ============ 用户与配对(配对码 + 用户ID + 生成方确认) ============
+
+  // 生成配对码:免认证 + IP 限速;body { deviceId, deviceName }
+  // 未绑定设备生成时自动创建用户ID,响应同时返回 userId(界面需展示 用户ID+配对码)
   if (p === '/api/pairing-codes' && method === 'POST') {
-    let deviceId: string | null = null;
+    if (!ctx.rate.allow('paircode:' + remoteIp(req), 30, 60_000)) {
+      sendJson(res, 429, { error: '操作过于频繁,请稍后再试' });
+      return true;
+    }
+    let deviceId = '';
     let deviceName: string | null = null;
     const body = await readBody(req, 64 * 1024);
     if (body.length > 0) {
       try {
         const j = JSON.parse(body.toString('utf8')) as { deviceId?: unknown; deviceName?: unknown };
-        deviceId = typeof j.deviceId === 'string' && j.deviceId ? j.deviceId.trim() : null;
-        deviceName = typeof j.deviceName === 'string' && j.deviceName ? j.deviceName.trim() : null;
-      } catch { /* 无 body 或非 JSON:生成方信息可缺省 */ }
+        deviceId = typeof j.deviceId === 'string' ? j.deviceId.trim().slice(0, 64) : '';
+        deviceName = typeof j.deviceName === 'string' ? j.deviceName.trim().slice(0, 128) : null;
+      } catch { /* 忽略 */ }
     }
-    sendJson(res, 200, svc.createPairingCode(deviceId, deviceName));
+    if (!deviceId) { sendJson(res, 400, { error: 'deviceId 不能为空' }); return true; }
+    const r = svc.generatePairingCode(deviceId, deviceName);
+    svc.addAudit('pair_code', '设备 ' + (deviceName || deviceId) + ' 生成配对码', remoteIp(req));
+    sendJson(res, 200, r);
     return true;
   }
+
+  // 作废未用配对码(open 状态):免认证
   const mPairRevoke = /^\/api\/pairing-codes\/([^/]+)$/.exec(p);
   if (mPairRevoke && method === 'DELETE') {
-    if (!svc.revokePairingCode(decodeURIComponent(mPairRevoke[1]))) {
-      res.statusCode = 404; res.end(); return true;
-    }
+    const r = svc.revokePairingRequest(decodeURIComponent(mPairRevoke[1]));
+    if (!r) { res.statusCode = 404; res.end(); return true; }
     sendNoContent(res);
     return true;
   }
+
+  // 发起配对:校验 配对码 + 用户ID → 挂起待确认;IP 限速防枚举
   if (p === '/api/pair' && method === 'POST') {
+    if (!ctx.rate.allow('pair:' + remoteIp(req), 10, 60_000)) {
+      sendJson(res, 429, { error: '尝试过于频繁,请稍后再试' });
+      return true;
+    }
     const body = await readBody(req, 64 * 1024);
     let json: Record<string, unknown>;
     try { json = JSON.parse(body.toString('utf8')); } catch { sendJson(res, 400, { error: '无效的 JSON' }); return true; }
     const pairingCode = typeof json.pairingCode === 'string' ? json.pairingCode.trim().toUpperCase() : '';
-    const deviceId = typeof json.deviceId === 'string' ? json.deviceId.trim() : '';
-    const deviceName = typeof json.deviceName === 'string' ? json.deviceName.trim() : '';
-    if (!pairingCode || !deviceId) { sendJson(res, 400, { error: 'pairingCode 与 deviceId 不能为空' }); return true; }
+    const userId = typeof json.userId === 'string' ? json.userId.trim() : '';
+    const deviceId = typeof json.deviceId === 'string' ? json.deviceId.trim().slice(0, 64) : '';
+    const deviceName = typeof json.deviceName === 'string' ? json.deviceName.trim().slice(0, 128) : '';
+    if (!pairingCode || !userId || !deviceId) { sendJson(res, 400, { error: 'pairingCode、userId、deviceId 不能为空' }); return true; }
     try {
-      sendJson(res, 200, svc.pair(pairingCode, deviceId, deviceName));
+      const r = svc.pair(pairingCode, userId, deviceId, deviceName);
+      svc.addAudit('pair_request', '设备 ' + (deviceName || deviceId) + ' 请求配对(用户 ' + userId + ')', remoteIp(req));
+      sendJson(res, 200, r);
     } catch (e) {
       if (e instanceof PairError) { sendJson(res, e.status, { error: e.message }); return true; }
       throw e;
     }
+    return true;
+  }
+
+  // 新设备轮询配对结果:免认证(凭 码+自身deviceId)
+  if (p === '/api/pair/status' && method === 'GET') {
+    const pairingCode = (url.searchParams.get('code') ?? '').trim().toUpperCase();
+    const deviceId = url.searchParams.get('deviceId') ?? '';
+    if (!pairingCode || !deviceId) { sendJson(res, 400, { error: 'code 与 deviceId 不能为空' }); return true; }
+    sendJson(res, 200, svc.pairStatus(pairingCode, deviceId));
+    return true;
+  }
+
+  // 配对确认/拒绝:管理端会话 | 同组用户会话 | 生成方(码+生成方设备ID)
+  if (p === '/api/pairing-requests/confirm' && method === 'POST') {
+    const body = await readBody(req, 64 * 1024);
+    let json: Record<string, unknown>;
+    try { json = JSON.parse(body.toString('utf8')); } catch { sendJson(res, 400, { error: '无效的 JSON' }); return true; }
+    const pairingCode = typeof json.code === 'string' ? json.code.trim().toUpperCase() : '';
+    const action = json.action === 'reject' ? 'reject' : json.action === 'approve' ? 'approve' : null;
+    if (!pairingCode || !action) { sendJson(res, 400, { error: 'code 与 action 不能为空' }); return true; }
+    let actor:
+      | { kind: 'admin' }
+      | { kind: 'user'; userId: string }
+      | { kind: 'secret'; generatorId: string } = { kind: 'secret', generatorId: '' };
+    if (ctx.actor?.role === 'admin') actor = { kind: 'admin' };
+    else if (ctx.actor?.role === 'user' && ctx.actor.userId) actor = { kind: 'user', userId: ctx.actor.userId };
+    else {
+      const generatorId = typeof json.generatorId === 'string' ? json.generatorId.trim().slice(0, 64) : '';
+      if (!generatorId) { sendJson(res, 403, { error: '无权确认该配对请求' }); return true; }
+      actor = { kind: 'secret', generatorId };
+    }
+    try {
+      const r = svc.confirmPairing(pairingCode, action, actor);
+      svc.addAudit(action === 'approve' ? 'pair_approve' : 'pair_reject', '配对码 ' + pairingCode, remoteIp(req));
+      sendJson(res, 200, r);
+    } catch (e) {
+      if (e instanceof PairError) { sendJson(res, e.status, { error: e.message }); return true; }
+      throw e;
+    }
+    return true;
+  }
+
+  // 待确认请求列表:管理端全部 / 用户会话本组 / 生成方(码+生成方设备ID)
+  if (p === '/api/pairing-requests' && method === 'GET') {
+    let scope: { kind: 'admin' } | { kind: 'user'; userId: string } | { kind: 'secret'; generatorId: string; code: string };
+    if (ctx.actor?.role === 'admin') scope = { kind: 'admin' };
+    else if (ctx.actor?.role === 'user' && ctx.actor.userId) scope = { kind: 'user', userId: ctx.actor.userId };
+    else {
+      const code = (url.searchParams.get('code') ?? '').trim().toUpperCase();
+      const generatorId = url.searchParams.get('generatorId') ?? '';
+      if (!code || !generatorId) { sendJson(res, 403, { error: '无权查看' }); return true; }
+      scope = { kind: 'secret', generatorId, code };
+    }
+    sendJson(res, 200, svc.listPairingRequests(scope));
+    return true;
+  }
+
+  // 配对确认后换取用户网页会话
+  if (p === '/api/session/pair' && method === 'POST') {
+    const body = await readBody(req, 64 * 1024);
+    let json: Record<string, unknown>;
+    try { json = JSON.parse(body.toString('utf8')); } catch { sendJson(res, 400, { error: '无效的 JSON' }); return true; }
+    const pairingCode = typeof json.code === 'string' ? json.code.trim().toUpperCase() : '';
+    const deviceId = typeof json.deviceId === 'string' ? json.deviceId.trim().slice(0, 64) : '';
+    if (!pairingCode || !deviceId) { sendJson(res, 400, { error: 'code 与 deviceId 不能为空' }); return true; }
+    try {
+      const payload = svc.sessionForPair(pairingCode, deviceId);
+      const token = ctx.sessions.create(payload, cfg.sessionTtlHours);
+      sendJson(res, 200, { token, role: 'user', userId: payload.userId, expiresAt: new Date(Date.now() + cfg.sessionTtlHours * 3600_000).toISOString() });
+    } catch (e) {
+      if (e instanceof PairError) { sendJson(res, e.status, { error: e.message }); return true; }
+      throw e;
+    }
+    return true;
+  }
+
+  // 用户ID:查询(本组/管理端)、改名(本组/管理端,唯一)、列表(管理端)、删除(管理端)
+  const mUser = /^\/api\/users\/([^/]+)$/.exec(p);
+  if (p === '/api/users' && method === 'GET') {
+    if (ctx.actor?.role !== 'admin') { sendJson(res, 401, { error: 'unauthorized' }); return true; }
+    sendJson(res, 200, svc.listUsers());
+    return true;
+  }
+  if (mUser && method === 'GET') {
+    const uid = decodeURIComponent(mUser[1]);
+    if (ctx.actor?.role !== 'admin' && !(ctx.actor?.role === 'user' && ctx.actor.userId === uid)) {
+      sendJson(res, 401, { error: 'unauthorized' }); return true;
+    }
+    const u = svc.getUser(uid);
+    if (!u) { res.statusCode = 404; res.end(); return true; }
+    sendJson(res, 200, u);
+    return true;
+  }
+  if (mUser && method === 'PUT') {
+    const uid = decodeURIComponent(mUser[1]);
+    if (ctx.actor?.role !== 'admin' && !(ctx.actor?.role === 'user' && ctx.actor.userId === uid)) {
+      sendJson(res, 401, { error: 'unauthorized' }); return true;
+    }
+    const body = await readBody(req, 16 * 1024);
+    let name = '';
+    try { name = String((JSON.parse(body.toString('utf8')) as { name?: unknown }).name ?? ''); } catch { /* 忽略 */ }
+    try {
+      svc.renameUser(uid, name);
+      svc.addAudit('user_rename', uid + ' → ' + name.trim(), remoteIp(req));
+      sendNoContent(res);
+    } catch (e) {
+      if (e instanceof PairError) { sendJson(res, e.status, { error: e.message }); return true; }
+      throw e;
+    }
+    return true;
+  }
+  if (mUser && method === 'DELETE') {
+    if (ctx.actor?.role !== 'admin') { sendJson(res, 401, { error: 'unauthorized' }); return true; }
+    try {
+      svc.deleteUser(decodeURIComponent(mUser[1]));
+      svc.addAudit('user_delete', decodeURIComponent(mUser[1]), remoteIp(req));
+      sendNoContent(res);
+    } catch (e) {
+      if (e instanceof PairError) { sendJson(res, e.status, { error: e.message }); return true; }
+      throw e;
+    }
+    return true;
+  }
+
+  // 审计日志(管理端)
+  if (p === '/api/admin/audit' && method === 'GET') {
+    if (ctx.actor?.role !== 'admin') { sendJson(res, 401, { error: 'unauthorized' }); return true; }
+    const limit = Number(url.searchParams.get('limit') ?? 50);
+    sendJson(res, 200, svc.listAudit(Number.isFinite(limit) ? limit : 50));
     return true;
   }
 
@@ -261,7 +431,8 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
   }
   if (p === '/api/activities' && method === 'GET') {
     const limit = Number(url.searchParams.get('limit') ?? 20);
-    sendJson(res, 200, svc.listActivities(Number.isFinite(limit) ? limit : 20));
+    const userId = url.searchParams.get('userId')?.trim() || null;
+    sendJson(res, 200, svc.listActivities(Number.isFinite(limit) ? limit : 20, userId));
     return true;
   }
   if (p === '/api/health' && method === 'GET') {
