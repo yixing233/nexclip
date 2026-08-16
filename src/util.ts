@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomInt as cryptoRandomInt } from 'node:crypto';
 
 /** 与 .NET Convert.ToHexString(SHA256) 一致:大写十六进制 */
 export function sha256Hex(s: string): string {
@@ -25,4 +25,8 @@ export function clamp(n: number, lo: number, hi: number): number {
 
 export function randomHex(bytes: number): string {
   return randomBytes(bytes).toString('hex');
+}
+
+export function randomInt(max: number): number {
+  return cryptoRandomInt(max);
 }

@@ -2,13 +2,30 @@ import { mkdirSync, existsSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join, extname, resolve } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AppConfig } from './config.js';
-import type { EntryRow, DeviceRow, ActivityRow } from './db.js';
-import { dbNow, toIso, sha256Hex, truncate, clamp, randomHex } from './util.js';
+import type { EntryRow, DeviceRow, ActivityRow, PairingCodeRow } from './db.js';
+import { dbNow, toIso, sha256Hex, truncate, clamp, randomHex, randomInt } from './util.js';
 import type { SignalRHub } from './signalr.js';
 
 export interface EntryDto {
   id: number; type: string; text: string | null; imageRef: string | null;
   deviceId: string; deviceName: string | null; createdAt: string;
+}
+
+/** 配对业务错误(status + 中文提示,与设计文档错误码一致) */
+export class PairError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+  }
+}
+
+/** 配对码字符集:大写字母+数字,去掉易混淆的 0/O/1/I */
+const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const CODE_LENGTH = 8;
+
+function generatePairingCode(): string {
+  let s = '';
+  for (let i = 0; i < CODE_LENGTH; i++) s += CODE_ALPHABET[randomInt(CODE_ALPHABET.length)];
+  return s;
 }
 
 export class SyncService {
@@ -53,6 +70,7 @@ export class SyncService {
     return rows.map(d => ({
       id: d.Id, name: d.Name, platform: d.Platform, ip: d.Ip, version: d.Version,
       online: d.LastSeenAt >= threshold,
+      paired: d.Token != null,
       lastSeenAt: toIso(d.LastSeenAt),
     }));
   }
@@ -156,19 +174,78 @@ export class SyncService {
     }
   }
 
-  /** hub 连接登记(与 .NET OnConnected 一致:不存在则建 未知设备/Web,每次记 connect 活动) */
-  registerHubDevice(deviceId: string | null, deviceName: string | null = null): void {
+  /** hub 连接登记(与 .NET OnConnected 一致:不存在则建 未知设备/Web,每次记 connect 活动)。
+   *  携带 platform/version(客户端上报)时更新设备平台信息。 */
+  registerHubDevice(
+    deviceId: string | null, deviceName: string | null = null,
+    platform: string | null = null, version: string | null = null,
+  ): void {
     if (!deviceId) return;
     const d = this.db.prepare('SELECT * FROM "Devices" WHERE "Id" = ?').get(deviceId) as unknown as DeviceRow | null;
     const now = dbNow();
     const name = deviceName?.trim() || d?.Name || '未知设备';
+    const plat = platform?.trim() || d?.Platform || 'Web';
+    const ver = version?.trim() || d?.Version || null;
     if (!d) {
-      this.db.prepare('INSERT INTO "Devices" ("Id","Name","Platform","Ip","Version","LastSeenAt") VALUES (?,?,?,NULL,NULL,?)')
-        .run(deviceId, name, 'Web', now);
+      this.db.prepare('INSERT INTO "Devices" ("Id","Name","Platform","Ip","Version","LastSeenAt") VALUES (?,?,?,NULL,?,?)')
+        .run(deviceId, name, plat, ver, now);
     } else {
-      this.db.prepare('UPDATE "Devices" SET "Name" = ?, "LastSeenAt" = ? WHERE "Id" = ?').run(name, now, deviceId);
+      this.db.prepare('UPDATE "Devices" SET "Name" = ?, "Platform" = ?, "Version" = ?, "LastSeenAt" = ? WHERE "Id" = ?')
+        .run(name, plat, ver, now, deviceId);
     }
     this.addActivity('connect', name, null, now);
+  }
+
+  // ---------- 设备配对 ----------
+
+  /** 生成一次性配对码(默认 10 分钟有效,一码一设备)。
+   *  生成方设备信息(deviceId/deviceName)为自声明,免认证;生成同时登记/更新该设备。 */
+  createPairingCode(deviceId: string | null = null, deviceName: string | null = null): { code: string; expiresAt: string } {
+    let code: string;
+    do {
+      code = generatePairingCode();
+    } while (this.db.prepare('SELECT 1 FROM "PairingCodes" WHERE "Code" = ?').get(code));
+    const expiresAt = new Date(Date.now() + this.cfg.pairingCodeTtlSeconds * 1000)
+      .toISOString().replace('T', ' ').replace('Z', '');
+    this.db.prepare('INSERT INTO "PairingCodes" ("Code","ExpiresAt","UsedAt","UsedBy") VALUES (?,?,NULL,NULL)')
+      .run(code, expiresAt);
+    // 生成方设备登记(自声明,仅用于设备列表展示)
+    if (deviceId) this.touchDevice(deviceId, deviceName || '未知设备', 'Unknown', null, null);
+    return { code, expiresAt: toIso(expiresAt) };
+  }
+
+  /** 作废配对码(管理端主动废弃) */
+  revokePairingCode(code: string): boolean {
+    const r = this.db.prepare('DELETE FROM "PairingCodes" WHERE "Code" = ?').run(code);
+    return r.changes > 0;
+  }
+
+  /** 配对:校验一次性码 → 签发设备专属 Token(服务端只存哈希) */
+  pair(pairingCode: string, deviceId: string, deviceName: string): { deviceId: string; deviceToken: string } {
+    const now = dbNow();
+    const c = this.db.prepare('SELECT * FROM "PairingCodes" WHERE "Code" = ?').get(pairingCode) as unknown as PairingCodeRow | null;
+    if (!c || c.UsedAt !== null || c.ExpiresAt < now) {
+      throw new PairError(400, '配对码无效或已过期');
+    }
+    const existing = this.db.prepare('SELECT * FROM "Devices" WHERE "Id" = ?').get(deviceId) as unknown as DeviceRow | null;
+    if (existing?.Token) {
+      throw new PairError(409, '该设备已配对');
+    }
+    // 标记配对码已用(一码一设备)
+    this.db.prepare('UPDATE "PairingCodes" SET "UsedAt" = ?, "UsedBy" = ? WHERE "Code" = ?').run(now, deviceId, pairingCode);
+    // 签发设备 Token(64 hex),库存 SHA-256
+    const token = randomHex(32);
+    const hashed = sha256Hex(token);
+    if (existing) {
+      this.db.prepare('UPDATE "Devices" SET "Name" = ?, "Token" = ?, "PairedAt" = ?, "LastSeenAt" = ? WHERE "Id" = ?')
+        .run(deviceName || existing.Name, hashed, now, now, deviceId);
+    } else {
+      this.db.prepare('INSERT INTO "Devices" ("Id","Name","Platform","Ip","Version","LastSeenAt","Token","PairedAt") VALUES (?,?,?,NULL,NULL,?,?,?)')
+        .run(deviceId, deviceName || '未知设备', 'Unknown', now, hashed, now);
+    }
+    this.addActivity('connect', deviceName || deviceId, '设备配对成功', now);
+    this.hub.broadcastDevicesChanged();
+    return { deviceId, deviceToken: token };
   }
 
   /** 每 45s 心跳:hub 存续期间的设备保持在线 */
@@ -186,6 +263,7 @@ export class SyncService {
     if (name.trim()) {
       this.db.prepare('UPDATE "Devices" SET "Name" = ? WHERE "Id" = ?').run(name.trim(), id);
     }
+    this.hub.broadcastDevicesChanged();
     return true;
   }
 
@@ -194,6 +272,7 @@ export class SyncService {
     if (!d) return false;
     this.db.prepare('DELETE FROM "Devices" WHERE "Id" = ?').run(id);
     this.addActivity('delete', d.Name, '移除了设备', dbNow());
+    this.hub.broadcastDevicesChanged();
     return true;
   }
 

@@ -3,12 +3,16 @@ import { resolve, join } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import type { AppConfig } from './config.js';
 import type { SyncService } from './service.js';
+import { PairError } from './service.js';
+import type { SessionStore } from './sessions.js';
 import { parseMultipart } from './multipart.js';
 import { clamp, randomHex } from './util.js';
+import { extractToken } from './auth.js';
 
 export interface Ctx {
   cfg: AppConfig;
   svc: SyncService;
+  sessions: SessionStore;
   latency: { add(us: number): void; avgMs: number; last12: number[] };
   url: URL;
   req: IncomingMessage;
@@ -55,6 +59,28 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
   const { url, req, res, svc, cfg } = ctx;
   const p = url.pathname;
   const method = req.method ?? 'GET';
+
+  // ============ 管理台账密登录 ============
+  if (p === '/api/login' && method === 'POST') {
+    const body = await readBody(req, 16 * 1024);
+    let json: Record<string, unknown>;
+    try { json = JSON.parse(body.toString('utf8')); } catch { sendJson(res, 400, { error: '无效的 JSON' }); return true; }
+    const username = typeof json.username === 'string' ? json.username.trim() : '';
+    const password = typeof json.password === 'string' ? json.password : '';
+    if (username === cfg.adminUsername && password === cfg.adminPassword) {
+      const token = ctx.sessions.create(cfg.sessionTtlHours);
+      sendJson(res, 200, { token, expiresAt: new Date(Date.now() + cfg.sessionTtlHours * 3600_000).toISOString() });
+    } else {
+      sendJson(res, 401, { error: '用户名或密码错误' });
+    }
+    return true;
+  }
+  if (p === '/api/logout' && method === 'POST') {
+    const token = extractToken(req);
+    if (token) ctx.sessions.revoke(token);
+    sendNoContent(res);
+    return true;
+  }
 
   // ============ /api/clipboard ============
   if (p === '/api/clipboard' && method === 'GET') {
@@ -187,6 +213,47 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     }
   }
 
+  // ============ 设备配对(设计文档 §3.2) ============
+  // 生成配对码:免认证;可选 body { deviceId, deviceName } 用于登记生成方设备(自声明)
+  if (p === '/api/pairing-codes' && method === 'POST') {
+    let deviceId: string | null = null;
+    let deviceName: string | null = null;
+    const body = await readBody(req, 64 * 1024);
+    if (body.length > 0) {
+      try {
+        const j = JSON.parse(body.toString('utf8')) as { deviceId?: unknown; deviceName?: unknown };
+        deviceId = typeof j.deviceId === 'string' && j.deviceId ? j.deviceId.trim() : null;
+        deviceName = typeof j.deviceName === 'string' && j.deviceName ? j.deviceName.trim() : null;
+      } catch { /* 无 body 或非 JSON:生成方信息可缺省 */ }
+    }
+    sendJson(res, 200, svc.createPairingCode(deviceId, deviceName));
+    return true;
+  }
+  const mPairRevoke = /^\/api\/pairing-codes\/([^/]+)$/.exec(p);
+  if (mPairRevoke && method === 'DELETE') {
+    if (!svc.revokePairingCode(decodeURIComponent(mPairRevoke[1]))) {
+      res.statusCode = 404; res.end(); return true;
+    }
+    sendNoContent(res);
+    return true;
+  }
+  if (p === '/api/pair' && method === 'POST') {
+    const body = await readBody(req, 64 * 1024);
+    let json: Record<string, unknown>;
+    try { json = JSON.parse(body.toString('utf8')); } catch { sendJson(res, 400, { error: '无效的 JSON' }); return true; }
+    const pairingCode = typeof json.pairingCode === 'string' ? json.pairingCode.trim().toUpperCase() : '';
+    const deviceId = typeof json.deviceId === 'string' ? json.deviceId.trim() : '';
+    const deviceName = typeof json.deviceName === 'string' ? json.deviceName.trim() : '';
+    if (!pairingCode || !deviceId) { sendJson(res, 400, { error: 'pairingCode 与 deviceId 不能为空' }); return true; }
+    try {
+      sendJson(res, 200, svc.pair(pairingCode, deviceId, deviceName));
+    } catch (e) {
+      if (e instanceof PairError) { sendJson(res, e.status, { error: e.message }); return true; }
+      throw e;
+    }
+    return true;
+  }
+
   // ============ /api/stats /api/activities /api/health ============
   if (p === '/api/stats' && method === 'GET') {
     sendJson(res, 200, svc.stats({ avgMs: ctx.latency.avgMs, last12: ctx.latency.last12 }));
@@ -236,9 +303,25 @@ function toIsoStr(dbValue: string): string {
   return dbValue.replace(' ', 'T').replace('Z', '') + 'Z';
 }
 
+/**
+ * 规范化客户端 IP:
+ * - 优先 x-forwarded-for(反向代理场景,取最左的真实客户端)
+ * - 去掉 IPv4-mapped 前缀(::ffff:192.168.0.1 → 192.168.0.1)
+ * - 本机访问显示为 127.0.0.1(而非 ::1)
+ */
 function remoteIp(req: IncomingMessage): string | null {
   const fwd = req.headers['x-forwarded-for'];
-  if (typeof fwd === 'string' && fwd) return fwd.split(',')[0].trim();
-  const sock = req.socket;
-  return sock?.remoteAddress ?? null;
+  let ip: string | null = null;
+  if (typeof fwd === 'string' && fwd.trim()) {
+    ip = fwd.split(',')[0].trim();
+  } else {
+    ip = req.socket.remoteAddress ?? null;
+  }
+  if (!ip) return null;
+  // IPv4-mapped IPv6 → 纯 IPv4(::ffff:a.b.c.d)
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(ip);
+  if (mapped) return mapped[1];
+  // 本机回环统一显示
+  if (ip === '::1') return '127.0.0.1';
+  return ip;
 }

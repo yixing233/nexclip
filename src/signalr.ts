@@ -28,7 +28,7 @@ export class SignalRHub {
   private pingTimer: NodeJS.Timeout | null = null;
 
   /** 连接登记回调(设备 upsert + connect 活动日志),由 server 注入 */
-  onConnected: ((deviceId: string | null, deviceName: string | null) => void) | null = null;
+  onConnected: ((deviceId: string | null, deviceName: string | null, platform: string | null, version: string | null) => void) | null = null;
 
   /** negotiate 处理:返回响应体或 401 标记 */
   negotiate(url: URL): { status: number; body: unknown } {
@@ -82,6 +82,8 @@ export class SignalRHub {
       const token = url.searchParams.get('id') ?? '';
       const deviceId = url.searchParams.get('deviceId');
       const deviceName = url.searchParams.get('deviceName');
+      const platform = url.searchParams.get('platform');
+      const version = url.searchParams.get('version');
       if (!token) {
         ws.close(1008, 'Missing connection id');
         return;
@@ -96,7 +98,7 @@ export class SignalRHub {
       ws.on('message', (d: Buffer) => this.onMessage(conn, d));
       ws.on('close', () => { this.conns.delete(token); });
       ws.on('error', () => { this.conns.delete(token); });
-      this.onConnected?.(deviceId, deviceName);
+      this.onConnected?.(deviceId, deviceName, platform, version);
     };
     ws.once('message', onFirst);
     ws.on('error', () => { /* 忽略客户端错误 */ });
@@ -147,6 +149,12 @@ export class SignalRHub {
   /** 全员广播 ClipboardCleared */
   broadcastCleared(): void {
     const msg = { type: 1, target: 'ClipboardCleared', arguments: [] };
+    for (const conn of this.conns.values()) this.sendJson(conn.ws, msg);
+  }
+
+  /** 全员广播设备列表变更(配对/重命名/移除),各端收到后自行刷新列表 */
+  broadcastDevicesChanged(): void {
+    const msg = { type: 1, target: 'DevicesChanged', arguments: [] };
     for (const conn of this.conns.values()) this.sendJson(conn.ws, msg);
   }
 

@@ -6,7 +6,11 @@ export interface EntryRow {
   ContentHash: string; DeviceId: string; DeviceName: string | null; CreatedAt: string;
 }
 export interface DeviceRow {
-  Id: string; Name: string; Platform: string; Ip: string | null; Version: string | null; LastSeenAt: string;
+  Id: string; Name: string; Platform: string; Ip: string | null; Version: string | null;
+  LastSeenAt: string; Token: string | null; PairedAt: string | null;
+}
+export interface PairingCodeRow {
+  Code: string; ExpiresAt: string; UsedAt: string | null; UsedBy: string | null;
 }
 export interface ActivityRow {
   Id: number; Action: string; DeviceName: string; Content: string | null; CreatedAt: string;
@@ -45,6 +49,16 @@ CREATE TABLE IF NOT EXISTS "Activities" (
   "CreatedAt" TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS "IX_Activities_CreatedAt" ON "Activities" ("CreatedAt");
+CREATE TABLE IF NOT EXISTS "PairingCodes" (
+  "Code" TEXT NOT NULL PRIMARY KEY,
+  "ExpiresAt" TEXT NOT NULL,
+  "UsedAt" TEXT NULL,
+  "UsedBy" TEXT NULL
+);
 `);
+  // Devices 增量加列(老库兼容):设备专属 Token 哈希 + 配对时间
+  const devCols = new Set((db.prepare('PRAGMA table_info("Devices")').all() as { name: string }[]).map(c => c.name));
+  if (!devCols.has('Token')) db.exec('ALTER TABLE "Devices" ADD COLUMN "Token" TEXT NULL');
+  if (!devCols.has('PairedAt')) db.exec('ALTER TABLE "Devices" ADD COLUMN "PairedAt" TEXT NULL');
   return db;
 }

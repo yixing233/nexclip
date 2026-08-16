@@ -4,18 +4,41 @@ import { fileURLToPath } from 'node:url';
 
 export interface AppConfig {
   port: number;
-  authToken: string;
   maxHistoryCount: number;
   databasePath: string;
   imageStoragePath: string;
   maxImageSizeBytes: number;
   onlineThresholdSeconds: number;
   webDist: string | null;
+  pairingCodeTtlSeconds: number;
+  adminUsername: string;
+  adminPassword: string;
+  sessionTtlHours: number;
   startedAt: Date;
 }
 
 const here = dirname(fileURLToPath(import.meta.url)); // dist/ 或 src/(tsx)
 const rootDir = resolve(here, '..');
+
+/** 极简 .env 解析:KEY=VALUE,# 注释,可选引号包裹 */
+function loadDotEnv(file: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!existsSync(file)) return out;
+  for (const raw of readFileSync(file, 'utf8').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    let val = line.slice(eq + 1).trim();
+    if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
+    if (val.startsWith("'") && val.endsWith("'")) val = val.slice(1, -1);
+    out[key] = val;
+  }
+  return out;
+}
+
+const dotEnv = loadDotEnv(join(rootDir, '.env'));
 
 export function loadConfig(): AppConfig {
   const cfgPath = join(rootDir, 'config.json');
@@ -30,13 +53,16 @@ export function loadConfig(): AppConfig {
   const env = (k: string, d: string) => process.env[k] ?? d;
   const cfg: AppConfig = {
     port: num(env('SC_PORT', String(file.port ?? 5033)), 5033),
-    authToken: env('SC_AUTH_TOKEN', String(file.authToken ?? 'change-me')),
     maxHistoryCount: num(env('SC_MAX_HISTORY', String(file.maxHistoryCount ?? 1000)), 1000),
     databasePath: env('SC_DB_PATH', String(file.databasePath ?? 'data/syncclipboard.db')),
     imageStoragePath: env('SC_IMAGE_PATH', String(file.imageStoragePath ?? 'data/images')),
     maxImageSizeBytes: num(env('SC_MAX_IMAGE_BYTES', String(file.maxImageSizeBytes ?? 10 * 1024 * 1024)), 10 * 1024 * 1024),
     onlineThresholdSeconds: num(env('SC_ONLINE_THRESHOLD_SECONDS', String(file.onlineThresholdSeconds ?? 120)), 120),
     webDist: file.webDist == null ? '../web/dist' : String(file.webDist),
+    pairingCodeTtlSeconds: num(env('SC_PAIRING_TTL_SECONDS', String(file.pairingCodeTtlSeconds ?? 600)), 600),
+    adminUsername: env('ADMIN_USERNAME', dotEnv.ADMIN_USERNAME ?? 'syncadmin'),
+    adminPassword: env('ADMIN_PASSWORD', dotEnv.ADMIN_PASSWORD ?? ''),
+    sessionTtlHours: num(env('SESSION_TTL_HOURS', dotEnv.SESSION_TTL_HOURS ?? '24'), 24),
     startedAt: new Date(),
   };
   cfg.databasePath = resolve(rootDir, cfg.databasePath);

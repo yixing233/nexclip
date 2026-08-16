@@ -3,7 +3,8 @@ import { existsSync } from 'node:fs';
 import { loadConfig } from './config.js';
 import { openDb } from './db.js';
 import { LatencyTracker } from './latency.js';
-import { needsAuth, checkAuth } from './auth.js';
+import { needsAuth, checkSessionToken } from './auth.js';
+import { SessionStore } from './sessions.js';
 import { SignalRHub } from './signalr.js';
 import { SyncService } from './service.js';
 import { handleApi, sendJson, type Ctx } from './controllers.js';
@@ -12,10 +13,11 @@ import { serveStatic } from './static.js';
 const cfg = loadConfig();
 const db = openDb(cfg);
 const hub = new SignalRHub();
+const sessions = new SessionStore();
 const svc = new SyncService(db, cfg, hub);
 const latency = new LatencyTracker();
 
-hub.onConnected = (deviceId) => svc.registerHubDevice(deviceId);
+hub.onConnected = (deviceId, deviceName, platform, version) => svc.registerHubDevice(deviceId, deviceName, platform, version);
 
 // 心跳:45s 刷新在线设备 LastSeenAt(与 .NET HubHeartbeatService 一致)
 const heartbeatTimer = setInterval(() => {
@@ -38,8 +40,8 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
     return;
   }
 
-  // 鉴权
-  if (needsAuth(p) && !checkAuth(req, cfg)) {
+  // 鉴权:仅管理台接口需账密登录会话;设备同步接口免认证(配对码即接入凭据)
+  if (needsAuth(req.method ?? 'GET', p) && !checkSessionToken(req, sessions)) {
     res.statusCode = 401;
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.end(JSON.stringify({ error: 'unauthorized' }));
@@ -54,7 +56,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   }
 
   // API / 旧协议
-  const ctx: Ctx = { cfg, svc, latency: latency as unknown as Ctx['latency'], url, req, res };
+  const ctx: Ctx = { cfg, svc, sessions, latency: latency as unknown as Ctx['latency'], url, req, res };
   const handled = await handleApi(ctx).catch((e) => {
     if (e.message === 'body-too-large') {
       res.statusCode = 413;
@@ -87,7 +89,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 hub.attach(server);
 
 server.listen(cfg.port, () => {
-  console.log('[SyncClipboard Node Server] 端口 ' + cfg.port + ', 令牌已配置: ' + (cfg.authToken ? '是' : '否'));
+  console.log('[SyncClipboard Node Server] 端口 ' + cfg.port + ', 鉴权: 管理台账密 + 设备令牌(配对)');
   console.log('[SyncClipboard Node Server] 数据库: ' + cfg.databasePath);
   console.log('[SyncClipboard Node Server] 静态托管: ' + (cfg.webDist && existsSync(cfg.webDist) ? cfg.webDist : '(未找到 web/dist)'));
 });
