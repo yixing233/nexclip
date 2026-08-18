@@ -29,14 +29,16 @@ data class DeviceInfo(
     val ip: String?,
     val version: String?,
     val online: Boolean,
+    val userId: String?,
+    val bound: Boolean,
     val lastSeenAt: String,
 )
 
-/** 配对结果(POST /api/pair) */
-data class PairResult(val deviceId: String, val deviceToken: String)
+/** 配对结果(POST /api/pair → { status: 'pending' });无令牌,配对仅登记 */
+data class PairStatus(val status: String)
 
-/** 配对码(POST /api/pairing-codes) */
-data class PairingCode(val code: String, val expiresAt: String)
+/** 配对码(POST /api/pairing-codes → { code, expiresAt, userId });未绑定设备生成时自动创建用户ID */
+data class PairingCode(val code: String, val expiresAt: String, val userId: String)
 
 class ApiException(message: String, val statusCode: Int? = null) : Exception(message)
 
@@ -60,21 +62,46 @@ class SyncApi(private val serverUrl: String) {
         createdAt = o.optString("createdAt"),
     )
 
-    private fun execute(req: Request): okhttp3.Response {
+    private fun execute(req: Request): okhttp3.Response = try {
         val resp = client.newCall(req).execute()
-        if (resp.code == 401) throw ApiException("令牌无效(401)", 401)
+        if (resp.code == 401) throw ApiException("未授权(401),请先配对或登录", 401)
         if (!resp.isSuccessful) {
             // 优先透传服务端 { error: "..." } 消息(如"配对码无效或已过期")
             val body = resp.body?.string()
             val msg = try {
                 JSONObject(body ?: "{}").optString("error")
-                    .ifBlank { "服务器返回 " + resp.code + " " + resp.message }
+                    .ifBlank { httpStatusText(resp.code) }
             } catch (_: Exception) {
-                "服务器返回 " + resp.code + " " + resp.message
+                httpStatusText(resp.code)
             }
             throw ApiException(msg, resp.code)
         }
-        return resp
+        resp
+    } catch (e: java.io.IOException) {
+        throw ApiException(networkErrorText(e))
+    }
+
+    /** HTTP 状态码 → 中文提示 */
+    private fun httpStatusText(code: Int): String = when (code) {
+        400 -> "请求无效(400),请检查输入"
+        401 -> "未授权(401),请先配对或登录"
+        403 -> "没有权限(403)"
+        404 -> "接口不存在(404),请检查服务器版本"
+        409 -> "请求冲突(409)"
+        429 -> "操作过于频繁(429),请稍后再试"
+        500 -> "服务器内部错误(500)"
+        502 -> "网关错误(502)"
+        503 -> "服务暂不可用(503)"
+        else -> "服务器返回错误(" + code + ")"
+    }
+
+    /** 网络异常 → 中文提示(不暴露英文底层消息) */
+    private fun networkErrorText(e: java.io.IOException): String = when (e) {
+        is java.net.UnknownHostException -> "无法连接服务器:地址无法解析,请检查服务器地址"
+        is java.net.ConnectException -> "无法连接服务器:连接被拒绝,请确认服务端已启动"
+        is java.net.SocketTimeoutException -> "连接超时,请检查网络或服务器地址"
+        is javax.net.ssl.SSLException -> "安全连接失败,请检查服务器是否使用 HTTPS"
+        else -> "网络错误,无法连接服务器"
     }
 
     /** GET /api/clipboard → 当前条目或 null(204) */
@@ -132,6 +159,8 @@ class SyncApi(private val serverUrl: String) {
                     ip = normalizeIp(if (o.isNull("ip")) null else o.optString("ip")),
                     version = if (o.isNull("version")) null else o.optString("version"),
                     online = o.optBoolean("online"),
+                    userId = if (o.isNull("userId")) null else o.optString("userId"),
+                    bound = o.optBoolean("bound", false),
                     lastSeenAt = o.optString("lastSeenAt"),
                 )
             }
@@ -155,6 +184,7 @@ class SyncApi(private val serverUrl: String) {
             return PairingCode(
                 code = o.optString("code"),
                 expiresAt = o.optString("expiresAt"),
+                userId = o.optString("userId"),
             )
         }
     }
@@ -165,10 +195,11 @@ class SyncApi(private val serverUrl: String) {
         execute(req).use { }
     }
 
-    /** POST /api/pair → 用一次性配对码换取设备专属令牌(配对接口无需认证) */
-    fun pair(pairingCode: String, deviceId: String, deviceName: String): PairResult {
+    /** POST /api/pair → 发起配对(免认证):配对码 + 用户ID → 挂起待确认 */
+    fun pair(pairingCode: String, userId: String, deviceId: String, deviceName: String): PairStatus {
         val json = JSONObject().apply {
             put("pairingCode", pairingCode)
+            put("userId", userId)
             put("deviceId", deviceId)
             put("deviceName", deviceName)
         }.toString()
@@ -179,10 +210,21 @@ class SyncApi(private val serverUrl: String) {
         val resp = execute(req)
         resp.use {
             val o = JSONObject(it.body?.string() ?: "{}")
-            return PairResult(
-                deviceId = o.optString("deviceId", deviceId),
-                deviceToken = o.optString("deviceToken"),
-            )
+            return PairStatus(status = o.optString("status", "pending"))
+        }
+    }
+
+    /** GET /api/pair/status?code&deviceId → 轮询配对结果:pending/approved/rejected/expired */
+    fun pairStatus(pairingCode: String, deviceId: String): String {
+        val req = builder(
+            "GET",
+            "/api/pair/status?code=" + java.net.URLEncoder.encode(pairingCode, "UTF-8") +
+                "&deviceId=" + java.net.URLEncoder.encode(deviceId, "UTF-8")
+        ).build()
+        val resp = execute(req)
+        resp.use {
+            val o = JSONObject(it.body?.string() ?: "{}")
+            return o.optString("status", "pending")
         }
     }
 
@@ -212,7 +254,7 @@ class SyncApi(private val serverUrl: String) {
         val cur = getCurrent()
         true to (cur?.let { "连接成功,当前条目来自 " + (it.deviceName ?: "未知设备") } ?: "连接成功(服务器暂无内容)")
     } catch (e: ApiException) {
-        false to (if (e.statusCode == 401) "令牌无效(401)" else e.message ?: "连接失败")
+        false to (if (e.statusCode == 401) "未授权(401)" else e.message ?: "连接失败")
     } catch (e: Exception) {
         false to "连接失败: " + (e.message ?: e.javaClass.simpleName)
     }

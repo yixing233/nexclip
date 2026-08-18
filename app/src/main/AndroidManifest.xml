@@ -11,11 +11,12 @@
     <application
         android:name=".SyncApp"
         android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:description="@string/module_description"
         android:supportsRtl="true"
         android:theme="@style/Theme.Miuix"
-        android:usesCleartextTraffic="true"
-        tools:ignore="MissingApplicationIcon">
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"

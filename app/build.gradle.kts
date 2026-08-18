@@ -12,7 +12,7 @@ android {
         applicationId = "clip.yixing.sync"
         minSdk = 33
         targetSdk = 36
-        versionCode = 1
+        versionCode = 2
         versionName = "0.1.0"
     }
 
@@ -63,4 +63,6 @@ dependencies {
     implementation(libs.miuix.preference)
     implementation(libs.miuix.blur)
     implementation(libs.navigationevent.compose)
+    implementation(libs.tabler.icons.outline)
+    implementation(libs.tabler.icons.filled)
 }
