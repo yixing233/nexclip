@@ -13,9 +13,11 @@ object SyncSettings {
     const val KEY_SERVER_URL = "server_url"
     const val KEY_PAIRED = "paired"
     const val KEY_DEVICE_ID = "device_id"
+    const val KEY_DEVICE_TOKEN = "device_token"
     const val KEY_DEVICE_NAME = "device_name"
     const val KEY_BOOT_START_ENABLED = "boot_start_enabled"
     const val KEY_FLOATING_BOTTOM_BAR = "floating_bottom_bar"
+    const val KEY_NOTIFICATION_STYLE = "notification_style"
     const val KEY_MAX_HISTORY = "max_history"
     const val KEY_SEARCH_HISTORY = "search_history"
 
@@ -25,6 +27,33 @@ object SyncSettings {
     const val DEFAULT_MAX_HISTORY = 50
     val MAX_HISTORY_OPTIONS = intArrayOf(20, 50, 100, 200)
 
+    /** 检测当前系统是否为小米澎湃OS (HyperOS) */
+    fun isHyperOs(): Boolean {
+        val osVersion = getSystemProp("ro.mi.os.version.name")
+        val miuiVersion = getSystemProp("ro.miui.ui.version.name")
+        return osVersion.isNotBlank() || miuiVersion.isNotBlank()
+    }
+
+    fun getSystemProp(key: String, defaultValue: String = ""): String {
+        return try {
+            val clz = Class.forName("android.os.SystemProperties")
+            val getMethod = clz.getMethod("get", String::class.java, String::class.java)
+            getMethod.invoke(null, key, defaultValue) as String
+        } catch (_: Exception) {
+            defaultValue
+        }
+    }
+
+    fun notificationStyle(context: Context): NotificationStyle {
+        val defaultKey = if (isHyperOs()) NotificationStyle.HYPEROS_ISLAND.key else NotificationStyle.ANDROID_LIVE.key
+        val key = prefs(context).getString(KEY_NOTIFICATION_STYLE, defaultKey)
+        return NotificationStyle.fromKey(key)
+    }
+
+    fun setNotificationStyle(context: Context, style: NotificationStyle) {
+        prefs(context).edit().putString(KEY_NOTIFICATION_STYLE, style.key).apply()
+    }
+
     fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -32,12 +61,26 @@ object SyncSettings {
     fun serverUrl(context: Context): String =
         prefs(context).getString(KEY_SERVER_URL, "http://192.168.0.102:5033") ?: "http://192.168.0.102:5033"
 
-    /** 是否已完成配对(配对码配对;设备同步免令牌,配对仅用于登记) */
+    /** 是否已完成配对且拥有有效设备凭证。 */
     fun isPaired(context: Context): Boolean =
         prefs(context).getBoolean(KEY_PAIRED, false)
 
     fun setPaired(context: Context, paired: Boolean) {
         prefs(context).edit().putBoolean(KEY_PAIRED, paired).apply()
+    }
+
+    fun deviceToken(context: Context): String =
+        prefs(context).getString(KEY_DEVICE_TOKEN, "") ?: ""
+
+    fun setDeviceToken(context: Context, token: String?) {
+        val edit = prefs(context).edit()
+        if (token.isNullOrBlank()) edit.remove(KEY_DEVICE_TOKEN) else edit.putString(KEY_DEVICE_TOKEN, token)
+        edit.apply()
+    }
+
+    /** 服务端撤销设备后统一清理本地凭证，防止后台服务继续重连。 */
+    fun clearPairing(context: Context) {
+        prefs(context).edit().putBoolean(KEY_PAIRED, false).remove(KEY_DEVICE_TOKEN).apply()
     }
 
     fun ensureDeviceId(context: Context): String {
@@ -139,5 +182,22 @@ object SyncSettings {
 
     fun clearSearchHistory(context: Context) {
         prefs(context).edit().remove(KEY_SEARCH_HISTORY).apply()
+    }
+}
+
+/**
+ * 通知展示样式枚举:
+ * - STANDARD: 普通通知(标准服务通知与常规提示)
+ * - ANDROID_LIVE: 安卓实时通知(高优先级 Live Activity 实时卡片 + 快捷操作按钮)
+ * - HYPEROS_ISLAND: HyperOS 超级岛(小米澎湃OS 焦点通知 / 灵动胶囊 / 超级岛交互)
+ */
+enum class NotificationStyle(val key: String, val label: String, val summary: String) {
+    STANDARD("standard", "普通通知", "传统常驻服务通知与标准消息提示"),
+    ANDROID_LIVE("android_live", "安卓实时通知", "高优先级实时活动卡片，展示最新内容预览与快捷操作"),
+    HYPEROS_ISLAND("hyperos_island", "HyperOS 超级岛", "小米澎湃OS 焦点通知与灵动胶囊，支持顶部小岛与大岛交互");
+
+    companion object {
+        fun fromKey(key: String?): NotificationStyle =
+            entries.find { it.key == key } ?: (if (SyncSettings.isHyperOs()) HYPEROS_ISLAND else ANDROID_LIVE)
     }
 }

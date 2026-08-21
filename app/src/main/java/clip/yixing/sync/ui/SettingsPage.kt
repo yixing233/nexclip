@@ -72,9 +72,12 @@ import clip.yixing.sync.StatusRow
 import clip.yixing.sync.data.DeviceInfo
 import clip.yixing.sync.showAppSnack
 import clip.yixing.sync.data.PairingCode
+import clip.yixing.sync.data.PairingRequestItem
 import clip.yixing.sync.data.SyncApi
 import clip.yixing.sync.service.ClipboardMonitorService
+import clip.yixing.sync.util.NotificationStyle
 import clip.yixing.sync.util.SyncSettings
+import kotlinx.coroutines.isActive
 import top.yukonga.miuix.kmp.basic.ScrollBehavior
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
@@ -161,6 +164,8 @@ internal fun SettingsPage(
     var showResetIdDialog by remember { mutableStateOf(false) }
 
     var bootStart by remember { mutableStateOf(SyncSettings.bootStartEnabled(context)) }
+    var notificationStyle by remember { mutableStateOf(SyncSettings.notificationStyle(context)) }
+    var showNotificationStyleDialog by remember { mutableStateOf(false) }
     val historyOptions = SyncSettings.MAX_HISTORY_OPTIONS.toList()
     val historyLabels = historyOptions.map { "$it 条" }
     var historyIndex by remember {
@@ -181,6 +186,11 @@ internal fun SettingsPage(
     var generatingCode by remember { mutableStateOf(false) }
     var generatedCode by remember { mutableStateOf<PairingCode?>(null) }
     var showCodeSheet by remember { mutableStateOf(false) }
+    var pendingPairRequest by remember { mutableStateOf<PairingRequestItem?>(null) }
+    var deleteTargetDevice by remember { mutableStateOf<DeviceInfo?>(null) }
+    var isPairWaiting by remember { mutableStateOf(false) }
+    var pairWaitingCountdown by remember { mutableIntStateOf(120) }
+    var pairWaitingJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     var devices by remember { mutableStateOf<List<DeviceInfo>>(emptyList()) }
     var devicesLoading by remember { mutableStateOf(true) }
@@ -189,6 +199,31 @@ internal fun SettingsPage(
     var devicesManual by remember { mutableStateOf(false) }
     val isServerConnected by ClipboardMonitorService.isServerConnected.collectAsState()
     var autoRefreshUntil by remember { mutableLongStateOf(0L) }
+
+    // 轮询待确认配对请求 (当生成配对码弹层处于开启状态时)
+    LaunchedEffect(showCodeSheet, generatedCode) {
+        val code = generatedCode
+        if (!showCodeSheet || code == null) {
+            pendingPairRequest = null
+            return@LaunchedEffect
+        }
+        val serverUrl = SyncSettings.serverUrl(context)
+        val genDeviceId = SyncSettings.ensureDeviceId(context)
+        if (serverUrl.isBlank()) return@LaunchedEffect
+
+        val api = SyncApi(serverUrl, genDeviceId, SyncSettings.deviceToken(context))
+        while (showCodeSheet && generatedCode != null) {
+            try {
+                val reqs = withContext(Dispatchers.IO) {
+                    api.listPairingRequests(code.code, genDeviceId)
+                }
+                val pending = reqs.firstOrNull { it.status.equals("pending", ignoreCase = true) }
+                pendingPairRequest = pending
+            } catch (_: Exception) {
+            }
+            delay(1500)
+        }
+    }
 
     // ① 设备列表基础加载
     LaunchedEffect(devicesReload) {
@@ -200,7 +235,7 @@ internal fun SettingsPage(
         devicesLoading = devices.isEmpty()
         devicesError = null
         try {
-            val api = SyncApi(serverUrl)
+            val api = SyncApi(serverUrl, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
             devices = withContext(Dispatchers.IO) { api.getDevices() }
         } catch (e: Exception) {
             devicesError = e.message ?: "加载失败"
@@ -227,7 +262,7 @@ internal fun SettingsPage(
                 val serverUrl = SyncSettings.serverUrl(context)
                 if (serverUrl.isNotBlank()) {
                     try {
-                        val api = SyncApi(serverUrl)
+                        val api = SyncApi(serverUrl, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
                         val list = withContext(Dispatchers.IO) { api.getDevices() }
                         devices = list
                     } catch (_: Exception) {
@@ -249,7 +284,7 @@ internal fun SettingsPage(
                 val serverUrl = SyncSettings.serverUrl(context)
                 if (serverUrl.isNotBlank()) {
                     try {
-                        val api = SyncApi(serverUrl)
+                        val api = SyncApi(serverUrl, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
                         val list = withContext(Dispatchers.IO) { api.getDevices() }
                         devices = list
                     } catch (_: Exception) {
@@ -570,6 +605,33 @@ internal fun SettingsPage(
                                 title = "悬浮底栏",
                                 summary = "使用液态玻璃悬浮导航栏"
                             )
+                            // 通知展示样式 (普通通知 / 实时通知 / HyperOS 超级岛)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showNotificationStyleDialog = true }
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "通知展示样式",
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        text = notificationStyle.label + " · " + notificationStyle.summary,
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                        fontSize = 13.sp
+                                    )
+                                }
+                                Icon(
+                                    imageVector = MiuixIcons.Normal.ChevronForward,
+                                    contentDescription = "选择样式",
+                                    tint = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.45f)
+                                )
+                            }
                             OverlayDropdownPreference(
                                 items = historyLabels,
                                 selectedIndex = historyIndex,
@@ -639,7 +701,7 @@ internal fun SettingsPage(
                                             return@Button
                                         }
                                         testing = true
-                                        val api = SyncApi(url)
+                                        val api = SyncApi(url, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
                                         scope.launch {
                                             val (ok, msg) = withContext(Dispatchers.IO) {
                                                 api.testConnection()
@@ -676,15 +738,19 @@ internal fun SettingsPage(
                                         return@Button
                                     }
                                     generatingCode = true
-                                    val api = SyncApi(url)
                                     val genDeviceId = SyncSettings.ensureDeviceId(context)
                                     val genDeviceName = SyncSettings.deviceName(context)
+                                    val api = SyncApi(url, genDeviceId, SyncSettings.deviceToken(context))
                                     scope.launch {
                                         val r = withContext(Dispatchers.IO) {
                                             runCatching { api.createPairingCode(genDeviceId, genDeviceName) }
                                         }
                                         generatingCode = false
                                         r.onSuccess {
+                                            it.deviceToken?.let { token ->
+                                                SyncSettings.setDeviceToken(context, token)
+                                                SyncSettings.setPaired(context, true)
+                                            }
                                             generatedCode = it
                                             showCodeSheet = true
                                             snackbarHostState.showAppSnack("配对码已生成", SnackType.Success)
@@ -730,9 +796,10 @@ internal fun SettingsPage(
                                 Spacer(Modifier.width(6.dp))
                                 IconButton(onClick = { devicesManual = true; devicesReload++ }) {
                                     Icon(
-                                        imageVector = MiuixIcons.Normal.Refresh,
+                                        imageVector = LucideIcons.RefreshCw,
                                         contentDescription = "刷新",
-                                        tint = MiuixTheme.colorScheme.onBackgroundVariant
+                                        tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                                        modifier = Modifier.size(16.dp)
                                     )
                                 }
                             },
@@ -745,9 +812,24 @@ internal fun SettingsPage(
                                     color = MiuixTheme.colorScheme.onBackgroundVariant
                                 )
                             }
-                            devices.forEach { device ->
-                                Spacer(Modifier.height(8.dp))
-                                DeviceRow(device = device, isSelf = device.id == selfDeviceId)
+                            val sortedDevices = remember(devices, selfDeviceId) {
+                                devices.sortedWith(
+                                    compareByDescending<DeviceInfo> { it.id == selfDeviceId }
+                                        .thenByDescending { it.online }
+                                        .thenByDescending { it.lastSeenAt }
+                                )
+                            }
+                            sortedDevices.forEach { device ->
+                                Spacer(Modifier.height(10.dp))
+                                DeviceCard(
+                                    device = device,
+                                    isSelf = device.id == selfDeviceId,
+                                    onDeleteClick = { deleteTargetDevice = it },
+                                    onCopyId = { id ->
+                                        copyPairingCode(context, id)
+                                        scope.launch { snackbarHostState.showAppSnack("设备 ID 已复制", SnackType.Success) }
+                                    }
+                                )
                             }
                         }
                     }
@@ -1205,38 +1287,61 @@ internal fun SettingsPage(
                     }
                     pairing = true
                     showPairDialog = false
-                    val api = SyncApi(url)
+                    isPairWaiting = true
+                    pairWaitingCountdown = 120
                     val deviceId = SyncSettings.ensureDeviceId(context)
                     val genDevName = SyncSettings.deviceName(context)
+                    val api = SyncApi(url, deviceId, SyncSettings.deviceToken(context))
                     val uid = dialogUidState.text.toString().trim()
-                    scope.launch {
+                    pairWaitingJob?.cancel()
+                    pairWaitingJob = scope.launch {
                         val result = withContext(Dispatchers.IO) {
                             runCatching { api.pair(code, uid, deviceId, genDevName) }
                         }
                         result.onFailure { e ->
                             pairing = false
+                            isPairWaiting = false
                             snackbarHostState.showAppSnack(e.message ?: "配对失败", SnackType.Error)
                             return@launch
                         }
+                        val issuedToken = result.getOrNull()?.deviceToken
+                        if (issuedToken.isNullOrBlank()) {
+                            pairing = false
+                            isPairWaiting = false
+                            snackbarHostState.showAppSnack("服务器未返回设备凭证，请确认服务端已更新", SnackType.Error)
+                            return@launch
+                        }
+
+                        // 启动倒计时协程
+                        val timerJob = launch {
+                            while (pairWaitingCountdown > 0) {
+                                delay(1000)
+                                pairWaitingCountdown--
+                            }
+                        }
+
                         var status = "pending"
-                        val deadline = System.currentTimeMillis() + 300_000L
-                        while (System.currentTimeMillis() < deadline) {
-                            delay(3000)
+                        val deadline = System.currentTimeMillis() + 120_000L
+                        while (System.currentTimeMillis() < deadline && isActive) {
+                            delay(2000)
                             status = withContext(Dispatchers.IO) {
                                 runCatching { api.pairStatus(code, deviceId) }.getOrDefault("pending")
                             }
-                            if (status == "approved" || status == "rejected" || status == "expired") break
+                            if (status == "approved" || status == "rejected" || status == "expired" || status == "not-found") break
                         }
+                        timerJob.cancel()
                         pairing = false
+                        isPairWaiting = false
                         when (status) {
                             "approved" -> {
                                 prefs.edit()
                                     .putString(SyncSettings.KEY_SERVER_URL, url)
                                     .apply()
+                                SyncSettings.setDeviceToken(context, issuedToken)
                                 SyncSettings.setPaired(context, true)
                                 dialogCodeState.edit { replace(0, length, "") }
                                 dialogUidState.edit { replace(0, length, "") }
-                                snackbarHostState.showAppSnack("配对成功", SnackType.Success)
+                                snackbarHostState.showAppSnack("配对成功！已加入设备组", SnackType.Success)
                                 devicesReload++
                                 autoRefreshUntil = System.currentTimeMillis() + 60_000L
                                 if (ClipboardMonitorService.isRunning.value) {
@@ -1244,16 +1349,65 @@ internal fun SettingsPage(
                                     ClipboardMonitorService.start(context)
                                 }
                             }
-                            "rejected" -> snackbarHostState.showAppSnack("配对请求被拒绝", SnackType.Error)
-                            "expired" -> snackbarHostState.showAppSnack("配对码已过期", SnackType.Error)
-                            else -> snackbarHostState.showAppSnack("等待确认超时,请重试", SnackType.Error)
+                            "rejected" -> snackbarHostState.showAppSnack("配对请求已被对方设备拒绝", SnackType.Error)
+                            "expired" -> snackbarHostState.showAppSnack("配对码已过期，请重新获取", SnackType.Error)
+                            else -> snackbarHostState.showAppSnack("等待对方确认超时，请重新发起配对", SnackType.Error)
                         }
                     }
                 },
                 enabled = !pairing,
                 modifier = Modifier.weight(1f)
             ) {
-                Text(if (pairing) "配对中…" else "确认配对")
+                Text(if (pairing) "发起中…" else "确认配对")
+            }
+        }
+    }
+
+    // 等待对方确认接入弹窗 (带 120s 超时倒计时与取消)
+    OverlayDialog(
+        show = isPairWaiting,
+        title = "等待对方设备确认",
+        onDismissRequest = {
+            isPairWaiting = false
+            pairing = false
+            pairWaitingJob?.cancel()
+            scope.launch { snackbarHostState.showAppSnack("已取消配对等待", SnackType.Info) }
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "已发起配对请求，请在另一台设备上点击「同意加入」",
+                fontSize = 13.sp,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+            Spacer(Modifier.height(14.dp))
+            Text(
+                text = "剩余 ${pairWaitingCountdown}s",
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                color = MiuixTheme.colorScheme.primary
+            )
+            Spacer(Modifier.height(16.dp))
+            Button(
+                onClick = {
+                    isPairWaiting = false
+                    pairing = false
+                    pairWaitingJob?.cancel()
+                    scope.launch { snackbarHostState.showAppSnack("已取消配对等待", SnackType.Info) }
+                },
+                colors = ButtonDefaults.buttonColors(
+                    color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                    contentColor = MiuixTheme.colorScheme.onSurface
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("取消等待")
             }
         }
     }
@@ -1261,15 +1415,16 @@ internal fun SettingsPage(
     // 生成的配对码用底部弹层查看
     OverlayBottomSheet(
         show = showCodeSheet,
-        title = "配对码",
+        title = "配对码与用户 ID",
         onDismissRequest = {
             showCodeSheet = false
             val revokeCode = generatedCode?.code
             generatedCode = null
+            pendingPairRequest = null
             if (revokeCode != null) {
                 scope.launch {
                     withContext(Dispatchers.IO) {
-                        runCatching { SyncApi(SyncSettings.serverUrl(context)).revokePairingCode(revokeCode) }
+                        runCatching { SyncApi(SyncSettings.serverUrl(context), SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context)).revokePairingCode(revokeCode) }
                     }
                     devicesReload++
                 }
@@ -1284,52 +1439,170 @@ internal fun SettingsPage(
                     .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Box(
+                // 1. 配对码卡片
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(14.dp))
                         .background(MiuixTheme.colorScheme.surfaceContainer)
-                        .padding(vertical = 20.dp),
-                    contentAlignment = Alignment.Center
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(
-                        text = code.code,
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Column {
+                        Text(
+                            text = "配对码",
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant
+                        )
+                        Text(
+                            text = code.code,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Button(
+                        onClick = {
+                            copyPairingCode(context, code.code)
+                            scope.launch { snackbarHostState.showAppSnack("配对码已复制", SnackType.Success) }
+                        }
+                    ) {
+                        Text("复制配对码")
+                    }
                 }
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = "用户ID: " + code.userId,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    fontSize = 13.sp
-                )
-                Spacer(Modifier.height(8.dp))
+
+                Spacer(Modifier.height(10.dp))
+
+                // 2. 用户 ID 卡片
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MiuixTheme.colorScheme.surfaceContainer)
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(
-                        text = "关闭后此配对码立即失效",
-                        fontSize = 13.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant
-                    )
-                    Spacer(Modifier.width(16.dp))
-                    Text(
-                        text = "复制",
-                        fontSize = 13.sp,
-                        color = MiuixTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .clickable { copyPairingCode(context, code.code + " " + code.userId) }
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "用户 ID",
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant
+                        )
+                        Text(
+                            text = code.userId.ifEmpty { "（未分配）" },
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    if (code.userId.isNotEmpty()) {
+                        Button(
+                            onClick = {
+                                copyPairingCode(context, code.userId)
+                                scope.launch { snackbarHostState.showAppSnack("用户 ID 已复制", SnackType.Success) }
+                            }
+                        ) {
+                            Text("复制用户 ID")
+                        }
+                    }
                 }
-                Spacer(Modifier.height(4.dp))
+
+                Spacer(Modifier.height(12.dp))
+
+                // 3. 一键复制全部
+                Button(
+                    onClick = {
+                        copyPairingCode(context, "配对码: " + code.code + "\n用户 ID: " + code.userId)
+                        scope.launch { snackbarHostState.showAppSnack("配对信息已全部复制", SnackType.Success) }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("一键复制 (配对码 + 用户 ID)")
+                }
+
+                Spacer(Modifier.height(14.dp))
+
+                // 4. 待确认请求卡片 vs 等待状态
+                val req = pendingPairRequest
+                if (req != null) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
+                            .padding(14.dp)
+                    ) {
+                        Text(
+                            text = "🔔 检测到设备「" + (req.deviceName ?: req.deviceId ?: "新设备") + "」请求接入",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = MiuixTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        val ok = withContext(Dispatchers.IO) {
+                                            runCatching {
+                                                val api = SyncApi(SyncSettings.serverUrl(context), SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
+                                                api.confirmPairing(code.code, "approve", SyncSettings.ensureDeviceId(context))
+                                            }.getOrDefault(false)
+                                        }
+                                        if (ok) {
+                                            showCodeSheet = false
+                                            generatedCode = null
+                                            pendingPairRequest = null
+                                            snackbarHostState.showAppSnack("已同意配对！新设备已加入", SnackType.Success)
+                                            devicesReload++
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("同意加入")
+                            }
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        withContext(Dispatchers.IO) {
+                                            runCatching {
+                                                val api = SyncApi(SyncSettings.serverUrl(context), SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
+                                                api.confirmPairing(code.code, "reject", SyncSettings.ensureDeviceId(context))
+                                            }
+                                        }
+                                        pendingPairRequest = null
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("拒绝")
+                            }
+                        }
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "等待另一台设备输入配对码并接入…",
+                            fontSize = 13.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
                 Text(
-                    text = "新设备需同时输入 配对码 + 用户ID,一次性使用",
+                    text = "在另一台设备上输入上述配对码与用户 ID 即可发起接入。\n关闭弹层后配对码立即失效。",
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
-                    fontSize = 12.sp
+                    fontSize = 12.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
             }
         }
@@ -1428,6 +1701,164 @@ internal fun SettingsPage(
             }
         }
     }
+
+    // 移除其他设备确认对话框
+    val targetDev = deleteTargetDevice
+    OverlayDialog(
+        show = targetDev != null,
+        title = "移除设备",
+        onDismissRequest = { deleteTargetDevice = null }
+    ) {
+        if (targetDev != null) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    text = "确定要从设备组中移除「${targetDev.name}」吗？",
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                    color = MiuixTheme.colorScheme.onBackground
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "移除后该设备将无法接收同步内容，如需恢复需重新配对接入。",
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant
+                )
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Button(
+                        onClick = { deleteTargetDevice = null },
+                        colors = ButtonDefaults.buttonColors(
+                            color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                            contentColor = MiuixTheme.colorScheme.onSurface
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("取消")
+                    }
+                    Button(
+                        onClick = {
+                            val targetId = targetDev.id
+                            val targetName = targetDev.name
+                            deleteTargetDevice = null
+                            scope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    runCatching {
+                                        SyncApi(SyncSettings.serverUrl(context), SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context)).deleteDevice(targetId)
+                                    }
+                                }
+                                if (result.isSuccess && result.getOrNull() == true) {
+                                    devices = devices.filterNot { it.id == targetId }
+                                    if (targetId == SyncSettings.ensureDeviceId(context)) {
+                                        SyncSettings.clearPairing(context)
+                                        ClipboardMonitorService.stop(context)
+                                    }
+                                    snackbarHostState.showAppSnack("设备「$targetName」已成功移除", SnackType.Success)
+                                    devicesReload++
+                                } else {
+                                    val err = result.exceptionOrNull()?.message ?: "移除设备失败，请稍后重试"
+                                    snackbarHostState.showAppSnack(err, SnackType.Error)
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            color = MiuixTheme.colorScheme.error,
+                            contentColor = Color.White
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("确认移除")
+                    }
+                }
+            }
+        }
+    }
+
+    // 通知展示样式选择弹窗
+    OverlayDialog(
+        show = showNotificationStyleDialog,
+        title = "选择通知展示样式",
+        summary = if (SyncSettings.isHyperOs()) "已检测到小米澎湃OS (HyperOS)，推荐使用超级岛" else "根据系统支持选择合适的通知交互模式",
+        onDismissRequest = { showNotificationStyleDialog = false }
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+            NotificationStyle.entries.forEach { style ->
+                val isSelected = notificationStyle == style
+                val isRecommended = style == NotificationStyle.HYPEROS_ISLAND && SyncSettings.isHyperOs()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            if (isSelected) MiuixTheme.colorScheme.primary.copy(alpha = 0.12f)
+                            else Color.Transparent
+                        )
+                        .clickable {
+                            notificationStyle = style
+                            SyncSettings.setNotificationStyle(context, style)
+                            ClipboardMonitorService.updateNotification(context)
+                            showNotificationStyleDialog = false
+                            scope.launch {
+                                snackbarHostState.showAppSnack("已切换为 ${style.label}", SnackType.Success)
+                            }
+                        }
+                        .padding(horizontal = 12.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = style.label,
+                                fontSize = 16.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface
+                            )
+                            if (isRecommended) {
+                                Spacer(Modifier.width(6.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(MiuixTheme.colorScheme.primary)
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "推荐",
+                                        color = Color.White,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            text = style.summary,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp
+                        )
+                    }
+                    if (isSelected) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "✓",
+                            color = MiuixTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
+                        )
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+            }
+        }
+    }
 }
 
 /**
@@ -1470,13 +1901,32 @@ private fun SettingsNavRow(
 }
 
 @Composable
-private fun DeviceRow(device: DeviceInfo, isSelf: Boolean) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
+private fun DeviceCard(
+    device: DeviceInfo,
+    isSelf: Boolean,
+    onDeleteClick: (DeviceInfo) -> Unit,
+    onCopyId: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MiuixTheme.colorScheme.surfaceContainer)
+            .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
-        Column(Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        // 头部整行：左侧（在线点+设备名+本机标签）与 右侧（状态徽章+Lucide删除按钮）
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            // 左侧：状态圆点 + 设备名称 + 本机 Pill
+            Row(
+                modifier = Modifier
+                    .weight(1f, fill = true)
+                    .padding(end = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Box(
                     modifier = Modifier
                         .size(8.dp)
@@ -1486,41 +1936,143 @@ private fun DeviceRow(device: DeviceInfo, isSelf: Boolean) {
                             shape = CircleShape
                         )
                 )
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(8.dp))
                 Text(
                     text = device.name,
                     fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
                 if (isSelf) {
                     Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = "本机",
-                        fontSize = 12.sp,
-                        color = MiuixTheme.colorScheme.primary
-                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "本机",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MiuixTheme.colorScheme.primary
+                        )
+                    }
                 }
             }
-            Spacer(Modifier.height(2.dp))
+
+            // 右侧：在线/离线状态指示 + (非本机提供 Lucide 删除按钮)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(
+                            (if (device.online) Color(0xFF34C759) else MiuixTheme.colorScheme.onBackgroundVariant)
+                                .copy(alpha = 0.12f)
+                        )
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = if (device.online) "在线" else "离线",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = if (device.online) Color(0xFF34C759) else MiuixTheme.colorScheme.onBackgroundVariant
+                    )
+                }
+
+                if (!isSelf) {
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color(0xFFE53935).copy(alpha = 0.12f))
+                            .clickable { onDeleteClick(device) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = LucideIcons.Trash2,
+                            contentDescription = "移除设备",
+                            tint = Color(0xFFE53935),
+                            modifier = Modifier.size(15.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // 中部: 真实 IP 地址展示 (高亮样式) + 平台/版本
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "IP: ",
+                    fontSize = 12.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant
+                )
+                Text(
+                    text = device.ip ?: "未获取",
+                    fontSize = 12.sp,
+                    fontWeight = if (device.ip != null) FontWeight.Medium else FontWeight.Normal,
+                    color = if (device.ip != null) MiuixTheme.colorScheme.onBackground else MiuixTheme.colorScheme.onBackgroundVariant
+                )
+            }
             Text(
                 text = buildString {
                     append(device.platform)
-                    device.version?.let { append(" v$it") }
-                    device.ip?.let { append(" · $it") }
-                    val t = relativeTime(device.lastSeenAt)
-                    if (t.isNotEmpty()) append(" · $t")
+                    if (!device.version.isNullOrBlank()) append(" v${device.version}")
                 },
                 fontSize = 12.sp,
                 color = MiuixTheme.colorScheme.onBackgroundVariant
             )
         }
-        Spacer(Modifier.width(10.dp))
-        Text(
-            text = if (device.online) "在线" else "离线",
-            fontSize = 13.sp,
-            color = if (device.online) Color(0xFF34C759) else MiuixTheme.colorScheme.onBackgroundVariant
-        )
+
+        Spacer(Modifier.height(6.dp))
+
+        // 底部: 设备 ID (可点击复制) + 最近活跃时间
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable { onCopyId(device.id) }
+                    .padding(vertical = 2.dp)
+            ) {
+                Text(
+                    text = "ID: " + if (device.id.length > 14) device.id.take(14) + "…" else device.id,
+                    fontSize = 11.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.85f)
+                )
+                Spacer(Modifier.width(4.dp))
+                Icon(
+                    imageVector = LucideIcons.Copy,
+                    contentDescription = "复制ID",
+                    tint = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.size(12.dp)
+                )
+            }
+            val lastSeen = relativeTime(device.lastSeenAt)
+            if (lastSeen.isNotEmpty()) {
+                Text(
+                    text = "活跃: $lastSeen",
+                    fontSize = 11.sp,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.7f)
+                )
+            }
+        }
     }
 }
 

@@ -53,24 +53,23 @@ class ClipboardHook : XposedModule() {
                 false,
                 param.classLoader
             )
-            val method = clazz.declaredMethods.firstOrNull {
-                it.name == "clipboardAccessAllowed" && it.parameterTypes.size == 8
-            }
-            if (method == null) {
-                log(Log.ERROR, TAG, "clipboardAccessAllowed(int,...) not found, sdk=${android.os.Build.VERSION.SDK_INT}")
+            val methods = clazz.declaredMethods.filter { it.name == "clipboardAccessAllowed" }
+            if (methods.isEmpty()) {
+                log(Log.ERROR, TAG, "clipboardAccessAllowed not found, sdk=${android.os.Build.VERSION.SDK_INT}")
                 return
             }
-            hook(method).intercept { chain ->
-                val op = chain.getArg(0) as Int
-                val callingPackage = chain.getArg(1) as String
-                if (op == OP_READ_CLIPBOARD && callingPackage == MODULE_PACKAGE) {
-                    log(Log.INFO, TAG, "whitelist hit: allow $callingPackage to read clipboard in background")
-                    true
-                } else {
-                    chain.proceed()
+            for (method in methods) {
+                hook(method).intercept { chain ->
+                    val callingPackage = chain.args.getOrNull(1) as? String
+                    if (callingPackage == MODULE_PACKAGE) {
+                        log(Log.INFO, TAG, "whitelist hit: allow $callingPackage to read clipboard in background")
+                        true
+                    } else {
+                        chain.proceed()
+                    }
                 }
+                log(Log.INFO, TAG, "hook installed: ${clazz.name}#${method.name} (${method.parameterTypes.size} params)")
             }
-            log(Log.INFO, TAG, "hook installed: ${clazz.name}#${method.name} (8 params)")
         } catch (t: Throwable) {
             log(Log.ERROR, TAG, "failed to hook ClipboardService", t)
         }

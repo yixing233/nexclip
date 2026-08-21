@@ -119,7 +119,7 @@ internal fun HomePage(
     LaunchedEffect(isServerConnected) {
         if (isServerConnected && serverUrl.isNotBlank()) {
             try {
-                val api = SyncApi(serverUrl)
+                val api = SyncApi(serverUrl, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
                 val list = withContext(Dispatchers.IO) { api.getDevices() }
                 onlineDevicesCount = list.count { it.online }
                 totalDevicesCount = list.size
@@ -241,7 +241,7 @@ internal fun HomePage(
                             isManualPushing = true
                             scope.launch {
                                 try {
-                                    val api = SyncApi(url)
+                                    val api = SyncApi(url, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
                                     withContext(Dispatchers.IO) {
                                         api.putText(
                                             text = currentText,
@@ -381,7 +381,7 @@ internal fun HomePage(
                     ClipboardMonitorService.addCaptured(context, text)
                     scope.launch {
                         try {
-                            val api = SyncApi(url)
+                            val api = SyncApi(url, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
                             withContext(Dispatchers.IO) {
                                 api.putText(
                                     text = text,

@@ -5,31 +5,39 @@ import com.microsoft.signalr.HubConnectionBuilder
 import com.microsoft.signalr.HubConnectionState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * SignalR 推送客户端:/hubs/clipboard(免认证,配对码即接入凭据)。
+ * SignalR 推送客户端:/hubs/clipboard(设备 ID + 设备令牌鉴权)。
  * Java 客户端 9.x 无内置自动重连,这里手动实现指数退避重连。
  */
-class PushClient(private val serverUrl: String, private val deviceId: String) {
+class PushClient(
+    private val serverUrl: String,
+    private val deviceId: String,
+    private val deviceToken: String,
+) {
     private var connection: HubConnection? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var reconnectAttempt = 0
+    private var reconnectJob: Job? = null
     private var started = false
 
     var onEntryReceived: ((ClipboardEntry) -> Unit)? = null
     var onStateChanged: ((String) -> Unit)? = null
+    var onAuthFailure: ((Throwable) -> Unit)? = null
 
     val isConnected: Boolean get() = connection?.connectionState == HubConnectionState.CONNECTED
 
     fun connect() {
         if (started) return
         started = true
-        // 带 deviceId:服务端登记设备 + 心跳,在线状态可见(hub 免认证,无令牌)
-        val hubUrl = serverUrl.trimEnd('/') + "/hubs/clipboard?deviceId=" + java.net.URLEncoder.encode(deviceId, "UTF-8")
+        val hubUrl = serverUrl.trimEnd('/') + "/hubs/clipboard?deviceId=" +
+            java.net.URLEncoder.encode(deviceId, "UTF-8") + "&deviceToken=" +
+            java.net.URLEncoder.encode(deviceToken, "UTF-8")
         val conn = HubConnectionBuilder.create(hubUrl).build()
         connection = conn
         conn.on("ClipboardUpdated", { raw ->
@@ -37,8 +45,9 @@ class PushClient(private val serverUrl: String, private val deviceId: String) {
             val entry = toEntry(raw)
             if (entry != null) onEntryReceived?.invoke(entry)
         }, Any::class.java)
-        conn.onClosed {
+        conn.onClosed { error ->
             onStateChanged?.invoke("disconnected")
+            if (error != null && handleAuthFailure(error)) return@onClosed
             scheduleReconnect()
         }
         startLoop()
@@ -50,7 +59,8 @@ class PushClient(private val serverUrl: String, private val deviceId: String) {
                 connection?.start()?.blockingAwait()
                 reconnectAttempt = 0
                 onStateChanged?.invoke("connected")
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                if (handleAuthFailure(e)) return@launch
                 onStateChanged?.invoke("disconnected")
                 scheduleReconnect()
             }
@@ -59,7 +69,8 @@ class PushClient(private val serverUrl: String, private val deviceId: String) {
 
     private fun scheduleReconnect() {
         if (!started) return
-        scope.launch {
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch {
             delay(backoffMs())
             if (started) startLoop()
         }
@@ -72,8 +83,41 @@ class PushClient(private val serverUrl: String, private val deviceId: String) {
         return d
     }
 
+    private fun handleAuthFailure(error: Throwable): Boolean {
+        if (!isAuthFailure(error)) return false
+        val shouldNotify = synchronized(this) {
+            if (!started) false else {
+                started = false
+                reconnectJob?.cancel()
+                reconnectJob = null
+                true
+            }
+        }
+        if (shouldNotify) onAuthFailure?.invoke(error)
+        return true
+    }
+
+    private fun isAuthFailure(error: Throwable): Boolean {
+        var current: Throwable? = error
+        while (current != null) {
+            val text = current.message.orEmpty()
+            if (Regex("(^|\\D)(401|403|410|4001)(\\D|$)").containsMatchIn(text) ||
+                text.contains("Unauthorized", ignoreCase = true) ||
+                text.contains("Forbidden", ignoreCase = true) ||
+                text.contains("Device removed", ignoreCase = true) ||
+                text.contains("设备已被移除") ||
+                text.contains("设备凭证")) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
+    }
+
     fun disconnect() {
         started = false
+        reconnectJob?.cancel()
+        reconnectJob = null
         scope.coroutineContext.cancelChildren()
         try {
             connection?.stop()?.blockingAwait()

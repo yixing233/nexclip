@@ -1,0 +1,185 @@
+package clip.yixing.sync.ui
+
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+/**
+ * Android 端 Lucide 原生矢量图标集定义 (24x24, 线宽 2.0)
+ */
+object LucideIcons {
+
+    /** Lucide Trash-2 垃圾桶图标 */
+    val Trash2: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Trash2",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            // M3 6h18
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(3f, 6f)
+                lineTo(21f, 6f)
+            }
+            // M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(19f, 6f)
+                lineTo(19f, 20f)
+                curveTo(19f, 21.1f, 18.1f, 22f, 17f, 22f)
+                lineTo(7f, 22f)
+                curveTo(5.9f, 22f, 5f, 21.1f, 5f, 20f)
+                lineTo(5f, 6f)
+            }
+            // M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(8f, 6f)
+                lineTo(8f, 4f)
+                curveTo(8f, 2.9f, 8.9f, 2f, 10f, 2f)
+                lineTo(14f, 2f)
+                curveTo(15.1f, 2f, 16f, 2.9f, 16f, 4f)
+                lineTo(16f, 6f)
+            }
+            // M10 11v6
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(10f, 11f)
+                lineTo(10f, 17f)
+            }
+            // M14 11v6
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(14f, 11f)
+                lineTo(14f, 17f)
+            }
+        }.build()
+    }
+
+    /** Lucide Copy 复制图标 */
+    val Copy: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Copy",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            // rect x="9" y="9" width="13" height="13" rx="2" ry="2"
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(11f, 9f)
+                lineTo(20f, 9f)
+                curveTo(21.1f, 9f, 22f, 9.9f, 22f, 11f)
+                lineTo(22f, 20f)
+                curveTo(22f, 21.1f, 21.1f, 22f, 20f, 22f)
+                lineTo(11f, 22f)
+                curveTo(9.9f, 22f, 9f, 21.1f, 9f, 20f)
+                lineTo(9f, 11f)
+                curveTo(9f, 9.9f, 9.9f, 9f, 11f, 9f)
+                close()
+            }
+            // path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(5f, 15f)
+                lineTo(4f, 15f)
+                curveTo(2.9f, 15f, 2f, 14.1f, 2f, 13f)
+                lineTo(2f, 4f)
+                curveTo(2f, 2.9f, 2.9f, 2f, 4f, 2f)
+                lineTo(13f, 2f)
+                curveTo(14.1f, 2f, 15f, 2.9f, 15f, 4f)
+                lineTo(15f, 5f)
+            }
+        }.build()
+    }
+
+    /** Lucide Refresh-cw 刷新图标 */
+    val RefreshCw: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.RefreshCw",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(3f, 12f)
+                curveTo(3f, 7.03f, 7.03f, 3f, 12f, 3f)
+                curveTo(14.49f, 3f, 16.74f, 4.01f, 18.74f, 5.74f)
+                lineTo(21f, 8f)
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(21f, 3f)
+                lineTo(21f, 8f)
+                lineTo(16f, 8f)
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(21f, 12f)
+                curveTo(21f, 16.97f, 16.97f, 21f, 12f, 21f)
+                curveTo(9.51f, 21f, 7.26f, 19.99f, 5.26f, 18.26f)
+                lineTo(3f, 16f)
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(3f, 21f)
+                lineTo(3f, 16f)
+                lineTo(8f, 16f)
+            }
+        }.build()
+    }
+}

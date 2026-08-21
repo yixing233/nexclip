@@ -18,6 +18,7 @@ import clip.yixing.sync.MainActivity
 import clip.yixing.sync.R
 import clip.yixing.sync.data.PushClient
 import clip.yixing.sync.data.SyncApi
+import clip.yixing.sync.util.NotificationStyle
 import clip.yixing.sync.util.SyncSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -43,6 +44,7 @@ class ClipboardMonitorService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var uploadJob: Job? = null
+    private var legacyMigrationJob: Job? = null
     private var lastUploadHash = ""
     private lateinit var clipboard: ClipboardManager
     private var push: PushClient? = null
@@ -52,21 +54,34 @@ class ClipboardMonitorService : Service() {
     override fun onCreate() {
         super.onCreate()
         clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        startForeground(1, buildNotification())
+        startForeground(SyncNotificationManager.NOTIFICATION_ID_FOREGROUND, buildNotification())
         clipboard.addPrimaryClipChangedListener(listener)
         isRunning.value = true
         connectPush()
         // 启动时拉取服务器当前剪贴板作为初始记录
         scope.launch { pullAndApply() }
+
+        // 监听记录与连接状态以实时更新前台通知/超级岛卡片
+        scope.launch {
+            captured.collect {
+                refreshForegroundNotification()
+            }
+        }
+        scope.launch {
+            isServerConnected.collect {
+                refreshForegroundNotification()
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(1, buildNotification())
+        startForeground(SyncNotificationManager.NOTIFICATION_ID_FOREGROUND, buildNotification())
         return START_STICKY
     }
 
     override fun onDestroy() {
         uploadJob?.cancel()
+        legacyMigrationJob?.cancel()
         push?.disconnect()
         push = null
         clipboard.removePrimaryClipChangedListener(listener)
@@ -81,15 +96,47 @@ class ClipboardMonitorService : Service() {
         val ctx = this
         push?.disconnect()
         val url = SyncSettings.serverUrl(ctx)
-        if (url.isBlank()) {
+        val deviceId = SyncSettings.ensureDeviceId(ctx)
+        val deviceToken = SyncSettings.deviceToken(ctx)
+        if (url.isBlank() || !SyncSettings.isPaired(ctx)) {
             isServerConnected.value = false
             serverConnectionState.value = ServerConnectionState.DISCONNECTED
+            return
+        }
+        if (deviceToken.isBlank()) {
+            isServerConnected.value = false
+            serverConnectionState.value = ServerConnectionState.CONNECTING
+            if (legacyMigrationJob?.isActive != true) {
+                legacyMigrationJob = scope.launch {
+                    try {
+                        if (!migrateLegacyCredential(ctx, url, deviceId)) {
+                            SyncSettings.clearPairing(ctx)
+                            serverConnectionState.value = ServerConnectionState.DISCONNECTED
+                            return@launch
+                        }
+                        connectPush()
+                        pullAndApply()
+                    } catch (e: clip.yixing.sync.data.ApiException) {
+                        if (e.statusCode == 401 || e.statusCode == 403 ||
+                            e.statusCode == 404 || e.statusCode == 409 || e.statusCode == 410) {
+                            SyncSettings.clearPairing(ctx)
+                        }
+                        serverConnectionState.value = ServerConnectionState.DISCONNECTED
+                    } catch (_: Exception) {
+                        // 网络暂时不可用时保留旧状态，下次服务启动继续尝试迁移。
+                        serverConnectionState.value = ServerConnectionState.DISCONNECTED
+                    } finally {
+                        legacyMigrationJob = null
+                    }
+                }
+            }
             return
         }
         serverConnectionState.value = ServerConnectionState.CONNECTING
         val client = PushClient(
             url,
-            SyncSettings.ensureDeviceId(ctx),
+            deviceId,
+            deviceToken,
         )
         client.onEntryReceived = { entry ->
             val text = entry.text
@@ -110,16 +157,64 @@ class ClipboardMonitorService : Service() {
                 ServerConnectionState.DISCONNECTED
             }
         }
+        client.onAuthFailure = {
+            isServerConnected.value = false
+            serverConnectionState.value = ServerConnectionState.DISCONNECTED
+            // onAuthFailure 可能来自 SignalR 的 onClosed 回调，避免在回调线程同步 stop 导致重入。
+            if (legacyMigrationJob?.isActive != true) {
+                legacyMigrationJob = scope.launch {
+                    try {
+                        client.disconnect()
+                        if (push === client) push = null
+                        if (migrateLegacyCredential(ctx, url, deviceId)) {
+                            connectPush()
+                            pullAndApply()
+                        } else {
+                            SyncSettings.clearPairing(ctx)
+                        }
+                    } catch (e: clip.yixing.sync.data.ApiException) {
+                        if (e.statusCode == 401 || e.statusCode == 403 ||
+                            e.statusCode == 404 || e.statusCode == 409 || e.statusCode == 410) {
+                            SyncSettings.clearPairing(ctx)
+                        }
+                    } catch (_: Exception) {
+                        // 保留本地状态，网络恢复后重启服务会再次尝试迁移。
+                    } finally {
+                        legacyMigrationJob = null
+                    }
+                }
+            }
+        }
         push = client
         client.connect()
     }
 
+    /** 旧版设备没有专属 Token，使用已登记的 deviceId 一次性领取并立即作废迁移码。 */
+    private fun migrateLegacyCredential(ctx: Context, url: String, deviceId: String): Boolean {
+        val migration = SyncApi(url, deviceId, "")
+            .createPairingCode(deviceId, SyncSettings.deviceName(ctx))
+        val issuedToken = migration.deviceToken ?: return false
+        if (issuedToken.isBlank()) return false
+        SyncSettings.setDeviceToken(ctx, issuedToken)
+        SyncSettings.setPaired(ctx, true)
+        runCatching {
+            SyncApi(url, deviceId, issuedToken).revokePairingCode(migration.code)
+        }
+        return true
+    }
+
     private fun pullAndApply() {
         try {
-            val api = SyncApi(SyncSettings.serverUrl(this))
+            if (!SyncSettings.isPaired(this) || SyncSettings.deviceToken(this).isBlank()) return
+            val api = SyncApi(SyncSettings.serverUrl(this), SyncSettings.ensureDeviceId(this), SyncSettings.deviceToken(this))
             val cur = api.getCurrent() ?: return
             if (!cur.text.isNullOrBlank() && captured.value.firstOrNull()?.text != cur.text) {
                 addCaptured(this, cur.text)
+            }
+        } catch (e: clip.yixing.sync.data.ApiException) {
+            if (e.statusCode == 401 || e.statusCode == 403 || e.statusCode == 410) {
+                SyncSettings.clearPairing(this)
+                push?.disconnect()
             }
         } catch (_: Exception) {
             // 未配置/离线时静默
@@ -127,21 +222,35 @@ class ClipboardMonitorService : Service() {
     }
 
     private val listener = ClipboardManager.OnPrimaryClipChangedListener {
-        val item = clipboard.primaryClip?.getItemAt(0)
+        android.util.Log.i("SyncClipboard", "OnPrimaryClipChangedListener triggered")
+        val clipData = runCatching { clipboard.primaryClip }.getOrNull()
+        val item = clipData?.getItemAt(0)
         val text = item?.coerceToText(this)?.toString()
+        android.util.Log.i("SyncClipboard", "primaryClip read: hasClip=${clipData != null}, textLen=${text?.length ?: 0}")
         if (text.isNullOrBlank() || text.length > 500_000) return@OnPrimaryClipChangedListener
         if (SyncSettings.isContentFiltered(this, text)) return@OnPrimaryClipChangedListener
         val hash = sha256(text)
         if (hash == lastUploadHash) return@OnPrimaryClipChangedListener
         lastUploadHash = hash
         addCaptured(this, text)
+
+        val clip = CapturedClip(text = text, time = System.currentTimeMillis())
+        SyncNotificationManager.notifyNewClip(this, clip, "本机", isPush = false)
+        refreshForegroundNotification()
+
         uploadJob?.cancel()
         uploadJob = scope.launch {
             delay(600) // 去抖
             val ctx = this@ClipboardMonitorService
             try {
-                val api = SyncApi(SyncSettings.serverUrl(ctx))
+                if (!SyncSettings.isPaired(ctx) || SyncSettings.deviceToken(ctx).isBlank()) return@launch
+                val api = SyncApi(SyncSettings.serverUrl(ctx), SyncSettings.ensureDeviceId(ctx), SyncSettings.deviceToken(ctx))
                 api.putText(text, SyncSettings.ensureDeviceId(ctx), SyncSettings.deviceName(ctx))
+            } catch (e: clip.yixing.sync.data.ApiException) {
+                if (e.statusCode == 401 || e.statusCode == 403 || e.statusCode == 410) {
+                    SyncSettings.clearPairing(ctx)
+                    connectPush()
+                }
             } catch (_: Exception) {
                 // 失败静默,下一条变化再试
             }
@@ -149,28 +258,8 @@ class ClipboardMonitorService : Service() {
     }
 
     private fun notifyPush(deviceName: String, text: String) {
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
-        runCatching {
-            val pi = PendingIntent.getActivity(
-                this, 0, Intent(this, MainActivity::class.java),
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-            )
-            val n = NotificationCompat.Builder(this, "clipboard_sync_push")
-                .setSmallIcon(R.drawable.ic_notification_nc)
-                .setContentTitle("收到来自 $deviceName 的内容")
-                .setContentText(text.take(100))
-                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
-                .setContentIntent(pi)
-                .setAutoCancel(true)
-                .setShowWhen(true)
-                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-                .build()
-            getSystemService(NotificationManager::class.java).notify((System.currentTimeMillis() % 100000).toInt(), n)
-        }
+        val clip = CapturedClip(text = text, time = System.currentTimeMillis())
+        SyncNotificationManager.notifyNewClip(this, clip, deviceName, isPush = true)
     }
 
     private fun sha256(s: String): String {
@@ -178,20 +267,22 @@ class ClipboardMonitorService : Service() {
         return md.digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 
+    private fun refreshForegroundNotification() {
+        runCatching {
+            val nm = getSystemService(NotificationManager::class.java)
+            nm.notify(SyncNotificationManager.NOTIFICATION_ID_FOREGROUND, buildNotification())
+        }
+    }
+
     private fun buildNotification(): Notification {
-        val pi = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        val latest = captured.value.firstOrNull()
+        val style = SyncSettings.notificationStyle(this)
+        return SyncNotificationManager.buildForegroundNotification(
+            this,
+            latest,
+            isServerConnected.value,
+            style
         )
-        return NotificationCompat.Builder(this, "clipboard_monitor")
-            .setSmallIcon(R.drawable.ic_notification_nc)
-            .setContentTitle("剪贴板同步已开启")
-            .setContentText("正在后台实时同步与监听剪贴板变化")
-            .setContentIntent(pi)
-            .setOngoing(true)
-            .setShowWhen(false)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
     }
 
     companion object {
@@ -217,6 +308,26 @@ class ClipboardMonitorService : Service() {
             isServerConnected.value = false
             serverConnectionState.value = ServerConnectionState.DISCONNECTED
             context.stopService(Intent(context, ClipboardMonitorService::class.java))
+        }
+
+        /** 刷新前台通知 (设置项变更等) */
+        fun updateNotification(context: Context) {
+            if (isRunning.value) {
+                runCatching {
+                    val latest = captured.value.firstOrNull()
+                    val style = SyncSettings.notificationStyle(context)
+                    val n = SyncNotificationManager.buildForegroundNotification(
+                        context,
+                        latest,
+                        isServerConnected.value,
+                        style
+                    )
+                    context.getSystemService(NotificationManager::class.java).notify(
+                        SyncNotificationManager.NOTIFICATION_ID_FOREGROUND,
+                        n
+                    )
+                }
+            }
         }
 
         /** 新增一条记录(最新在前,持久化) */

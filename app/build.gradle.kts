@@ -57,7 +57,9 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.signalr)
     implementation(libs.kotlinx.coroutines.android)
+    implementation("io.github.d4viddf:hyperisland_kit:0.4.4")
 
+    // Miuix
     implementation(libs.miuix.ui)
     implementation(libs.miuix.icons)
     implementation(libs.miuix.preference)

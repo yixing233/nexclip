@@ -875,7 +875,7 @@ internal fun RecordsPage(
                                             } else {
                                                 scope.launch {
                                                     try {
-                                                        val api = SyncApi(url)
+                                                        val api = SyncApi(url, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
                                                         withContext(Dispatchers.IO) {
                                                             api.putText(
                                                                 text = clip.text,

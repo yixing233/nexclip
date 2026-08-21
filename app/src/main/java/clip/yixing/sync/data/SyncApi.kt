@@ -34,23 +34,43 @@ data class DeviceInfo(
     val lastSeenAt: String,
 )
 
-/** 配对结果(POST /api/pair → { status: 'pending' });无令牌,配对仅登记 */
-data class PairStatus(val status: String)
+/** 配对结果(POST /api/pair → pending + 一次性设备凭证) */
+data class PairStatus(val status: String, val deviceToken: String? = null)
 
 /** 配对码(POST /api/pairing-codes → { code, expiresAt, userId });未绑定设备生成时自动创建用户ID */
-data class PairingCode(val code: String, val expiresAt: String, val userId: String)
+data class PairingCode(val code: String, val expiresAt: String, val userId: String, val deviceToken: String? = null)
+
+/** 待确认配对请求 (GET /api/pairing-requests) */
+data class PairingRequestItem(
+    val code: String,
+    val generatorId: String,
+    val userId: String,
+    val deviceId: String?,
+    val deviceName: String?,
+    val status: String,
+    val createdAt: String?,
+)
 
 class ApiException(message: String, val statusCode: Int? = null) : Exception(message)
 
-/** REST 客户端:与 SyncClipboard Server 契约一致(设备同步接口免认证,无令牌) */
-class SyncApi(private val serverUrl: String) {
+/** REST 客户端:设备同步接口使用 X-Device-Id/X-Device-Token 凭证。 */
+class SyncApi(
+    private val serverUrl: String,
+    private val authDeviceId: String = "",
+    private val authDeviceToken: String = "",
+) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
     private fun builder(method: String, path: String): Request.Builder =
-        Request.Builder().url(serverUrl.trimEnd('/') + path)
+        Request.Builder().url(serverUrl.trimEnd('/') + path).apply {
+            if (authDeviceId.isNotBlank() && authDeviceToken.isNotBlank()) {
+                header("X-Device-Id", authDeviceId)
+                header("X-Device-Token", authDeviceToken)
+            }
+        }
 
     private fun parseEntry(o: JSONObject) = ClipboardEntry(
         id = o.optLong("id"),
@@ -64,7 +84,8 @@ class SyncApi(private val serverUrl: String) {
 
     private fun execute(req: Request): okhttp3.Response = try {
         val resp = client.newCall(req).execute()
-        if (resp.code == 401) throw ApiException("未授权(401),请先配对或登录", 401)
+        if (resp.code == 401) throw ApiException("设备凭证无效或已失效(401),请重新配对", 401)
+        if (resp.code == 410) throw ApiException("设备已被移除(410),请重新配对", 410)
         if (!resp.isSuccessful) {
             // 优先透传服务端 { error: "..." } 消息(如"配对码无效或已过期")
             val body = resp.body?.string()
@@ -84,10 +105,11 @@ class SyncApi(private val serverUrl: String) {
     /** HTTP 状态码 → 中文提示 */
     private fun httpStatusText(code: Int): String = when (code) {
         400 -> "请求无效(400),请检查输入"
-        401 -> "未授权(401),请先配对或登录"
+        401 -> "设备凭证无效或已失效(401),请重新配对"
         403 -> "没有权限(403)"
         404 -> "接口不存在(404),请检查服务器版本"
         409 -> "请求冲突(409)"
+        410 -> "设备已被移除(410),请重新配对"
         429 -> "操作过于频繁(429),请稍后再试"
         500 -> "服务器内部错误(500)"
         502 -> "网关错误(502)"
@@ -167,6 +189,24 @@ class SyncApi(private val serverUrl: String) {
         }
     }
 
+    /** PUT /api/devices/{id} → 重命名设备 */
+    fun updateDeviceName(deviceId: String, name: String): Boolean {
+        val json = JSONObject().apply { put("name", name) }.toString()
+        val req = builder("PUT", "/api/devices/" + java.net.URLEncoder.encode(deviceId, "UTF-8"))
+            .header("Content-Type", "application/json")
+            .put(json.toRequestBody("application/json".toMediaType()))
+            .build()
+        val resp = execute(req)
+        resp.use { return it.isSuccessful }
+    }
+
+    /** DELETE /api/devices/{id} → 移除设备 */
+    fun deleteDevice(deviceId: String): Boolean {
+        val req = builder("DELETE", "/api/devices/" + java.net.URLEncoder.encode(deviceId, "UTF-8")).build()
+        val resp = execute(req)
+        resp.use { return it.isSuccessful }
+    }
+
     /** POST /api/pairing-codes → 生成一次性配对码(使用当前设备令牌,已配对即可生成) */
     /** 生成一次性配对码:免认证;携带本机设备信息,服务端同步登记生成方设备 */
     fun createPairingCode(deviceId: String, deviceName: String): PairingCode {
@@ -185,14 +225,65 @@ class SyncApi(private val serverUrl: String) {
                 code = o.optString("code"),
                 expiresAt = o.optString("expiresAt"),
                 userId = o.optString("userId"),
+                deviceToken = o.optString("deviceToken").takeIf { it.isNotBlank() },
             )
         }
     }
 
     /** DELETE /api/pairing-codes/{code} → 作废配对码(关闭底部弹层后调用,码立即失效) */
     fun revokePairingCode(code: String) {
-        val req = builder("DELETE", "/api/pairing-codes/" + java.net.URLEncoder.encode(code, "UTF-8")).build()
-        execute(req).use { }
+        runCatching {
+            val req = builder("DELETE", "/api/pairing-codes/" + java.net.URLEncoder.encode(code, "UTF-8")).build()
+            execute(req).use { }
+        }
+    }
+
+    /** GET /api/pairing-requests?code&generatorId → 待确认请求列表 */
+    fun listPairingRequests(code: String, generatorId: String): List<PairingRequestItem> {
+        val req = builder(
+            "GET",
+            "/api/pairing-requests?code=" + java.net.URLEncoder.encode(code, "UTF-8") +
+                "&generatorId=" + java.net.URLEncoder.encode(generatorId, "UTF-8")
+        ).build()
+        val resp = execute(req)
+        resp.use {
+            val body = it.body?.string() ?: "[]"
+            val arr = JSONArray(body)
+            val list = mutableListOf<PairingRequestItem>()
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                list.add(
+                    PairingRequestItem(
+                        code = o.optString("code"),
+                        generatorId = o.optString("generatorId"),
+                        userId = o.optString("userId"),
+                        deviceId = o.optString("deviceId").takeIf { s -> s.isNotEmpty() },
+                        deviceName = o.optString("deviceName").takeIf { s -> s.isNotEmpty() },
+                        status = o.optString("status"),
+                        createdAt = o.optString("createdAt")
+                    )
+                )
+            }
+            return list
+        }
+    }
+
+    /** POST /api/pairing-requests/confirm → 确认/拒绝配对请求 */
+    fun confirmPairing(code: String, action: String, generatorId: String): Boolean {
+        val json = JSONObject().apply {
+            put("code", code)
+            put("action", action)
+            put("generatorId", generatorId)
+        }.toString()
+        val req = builder("POST", "/api/pairing-requests/confirm")
+            .header("Content-Type", "application/json")
+            .post(json.toRequestBody("application/json".toMediaType()))
+            .build()
+        val resp = execute(req)
+        resp.use {
+            val o = JSONObject(it.body?.string() ?: "{}")
+            return o.optString("status") == action
+        }
     }
 
     /** POST /api/pair → 发起配对(免认证):配对码 + 用户ID → 挂起待确认 */
@@ -210,7 +301,7 @@ class SyncApi(private val serverUrl: String) {
         val resp = execute(req)
         resp.use {
             val o = JSONObject(it.body?.string() ?: "{}")
-            return PairStatus(status = o.optString("status", "pending"))
+            return PairStatus(status = o.optString("status", "pending"), deviceToken = o.optString("deviceToken").takeIf { it.isNotBlank() })
         }
     }
 
