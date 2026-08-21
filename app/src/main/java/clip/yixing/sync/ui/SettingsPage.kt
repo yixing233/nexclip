@@ -502,31 +502,7 @@ internal fun SettingsPage(
                             bottom = bottomInnerPadding + 16.dp
                         ),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {el = "构建技术", value = "Miuix · LSPosed")
-                        }
-                    }
-
-                    item {
-                        Spacer(Modifier.height(bottomInnerPadding))
-                    }
-                }
-            }
-
-            SettingsSubPage.Basic -> {
-                // ---- 二级页面 1: 基础设置 ----
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .overScrollVertical()
-                        .nestedScroll(scrollBehavior.nestedScrollConnection),
-                    contentPadding = PaddingValues(
-                        start = 16.dp,
-                        end = 16.dp,
-                        top = topPadding + 8.dp,
-                        bottom = bottomInnerPadding + 16.dp
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
+                    ) {
                     item {
                         SectionBlock(title = "设备信息", insideMargin = PaddingValues()) {
                             // 修改设备名称
@@ -662,8 +638,9 @@ internal fun SettingsPage(
                     }
                 }
             }
+        }
 
-            SettingsSubPage.Sync -> {
+        SettingsSubPage.Sync -> {
                 // ---- 二级页面 2: 同步设置 ----
                 PageShell(
                     title = "同步设置",
@@ -896,8 +873,9 @@ internal fun SettingsPage(
                     }
                 }
             }
+        }
 
-            SettingsSubPage.Filter -> {
+        SettingsSubPage.Filter -> {
                 // ---- 二级页面 3: 过滤规则 ----
                 PageShell(
                     title = "过滤规则",
@@ -1041,8 +1019,9 @@ internal fun SettingsPage(
                     }
                 }
             }
+        }
 
-            SettingsSubPage.Data -> {
+        SettingsSubPage.Data -> {
                 // ---- 二级页面 4: 数据管理 ----
                 PageShell(
                     title = "数据管理",
@@ -1170,8 +1149,9 @@ internal fun SettingsPage(
                     }
                 }
             }
+        }
 
-            SettingsSubPage.Permission -> {
+        SettingsSubPage.Permission -> {
                 // ---- 二级页面 5: 权限管理 ----
                 PageShell(
                     title = "权限管理",

@@ -62,6 +62,8 @@ import clip.yixing.sync.ui.HomePage
 import clip.yixing.sync.ui.LucideIcons
 import clip.yixing.sync.ui.RecordsPage
 import clip.yixing.sync.ui.SearchPage
+import clip.yixing.sync.ui.BarBlurSurface
+import clip.yixing.sync.ui.PageShell
 import clip.yixing.sync.ui.FloatingBottomBar
 import clip.yixing.sync.ui.FloatingBottomBarItem
 import clip.yixing.sync.ui.SettingsPage
