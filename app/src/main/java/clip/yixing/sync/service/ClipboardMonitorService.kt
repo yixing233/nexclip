@@ -45,9 +45,11 @@ class ClipboardMonitorService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var uploadJob: Job? = null
     private var legacyMigrationJob: Job? = null
-    private var lastUploadHash = ""
+    private var lastUploadHash: String? = null
     private lateinit var clipboard: ClipboardManager
     private var push: PushClient? = null
+    @Volatile
+    private var isApplyingRemote = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -108,16 +110,29 @@ class ClipboardMonitorService : Service() {
             deviceId,
             deviceToken,
         )
-        client.onEntryReceived = { entry ->
+        client.onEntryReceived = onEntryReceived@ { entry ->
+            val localDeviceId = SyncSettings.ensureDeviceId(ctx)
+            if (entry.deviceId == localDeviceId) {
+                // 忽略来自本机的回显广播，避免自写回环与重复记录
+                return@onEntryReceived
+            }
             val text = entry.text
             val imgRef = entry.imageRef
             if (!imgRef.isNullOrBlank()) {
                 addCaptured(ctx, "[图片]", imgRef)
                 notifyPush(entry.deviceName ?: "其他设备", "[图片]")
             } else if (!text.isNullOrBlank()) {
+                val hash = sha256(text)
+                lastUploadHash = hash
                 addCaptured(ctx, text)
-                runCatching {
+                isApplyingRemote = true
+                try {
                     clipboard.setPrimaryClip(ClipData.newPlainText("SyncClipboard", text))
+                } finally {
+                    scope.launch {
+                        delay(350)
+                        isApplyingRemote = false
+                    }
                 }
                 notifyPush(entry.deviceName ?: "其他设备", text)
             }
@@ -148,12 +163,26 @@ class ClipboardMonitorService : Service() {
     private fun pullAndApply() {
         try {
             if (!SyncSettings.isPaired(this) || SyncSettings.deviceToken(this).isBlank()) return
-            val api = SyncApi(SyncSettings.serverUrl(this), SyncSettings.ensureDeviceId(this), SyncSettings.deviceToken(this))
+            val localDeviceId = SyncSettings.ensureDeviceId(this)
+            val api = SyncApi(SyncSettings.serverUrl(this), localDeviceId, SyncSettings.deviceToken(this))
             val cur = api.getCurrent() ?: return
+            if (cur.deviceId == localDeviceId) return
+
             if (!cur.imageRef.isNullOrBlank() && captured.value.firstOrNull()?.imageRef != cur.imageRef) {
                 addCaptured(this, "[图片]", cur.imageRef)
             } else if (!cur.text.isNullOrBlank() && captured.value.firstOrNull()?.text != cur.text) {
+                val hash = sha256(cur.text)
+                lastUploadHash = hash
                 addCaptured(this, cur.text)
+                isApplyingRemote = true
+                try {
+                    clipboard.setPrimaryClip(ClipData.newPlainText("SyncClipboard", cur.text))
+                } finally {
+                    scope.launch {
+                        delay(350)
+                        isApplyingRemote = false
+                    }
+                }
             }
         } catch (e: clip.yixing.sync.data.ApiException) {
             if (e.statusCode == 401 || e.statusCode == 403 || e.statusCode == 410) {
@@ -167,6 +196,10 @@ class ClipboardMonitorService : Service() {
     }
 
     private val listener = ClipboardManager.OnPrimaryClipChangedListener {
+        if (isApplyingRemote) {
+            android.util.Log.i("SyncClipboard", "OnPrimaryClipChangedListener ignored (applying remote push)")
+            return@OnPrimaryClipChangedListener
+        }
         android.util.Log.i("SyncClipboard", "OnPrimaryClipChangedListener triggered")
         val clipData = runCatching { clipboard.primaryClip }.getOrNull() ?: return@OnPrimaryClipChangedListener
         val item = clipData.getItemAt(0) ?: return@OnPrimaryClipChangedListener
@@ -323,8 +356,13 @@ class ClipboardMonitorService : Service() {
             }
         }
 
-        /** 新增一条记录(最新在前,持久化) */
+        /** 新增一条记录(最新在前,持久化,防连续重复添加) */
         fun addCaptured(context: Context, text: String, imageRef: String? = null) {
+            val first = captured.value.firstOrNull()
+            if (first != null) {
+                if (!imageRef.isNullOrBlank() && first.imageRef == imageRef) return
+                if (imageRef.isNullOrBlank() && first.imageRef.isNullOrBlank() && first.text == text) return
+            }
             val list = listOf(CapturedClip(text = text, time = System.currentTimeMillis(), imageRef = imageRef)) + captured.value
             persist(context, list)
             captured.value = list
