@@ -54,6 +54,10 @@ public static class Lucide
     private static ImageSource? _externalLink;
     private static ImageSource? _save;
     private static ImageSource? _zoomIn;
+    private static ImageSource? _smartphone;
+    private static ImageSource? _laptop;
+    private static ImageSource? _monitor;
+    private static ImageSource? _rotateCw;
 
     public static ImageSource Clipboard => _clipboard ??= Load("clipboard", "TextFillColorPrimaryBrush");
     public static ImageSource Copy => _copy ??= Load("copy", "TextFillColorSecondaryBrush");
@@ -65,11 +69,15 @@ public static class Lucide
     public static ImageSource Settings => _settings ??= Load("settings", "TextFillColorPrimaryBrush");
     public static ImageSource Search => _search ??= Load("search", "TextFillColorSecondaryBrush");
     public static ImageSource RefreshCw => _refreshCw ??= Load("refresh-cw", "TextFillColorPrimaryBrush");
+    public static ImageSource RotateCw => _rotateCw ??= Load("rotate-cw", "TextFillColorSecondaryBrush");
     public static ImageSource Pin => _pin ??= Load("pin", "TextFillColorPrimaryBrush");
     public static ImageSource PinOff => _pinOff ??= Load("pin-off", "TextFillColorSecondaryBrush");
     /// <summary>置顶激活态:白色图标,用于蓝色胶囊按钮上。</summary>
     public static ImageSource PinOffActive => _pinOffActive ??= Load("pin-off", "#FFFFFF");
     public static ImageSource MonitorSmartphone => _monitorSmartphone ??= Load("monitor-smartphone", "TextFillColorPrimaryBrush");
+    public static ImageSource Smartphone => _smartphone ??= Load("smartphone", "TextFillColorPrimaryBrush");
+    public static ImageSource Laptop => _laptop ??= Load("laptop", "TextFillColorPrimaryBrush");
+    public static ImageSource Monitor => _monitor ??= Load("monitor", "TextFillColorPrimaryBrush");
     public static ImageSource Database => _database ??= Load("database", "TextFillColorPrimaryBrush");
     public static ImageSource Palette => _palette ??= Load("palette", "TextFillColorPrimaryBrush");
     public static ImageSource Info => _info ??= Load("info", "TextFillColorPrimaryBrush");

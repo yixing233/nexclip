@@ -678,6 +678,35 @@ public partial class SettingsViewModel : ObservableObject
         return $"{(int)diff.TotalDays} 天前离线";
     }
 
+    /// <summary>设备平台图标(Lucide)。</summary>
+    public static Microsoft.UI.Xaml.Media.ImageSource DevicePlatformIcon(string? platform)
+    {
+        var p = platform?.ToLowerInvariant() ?? "";
+        if (p.Contains("android") || p.Contains("ios") || p.Contains("iphone") || p.Contains("mobile") || p.Contains("phone"))
+            return Services.Lucide.Smartphone;
+        if (p.Contains("win") || p.Contains("mac") || p.Contains("linux") || p.Contains("pc") || p.Contains("laptop"))
+            return Services.Lucide.Laptop;
+        return Services.Lucide.Monitor;
+    }
+
+    /// <summary>设备图标背景色。</summary>
+    public static Microsoft.UI.Xaml.Media.Brush DeviceIconBgBrush(bool online) =>
+        new Microsoft.UI.Xaml.Media.SolidColorBrush(online
+            ? Microsoft.UI.ColorHelper.FromArgb(30, 37, 99, 235)   // 浅蓝底
+            : Microsoft.UI.ColorHelper.FromArgb(20, 100, 116, 139)); // 浅灰底
+
+    /// <summary>设备状态胶囊背景色。</summary>
+    public static Microsoft.UI.Xaml.Media.Brush DeviceStatusBgBrush(bool online) =>
+        new Microsoft.UI.Xaml.Media.SolidColorBrush(online
+            ? Microsoft.UI.ColorHelper.FromArgb(28, 22, 163, 74)   // 浅绿
+            : Microsoft.UI.ColorHelper.FromArgb(20, 148, 163, 184)); // 浅灰
+
+    /// <summary>设备状态胶囊边框色。</summary>
+    public static Microsoft.UI.Xaml.Media.Brush DeviceStatusBorderBrush(bool online) =>
+        new Microsoft.UI.Xaml.Media.SolidColorBrush(online
+            ? Microsoft.UI.ColorHelper.FromArgb(60, 22, 163, 74)
+            : Microsoft.UI.ColorHelper.FromArgb(40, 148, 163, 184));
+
     /// <summary>设备名称颜色:在线=主题主色,离线=次要灰(字体颜色区分在线/离线)。</summary>
     public static Microsoft.UI.Xaml.Media.Brush DeviceNameBrush(bool online) =>
         (Microsoft.UI.Xaml.Media.Brush)Microsoft.UI.Xaml.Application.Current.Resources[
