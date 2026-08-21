@@ -676,10 +676,7 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <StackPanel Spacing="2" VerticalAlignment="Center">
-                                        <TextBlock Text="剪贴板窗口出现位置" />
-                                        <TextBlock Text="热键/托盘呼出时窗口显示的位置" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                    </StackPanel>
+                                    <TextBlock Text="剪贴板窗口出现位置" VerticalAlignment="Center" />
                                     <ComboBox
                                         Grid.Column="1"
                                         Width="160"
