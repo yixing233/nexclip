@@ -17,11 +17,12 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -45,6 +46,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -152,9 +154,21 @@ internal fun HomePage(
             )
         }
 
-        // 2. 模块激活状态卡片
+        // 2. 核心状态与控制看板 (左侧模块状态大卡片 + 右上监听开关 + 右下记录入口)
         item {
-            ModuleStatusCard()
+            DashboardGridCard(
+                serviceRunning = serviceRunning,
+                capturedCount = captured.size,
+                onToggleService = { checked ->
+                    if (checked) {
+                        requestNotificationPermissionIfNeeded(context, permissionLauncher)
+                        ClipboardMonitorService.start(context)
+                    } else {
+                        ClipboardMonitorService.stop(context)
+                    }
+                },
+                onNavigateToRecords = onNavigateToRecords
+            )
         }
 
         // 3. 当前剪贴板卡片及快捷操作
@@ -259,41 +273,7 @@ internal fun HomePage(
             }
         }
 
-        // 4. 持续监听剪贴板开关卡片
-        item {
-            SectionBlock(title = "持续监听") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            if (serviceRunning) {
-                                when (serverConnectionState) {
-                                    ClipboardMonitorService.ServerConnectionState.CONNECTED -> "运行中 · 服务器已连接"
-                                    ClipboardMonitorService.ServerConnectionState.CONNECTING -> "运行中 · 正在连接服务器"
-                                    ClipboardMonitorService.ServerConnectionState.DISCONNECTED -> "运行中 · 服务器未连接"
-                                }
-                            } else "未运行",
-                            color = MiuixTheme.colorScheme.onBackgroundVariant
-                        )
-                    }
-                    Switch(
-                        checked = serviceRunning,
-                        onCheckedChange = { checked ->
-                            if (checked) {
-                                requestNotificationPermissionIfNeeded(context, permissionLauncher)
-                                ClipboardMonitorService.start(context)
-                            } else {
-                                ClipboardMonitorService.stop(context)
-                            }
-                        }
-                    )
-                }
-            }
-        }
-
-        // 5. 最近同步记录预览卡片
+        // 4. 最近同步记录预览卡片
         item {
             RecentRecordsCard(
                 records = captured.take(3),
@@ -482,39 +462,177 @@ private fun RecentRecordsCard(
 }
 
 @Composable
-internal fun ModuleStatusCard() {
-    val status by ModuleStatusStore.moduleStatus.collectAsState()
-    SectionBlock(title = "模块状态") {
-        StatusRow(
-            label = "状态",
-            value = if (status.activated) "已激活" else "未激活",
-            valueColor = if (status.activated) {
-                MiuixTheme.colorScheme.primary
-            } else {
-                MiuixTheme.colorScheme.onBackgroundVariant
-            }
-        )
-        if (status.activated) {
-            Spacer(Modifier.height(6.dp))
-            StatusRow(
-                label = "框架版本",
-                value = buildString {
-                    append(status.frameworkName ?: "未知框架")
-                    status.frameworkVersion?.let { append(" v$it") }
-                    status.frameworkVersionCode?.let { append(" ($it)") }
+private fun DashboardGridCard(
+    serviceRunning: Boolean,
+    capturedCount: Int,
+    onToggleService: (Boolean) -> Unit,
+    onNavigateToRecords: () -> Unit,
+) {
+    val moduleStatus by ModuleStatusStore.moduleStatus.collectAsState()
+    val isActivated = moduleStatus.activated
+
+    val isDark = isSystemInDarkTheme()
+    val activeBg = if (isDark) Color(0xFF132B1D) else Color(0xFFE8F8EE)
+    val inactiveBg = MiuixTheme.colorScheme.surfaceContainer
+    val activePrimaryText = if (isDark) Color(0xFF6EE7B7) else Color(0xFF166534)
+    val activeSubText = if (isDark) Color(0xFF34D399).copy(alpha = 0.85f) else Color(0xFF15803D).copy(alpha = 0.85f)
+    val activeIconTint = if (isDark) Color(0xFF10B981).copy(alpha = 0.25f) else Color(0xFF22C55E).copy(alpha = 0.35f)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(146.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        // ---- 1. 左侧大卡片: 模块状态 (占 50% 宽度，充满高度) ----
+        Box(
+            modifier = Modifier
+                .weight(1.05f)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(16.dp))
+                .background(if (isActivated) activeBg else inactiveBg)
+                .padding(14.dp)
+        ) {
+            // 右下角大尺寸半露出装饰矢量图标 (剪贴板勾选)
+            Icon(
+                imageVector = LucideIcons.ClipboardCheck,
+                contentDescription = null,
+                tint = if (isActivated) activeIconTint else MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.08f),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(68.dp)
+                    .offset(x = 8.dp, y = 8.dp)
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .align(Alignment.TopStart),
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text(
+                        text = if (isActivated) "模块已激活" else "模块未激活",
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isActivated) activePrimaryText else MiuixTheme.colorScheme.onBackground
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = if (isActivated) {
+                            moduleStatus.frameworkName?.let { "服务已就绪 · $it" } ?: "模块服务已连接"
+                        } else {
+                            "请在 LSPosed 中勾选作用域"
+                        },
+                        fontSize = 12.sp,
+                        color = if (isActivated) activeSubText else MiuixTheme.colorScheme.onBackgroundVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
-            )
-            Spacer(Modifier.height(6.dp))
-            StatusRow(
-                label = "Xposed API",
-                value = status.apiVersion?.toString() ?: "未知"
-            )
-        } else {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = "请依次确认:\n1. LSPosed 中已启用「NexClip」\n2. 作用域同时勾选「系统框架」和「NexClip」应用本身\n3. 重启手机后,模块才会注入本应用进程,此处才能实时显示激活状态",
-                color = MiuixTheme.colorScheme.onBackgroundVariant
-            )
+
+                if (isActivated && moduleStatus.frameworkVersion != null) {
+                    Text(
+                        text = "v${moduleStatus.frameworkVersion}",
+                        fontSize = 11.sp,
+                        color = activeSubText.copy(alpha = 0.7f)
+                    )
+                }
+            }
+        }
+
+        // ---- 2. 右侧两等高小卡片 (占 50% 宽度，上下排列) ----
+        Column(
+            modifier = Modifier
+                .weight(0.95f)
+                .fillMaxHeight(),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // 2.1 右上: 剪贴板监听状态 + 开关
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MiuixTheme.colorScheme.surfaceContainer)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "剪贴板监听",
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = if (serviceRunning) "已开启" else "已停止",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (serviceRunning) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackground
+                        )
+                        Switch(
+                            checked = serviceRunning,
+                            onCheckedChange = onToggleService
+                        )
+                    }
+                }
+            }
+
+            // 2.2 右下: 最近记录 + 查看全部记录按钮
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MiuixTheme.colorScheme.surfaceContainer)
+                    .clickable(onClick = onNavigateToRecords)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "同步记录",
+                        fontSize = 12.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "$capturedCount",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MiuixTheme.colorScheme.onBackground
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "全部",
+                                fontSize = 11.sp,
+                                color = MiuixTheme.colorScheme.primary
+                            )
+                            Icon(
+                                imageVector = MiuixIcons.Normal.ChevronForward,
+                                contentDescription = "查看全部",
+                                tint = MiuixTheme.colorScheme.primary,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

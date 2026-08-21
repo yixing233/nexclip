@@ -348,4 +348,60 @@ object LucideIcons {
             }
         }.build()
     }
+
+    /** Lucide ClipboardCheck 剪贴板勾选图标 */
+    val ClipboardCheck: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.ClipboardCheck",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(9f, 5f)
+                lineTo(15f, 5f)
+                curveTo(16.1f, 5f, 17f, 5.9f, 17f, 7f)
+                lineTo(17f, 7f)
+                curveTo(17f, 8.1f, 16.1f, 9f, 15f, 9f)
+                lineTo(9f, 9f)
+                curveTo(7.9f, 9f, 7f, 8.1f, 7f, 7f)
+                lineTo(7f, 7f)
+                curveTo(7f, 5.9f, 7.9f, 5f, 9f, 5f)
+                close()
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(16f, 4f)
+                lineTo(18f, 4f)
+                curveTo(19.1f, 4f, 20f, 4.9f, 20f, 6f)
+                lineTo(20f, 20f)
+                curveTo(20f, 21.1f, 19.1f, 22f, 18f, 22f)
+                lineTo(6f, 22f)
+                curveTo(4.9f, 22f, 4f, 21.1f, 4f, 20f)
+                lineTo(4f, 6f)
+                curveTo(4f, 4.9f, 4.9f, 4f, 6f, 4f)
+                lineTo(8f, 4f)
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(9f, 14f)
+                lineTo(11f, 16f)
+                lineTo(15f, 12f)
+            }
+        }.build()
+    }
 }
