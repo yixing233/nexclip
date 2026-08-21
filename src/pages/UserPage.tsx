@@ -876,7 +876,7 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
                               ? '代码片段'
                               : type === 'link'
                               ? '网页链接'
-                              : '富文本'}
+                              : '纯文本'}
                           </Tag>
                           <Text type="secondary" style={{ fontSize: 12 }}>
                             {item.deviceName || '远端设备'}
