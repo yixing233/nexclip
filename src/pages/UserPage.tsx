@@ -1,12 +1,12 @@
 import { useEffect, useState, useRef } from 'react'
 import {
   Card, Typography, Space, Button, Input, Table, Tag, Badge, message, Popconfirm,
-  Empty, Row, Col, Skeleton, Tabs, Image as AntImage, Upload, Tooltip, Dropdown, Modal, QRCode,
+  Empty, Row, Col, Skeleton, Tabs, Image as AntImage, Upload, Tooltip, Dropdown, Modal, QRCode, Segmented,
 } from 'antd'
 import {
   Home, Clock, Settings, KeyRound, RefreshCw, Check, X, LogOut, Pencil, Copy,
   Monitor, Trash2, Search, Send, Image as ImageIcon, Code2, Globe, ExternalLink,
-  Smartphone, Laptop, UploadCloud, ChevronRight, Filter, ShieldCheck, QrCode as QrIcon, AlertTriangle,
+  Smartphone, Laptop, UploadCloud, ChevronRight, Filter, ShieldCheck, QrCode as QrIcon, AlertTriangle, FileText,
 } from 'lucide-react'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
@@ -783,29 +783,59 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
                 style={{ width: 280, borderRadius: 999 }}
               />
 
-              {/* 分类过滤胶囊 (对齐安卓端: 全部、文本、代码、图片、链接) */}
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {(
-                  [
-                    { key: 'all', label: '全部' },
-                    { key: 'text', label: '文本' },
-                    { key: 'code', label: '代码' },
-                    { key: 'image', label: '图片' },
-                    { key: 'link', label: '链接' },
-                  ] as const
-                ).map((tab) => (
-                  <Button
-                    key={tab.key}
-                    type={historyFilter === tab.key ? 'primary' : 'default'}
-                    shape="round"
-                    size="small"
-                    onClick={() => setHistoryFilter(tab.key)}
-                    style={{ fontWeight: 500, fontSize: 12, height: 28 }}
-                  >
-                    {tab.label}
-                  </Button>
-                ))}
-              </div>
+              {/* 类型筛选分段控制器 (Ant Design Segmented) */}
+              <Segmented
+                value={historyFilter}
+                onChange={(val) => setHistoryFilter(val as any)}
+                options={[
+                  {
+                    value: 'all',
+                    label: (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 4px' }}>
+                        <Filter size={13} />
+                        <span>全部</span>
+                      </div>
+                    ),
+                  },
+                  {
+                    value: 'text',
+                    label: (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 4px' }}>
+                        <FileText size={13} />
+                        <span>文本</span>
+                      </div>
+                    ),
+                  },
+                  {
+                    value: 'code',
+                    label: (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 4px' }}>
+                        <Code2 size={13} />
+                        <span>代码</span>
+                      </div>
+                    ),
+                  },
+                  {
+                    value: 'image',
+                    label: (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 4px' }}>
+                        <ImageIcon size={13} />
+                        <span>图片</span>
+                      </div>
+                    ),
+                  },
+                  {
+                    value: 'link',
+                    label: (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 4px' }}>
+                        <Globe size={13} />
+                        <span>链接</span>
+                      </div>
+                    ),
+                  },
+                ]}
+                style={{ borderRadius: 10, padding: 3 }}
+              />
 
               {/* 操作按钮 */}
               <Space>
