@@ -1287,8 +1287,13 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
             </div>
 
             {/* 倒计时 & 提示 */}
-            <div style={{ fontSize: 12, color: '#9CA3AF', marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: '#9CA3AF', marginBottom: 12 }}>
               验证码有效时间剩余: <Text strong style={{ color: '#F59E0B' }}>{countdown}</Text>
+            </div>
+
+            <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 16 }}>
+              在另一台设备输入上述 6 位数字验证码或扫码即可直接连接。<br />
+              <span style={{ color: '#EF4444' }}>⚠️ 关闭对话框后配对码将立即失效。</span>
             </div>
 
             {/* 操作按钮 */}
@@ -1305,7 +1310,7 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
                 复制 6 位验证码
               </Button>
               <Button onClick={closePairingModal} style={{ borderRadius: 8 }}>
-                关闭
+                完成并关闭
               </Button>
             </Space>
           </div>
