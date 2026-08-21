@@ -200,8 +200,6 @@ private fun MainScreen() {
     var isScanOpen by remember { mutableStateOf(false) }
     var enterMultiSelectTrigger by remember { mutableIntStateOf(0) }
     var clearDialogTrigger by remember { mutableIntStateOf(0) }
-    var settingsSubPageTitle by remember { mutableStateOf<String?>(null) }
-    var settingsBackTrigger by remember { mutableIntStateOf(0) }
 
     BackHandler(enabled = isScanOpen) {
         isScanOpen = false
@@ -359,33 +357,17 @@ private fun MainScreen() {
                             onOverlayActiveChanged = { isOverlayActive = it }
                         )
                     }
-                    else -> PageShell(
-                        title = settingsSubPageTitle ?: "设置",
+                    else -> SettingsPage(
                         bottomInnerPadding = bottomInnerPadding,
-                        navigationIcon = if (settingsSubPageTitle != null) {
-                            {
-                                IconButton(onClick = { settingsBackTrigger++ }) {
-                                    Icon(
-                                        imageVector = MiuixIcons.Normal.Back,
-                                        contentDescription = "返回"
-                                    )
-                                }
-                            }
-                        } else { {} }
-                    ) { scrollBehavior, topPadding ->
-                        SettingsPage(
-                            scrollBehavior, topPadding, bottomInnerPadding, snackbarHostState,
-                            floatingBarEnabled = floatingBar,
-                            onFloatingBarChange = {
-                                floatingBar = it
-                                SyncSettings.setFloatingBottomBarEnabled(appContext, it)
-                            },
-                            onOverlayActiveChanged = { isOverlayActive = it },
-                            onSubPageTitleChanged = { settingsSubPageTitle = it },
-                            onOpenQrScanner = { isScanOpen = true },
-                            backTrigger = settingsBackTrigger
-                        )
-                    }
+                        snackbarHostState = snackbarHostState,
+                        floatingBarEnabled = floatingBar,
+                        onFloatingBarChange = {
+                            floatingBar = it
+                            SyncSettings.setFloatingBottomBarEnabled(appContext, it)
+                        },
+                        onOverlayActiveChanged = { isOverlayActive = it },
+                        onOpenQrScanner = { isScanOpen = true }
+                    )
                 }
             }
         }
@@ -550,106 +532,6 @@ private fun MainScreen() {
     }
     }
 }
-
-/**
- * 毛玻璃表面(顶栏/底栏通用):内容由 [backdrop] 捕获后由 textureBlur 模糊。
- *
- * backdrop 的层录制/坐标定位与 blur 表面的绘制存在时序差:层就绪后
- * blur 表面不会自动重绘,静止帧会残留透明。因此组合后(以及 [refreshKey]
- * 变化后)短时 tick 强制重绘,保证显示的是最新捕获内容。
- */
-@Composable
-private fun BarBlurSurface(
-    backdrop: LayerBackdrop,
-    refreshKey: Any? = Unit,
-    content: @Composable () -> Unit
-) {
-    var tick by remember { mutableIntStateOf(0) }
-    LaunchedEffect(refreshKey) {
-        repeat(6) {
-            delay(80)
-            tick++
-        }
-    }
-    val barSurface = MiuixTheme.colorScheme.surface
-    Box(
-        modifier = Modifier
-            // 读取 tick:每次变化都会让 graphicsLayer 节点更新并触发重绘
-            .graphicsLayer {
-                val t = tick
-                alpha = if (t % 2 == 0) 1f else 1f
-            }
-            .textureBlur(
-                backdrop = backdrop,
-                shape = RectangleShape,
-                blurRadius = BlurDefaults.BlurRadius,
-                colors = BlurDefaults.blurColors(
-                    blendColors = listOf(
-                        BlendColorEntry(
-                            color = barSurface.copy(alpha = 0.55f),
-                            mode = BlurBlendMode.SrcOver
-                        )
-                    )
-                )
-            )
-    ) {
-        content()
-    }
-}
-
-/**
- * KernelSU 风格整页结构:每个页面持有自己的 Scaffold、大标题 TopAppBar 与
- * 独立的滚动状态,整页(含顶栏)随 HorizontalPager 一起滑动切换,底栏固定在外层。
- *
- * 顶栏毛玻璃:每页维护独立的 pageBackdrop,录制范围仅为本页内容层(不含顶栏
- * blur 表面),顶栏 BarBlurSurface 读取它 —— 与页面同坐标系无错位,且不会被
- * 外层 Pager backdrop 录制到(顶栏 blur 表面读的是 pageBackdrop,非外层层,
- * 不构成 GraphicsLayer 自引用)。
- */
-@Composable
-internal fun PageShell(
-    title: String,
-    bottomInnerPadding: Dp,
-    navigationIcon: @Composable () -> Unit = {},
-    actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
-    content: @Composable (ScrollBehavior, Dp) -> Unit
-) {
-    val scrollBehavior = MiuixScrollBehavior()
-    val barSurface = MiuixTheme.colorScheme.surface
-    // 本页内容捕获层:只录内容(不含顶栏 blur 表面),顶栏模糊读取它
-    val pageBackdrop = rememberLayerBackdrop(
-        onDraw = {
-            drawRect(barSurface)
-            drawContent()
-        }
-    )
-    Scaffold(
-        topBar = {
-            BarBlurSurface(backdrop = pageBackdrop) {
-                TopAppBar(
-                    title = title,
-                    largeTitle = title,
-                    color = Color.Transparent,
-                    scrollBehavior = scrollBehavior,
-                    navigationIcon = navigationIcon,
-                    actions = actions
-                )
-            }
-        },
-        contentWindowInsets = WindowInsets.systemBars
-            .add(WindowInsets.displayCutout)
-            .only(WindowInsetsSides.Horizontal)
-    ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .layerBackdrop(pageBackdrop)
-        ) {
-            content(scrollBehavior, padding.calculateTopPadding())
-        }
-    }
-}
-
 /** 状态行:左标签右值(模块状态卡片用) */
 @Composable
 fun StatusRow(

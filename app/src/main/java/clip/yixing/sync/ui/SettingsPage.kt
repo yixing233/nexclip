@@ -122,16 +122,12 @@ enum class SettingsSubPage(val title: String, val subtitle: String) {
 
 @Composable
 internal fun SettingsPage(
-    scrollBehavior: ScrollBehavior,
-    topPadding: Dp,
     bottomInnerPadding: Dp,
     snackbarHostState: SnackbarHostState,
     floatingBarEnabled: Boolean,
     onFloatingBarChange: (Boolean) -> Unit,
     onOverlayActiveChanged: (Boolean) -> Unit = {},
-    onSubPageTitleChanged: (String?) -> Unit = {},
     onOpenQrScanner: () -> Unit = {},
-    backTrigger: Int = 0,
 ) {
     val context = LocalContext.current
     val prefs = remember { SyncSettings.prefs(context) }
@@ -143,18 +139,6 @@ internal fun SettingsPage(
     // 系统返回手势与按键支持
     BackHandler(enabled = currentSubPage != null) {
         currentSubPage = null
-    }
-
-    // 顶栏返回按钮联动
-    LaunchedEffect(backTrigger) {
-        if (backTrigger > 0) {
-            currentSubPage = null
-        }
-    }
-
-    // 动态同步顶栏标题
-    LaunchedEffect(currentSubPage) {
-        onSubPageTitleChanged(currentSubPage?.title)
     }
 
     // ---- 1. 基础设置与设备状态 ----
@@ -402,82 +386,123 @@ internal fun SettingsPage(
         when (subPage) {
             null -> {
                 // ---- 一级设置主页 ----
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .overScrollVertical()
-                        .nestedScroll(scrollBehavior.nestedScrollConnection),
-                    contentPadding = PaddingValues(
-                        start = 16.dp,
-                        end = 16.dp,
-                        top = topPadding + 8.dp,
-                        bottom = 8.dp
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    // 5 大二级设置入口卡片（无分隔线）
-                    item {
-                        SectionBlock(title = "设置分类", insideMargin = PaddingValues()) {
-                            SettingsNavRow(
-                                title = "基础设置",
-                                summary = "设备名称、开机自启、悬浮底栏、记录上限",
-                                onClick = { currentSubPage = SettingsSubPage.Basic }
-                            )
-                            SettingsNavRow(
-                                title = "同步设置",
-                                summary = "服务器配置、设备配对、在线设备列表",
-                                onClick = { currentSubPage = SettingsSubPage.Sync }
-                            )
-                            SettingsNavRow(
-                                title = "过滤规则",
-                                summary = "内容过滤黑名单、敏感内容保护",
-                                onClick = { currentSubPage = SettingsSubPage.Filter }
-                            )
-                            SettingsNavRow(
-                                title = "数据管理",
-                                summary = "备份导出与导入、应用缓存清理",
-                                onClick = { currentSubPage = SettingsSubPage.Data }
-                            )
-                            SettingsNavRow(
-                                title = "权限管理",
-                                summary = "通知权限、电池优化白名单、自启动",
-                                onClick = { currentSubPage = SettingsSubPage.Permission }
+                PageShell(
+                    title = "设置",
+                    bottomInnerPadding = bottomInnerPadding
+                ) { scrollBehavior, topPadding ->
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .overScrollVertical()
+                            .nestedScroll(scrollBehavior.nestedScrollConnection),
+                        contentPadding = PaddingValues(
+                            start = 16.dp,
+                            end = 16.dp,
+                            top = topPadding + 8.dp,
+                            bottom = 8.dp
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // 5 大二级设置入口卡片（无分隔线）
+                        item {
+                            SectionBlock(title = "设置分类", insideMargin = PaddingValues()) {
+                                SettingsNavRow(
+                                    title = "基础设置",
+                                    summary = "设备名称、开机自启、悬浮底栏、记录上限",
+                                    onClick = { currentSubPage = SettingsSubPage.Basic }
+                                )
+                                SettingsNavRow(
+                                    title = "同步设置",
+                                    summary = "服务器配置、设备配对、在线设备列表",
+                                    onClick = { currentSubPage = SettingsSubPage.Sync }
+                                )
+                                SettingsNavRow(
+                                    title = "过滤规则",
+                                    summary = "内容过滤黑名单、敏感内容保护",
+                                    onClick = { currentSubPage = SettingsSubPage.Filter }
+                                )
+                                SettingsNavRow(
+                                    title = "数据管理",
+                                    summary = "备份导出与导入、应用缓存清理",
+                                    onClick = { currentSubPage = SettingsSubPage.Data }
+                                )
+                                SettingsNavRow(
+                                    title = "权限管理",
+                                    summary = "通知权限、电池优化白名单、自启动",
+                                    onClick = { currentSubPage = SettingsSubPage.Permission }
+                                )
+                            }
+                        }
+
+                        // 关于
+                        item {
+                            SectionBlock(title = "关于") {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    val icon = remember { appIconBitmap(context) }
+                                    Image(
+                                        bitmap = icon,
+                                        contentDescription = "剪贴板同步图标",
+                                        modifier = Modifier
+                                            .size(56.dp)
+                                            .clip(RoundedCornerShape(14.dp))
+                                    )
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        text = "剪贴板同步",
+                                        fontSize = 17.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        text = "版本 " + appVersion(context),
+                                        fontSize = 13.sp,
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant
+                                    )
+                                }
+                                Spacer(Modifier.height(10.dp))
+                                StatusRow(label = "包名", value = context.packageName ?: "-")
+                                Spacer(Modifier.height(6.dp))
+                                StatusRow(label = "构建技术", value = "Miuix · LSPosed")
+                            }
+                        }
+
+                        item {
+                            Spacer(Modifier.height(bottomInnerPadding))
+                        }
+                    }
+                }
+            }
+
+            SettingsSubPage.Basic -> {
+                // ---- 二级页面 1: 基础设置 ----
+                PageShell(
+                    title = "基础设置",
+                    bottomInnerPadding = bottomInnerPadding,
+                    navigationIcon = {
+                        IconButton(onClick = { currentSubPage = null }) {
+                            Icon(
+                                imageVector = MiuixIcons.Normal.Back,
+                                contentDescription = "返回"
                             )
                         }
                     }
-
-                    // 关于
-                    item {
-                        SectionBlock(title = "关于") {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                val icon = remember { appIconBitmap(context) }
-                                Image(
-                                    bitmap = icon,
-                                    contentDescription = "剪贴板同步图标",
-                                    modifier = Modifier
-                                        .size(56.dp)
-                                        .clip(RoundedCornerShape(14.dp))
-                                )
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    text = "剪贴板同步",
-                                    fontSize = 17.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Spacer(Modifier.height(2.dp))
-                                Text(
-                                    text = "版本 " + appVersion(context),
-                                    fontSize = 13.sp,
-                                    color = MiuixTheme.colorScheme.onBackgroundVariant
-                                )
-                            }
-                            Spacer(Modifier.height(10.dp))
-                            StatusRow(label = "包名", value = context.packageName ?: "-")
-                            Spacer(Modifier.height(6.dp))
-                            StatusRow(label = "构建技术", value = "Miuix · LSPosed")
+                ) { scrollBehavior, topPadding ->
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .overScrollVertical()
+                            .nestedScroll(scrollBehavior.nestedScrollConnection),
+                        contentPadding = PaddingValues(
+                            start = 16.dp,
+                            end = 16.dp,
+                            top = topPadding + 8.dp,
+                            bottom = bottomInnerPadding + 16.dp
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {el = "构建技术", value = "Miuix · LSPosed")
                         }
                     }
 
@@ -640,19 +665,31 @@ internal fun SettingsPage(
 
             SettingsSubPage.Sync -> {
                 // ---- 二级页面 2: 同步设置 ----
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .overScrollVertical()
-                        .nestedScroll(scrollBehavior.nestedScrollConnection),
-                    contentPadding = PaddingValues(
-                        start = 16.dp,
-                        end = 16.dp,
-                        top = topPadding + 8.dp,
-                        bottom = bottomInnerPadding + 16.dp
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
+                PageShell(
+                    title = "同步设置",
+                    bottomInnerPadding = bottomInnerPadding,
+                    navigationIcon = {
+                        IconButton(onClick = { currentSubPage = null }) {
+                            Icon(
+                                imageVector = MiuixIcons.Normal.Back,
+                                contentDescription = "返回"
+                            )
+                        }
+                    }
+                ) { scrollBehavior, topPadding ->
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .overScrollVertical()
+                            .nestedScroll(scrollBehavior.nestedScrollConnection),
+                        contentPadding = PaddingValues(
+                            start = 16.dp,
+                            end = 16.dp,
+                            top = topPadding + 8.dp,
+                            bottom = bottomInnerPadding + 16.dp
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
                     item {
                         SectionBlock(title = "服务器设置") {
                             TextField(
@@ -862,19 +899,31 @@ internal fun SettingsPage(
 
             SettingsSubPage.Filter -> {
                 // ---- 二级页面 3: 过滤规则 ----
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .overScrollVertical()
-                        .nestedScroll(scrollBehavior.nestedScrollConnection),
-                    contentPadding = PaddingValues(
-                        start = 16.dp,
-                        end = 16.dp,
-                        top = topPadding + 8.dp,
-                        bottom = bottomInnerPadding + 16.dp
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
+                PageShell(
+                    title = "过滤规则",
+                    bottomInnerPadding = bottomInnerPadding,
+                    navigationIcon = {
+                        IconButton(onClick = { currentSubPage = null }) {
+                            Icon(
+                                imageVector = MiuixIcons.Normal.Back,
+                                contentDescription = "返回"
+                            )
+                        }
+                    }
+                ) { scrollBehavior, topPadding ->
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .overScrollVertical()
+                            .nestedScroll(scrollBehavior.nestedScrollConnection),
+                        contentPadding = PaddingValues(
+                            start = 16.dp,
+                            end = 16.dp,
+                            top = topPadding + 8.dp,
+                            bottom = bottomInnerPadding + 16.dp
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
                     item {
                         SectionBlock(title = "内容过滤黑名单") {
                             Text(
@@ -995,19 +1044,31 @@ internal fun SettingsPage(
 
             SettingsSubPage.Data -> {
                 // ---- 二级页面 4: 数据管理 ----
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .overScrollVertical()
-                        .nestedScroll(scrollBehavior.nestedScrollConnection),
-                    contentPadding = PaddingValues(
-                        start = 16.dp,
-                        end = 16.dp,
-                        top = topPadding + 8.dp,
-                        bottom = bottomInnerPadding + 16.dp
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
+                PageShell(
+                    title = "数据管理",
+                    bottomInnerPadding = bottomInnerPadding,
+                    navigationIcon = {
+                        IconButton(onClick = { currentSubPage = null }) {
+                            Icon(
+                                imageVector = MiuixIcons.Normal.Back,
+                                contentDescription = "返回"
+                            )
+                        }
+                    }
+                ) { scrollBehavior, topPadding ->
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .overScrollVertical()
+                            .nestedScroll(scrollBehavior.nestedScrollConnection),
+                        contentPadding = PaddingValues(
+                            start = 16.dp,
+                            end = 16.dp,
+                            top = topPadding + 8.dp,
+                            bottom = bottomInnerPadding + 16.dp
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
                     item {
                         SectionBlock(title = "备份与迁移", insideMargin = PaddingValues()) {
                             Row(
@@ -1112,19 +1173,31 @@ internal fun SettingsPage(
 
             SettingsSubPage.Permission -> {
                 // ---- 二级页面 5: 权限管理 ----
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .overScrollVertical()
-                        .nestedScroll(scrollBehavior.nestedScrollConnection),
-                    contentPadding = PaddingValues(
-                        start = 16.dp,
-                        end = 16.dp,
-                        top = topPadding + 8.dp,
-                        bottom = bottomInnerPadding + 16.dp
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
+                PageShell(
+                    title = "权限管理",
+                    bottomInnerPadding = bottomInnerPadding,
+                    navigationIcon = {
+                        IconButton(onClick = { currentSubPage = null }) {
+                            Icon(
+                                imageVector = MiuixIcons.Normal.Back,
+                                contentDescription = "返回"
+                            )
+                        }
+                    }
+                ) { scrollBehavior, topPadding ->
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .overScrollVertical()
+                            .nestedScroll(scrollBehavior.nestedScrollConnection),
+                        contentPadding = PaddingValues(
+                            start = 16.dp,
+                            end = 16.dp,
+                            top = topPadding + 8.dp,
+                            bottom = bottomInnerPadding + 16.dp
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
                     item {
                         SectionBlock(title = "系统权限", insideMargin = PaddingValues()) {
                             // 通知权限
@@ -1254,6 +1327,7 @@ internal fun SettingsPage(
             }
         }
     }
+}
 
     // ---- 对话框与弹层 ----
 
