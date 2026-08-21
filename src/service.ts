@@ -411,7 +411,17 @@ export class SyncService {
       return first.deviceToken ? { ...result, deviceToken: first.deviceToken } : result;
     }
     if (existing.RevokedAt) {
-      throw new PairError(410, '设备凭证已失效,请重新初始化后再配对');
+      const activeCount = Number((this.db.prepare('SELECT COUNT(*) AS c FROM "Devices" WHERE "RevokedAt" IS NULL AND "UserId" IS NOT NULL').get() as { c: number }).c);
+      if (activeCount > 0) {
+        throw new PairError(403, '该设备已被解绑，请输入其他已连接设备的 6 位配对码重新加入');
+      }
+      // 服务器已无其他活跃设备，允许被移除设备重新初始化
+      const userId = this.createUser(now);
+      const issued = this.issueDeviceToken();
+      this.db.prepare('UPDATE "Devices" SET "Name" = ?, "Platform" = ?, "Ip" = ?, "Version" = ?, "LastSeenAt" = ?, "Token" = ?, "PairedAt" = ?, "UserId" = ?, "RevokedAt" = NULL WHERE "Id" = ?')
+        .run(deviceName || existing.Name, plat, ip, null, now, issued.hash, now, userId, deviceId);
+      const result = this.generatePairingCode(deviceId, deviceName, ip, issued.token, null, plat);
+      return { ...result, deviceToken: issued.token };
     }
     if (trustedUserId && existing.UserId !== trustedUserId) {
       throw new PairError(403, '当前网页会话无权使用该设备生成配对码');
@@ -464,9 +474,6 @@ export class SyncService {
     const userId = r.UserId;
     const issued = this.issueDeviceToken();
     const existing = this.db.prepare('SELECT * FROM "Devices" WHERE "Id" = ?').get(deviceId) as unknown as DeviceRow | null;
-    if (existing?.UserId && existing.UserId !== userId) {
-      throw new PairError(409, '设备已绑定其他用户组,不能重复配对');
-    }
     // 将配对请求置为 approved 并关联目标设备
     this.db.prepare('UPDATE "PairingRequests" SET "TargetDeviceId" = ?, "TargetDeviceName" = ?, "TargetTokenHash" = ?, "Status" = \'approved\', "ConfirmedAt" = ? WHERE "Code" = ?')
       .run(deviceId, deviceName || existing?.Name || '未知设备', issued.hash, now, normCode);
