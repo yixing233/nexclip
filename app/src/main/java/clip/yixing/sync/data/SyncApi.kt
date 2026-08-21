@@ -73,20 +73,20 @@ class SyncApi(
 
     private fun execute(req: Request): okhttp3.Response = try {
         val resp = client.newCall(req).execute()
-        if (resp.code == 401) throw ApiException("设备凭证无效或已失效(401),请重新配对", 401)
-        if (resp.code == 410) throw ApiException("设备已被移除(410),请重新配对", 410)
         if (!resp.isSuccessful) {
-            // 优先透传服务端 { error: "..." } 消息(如"配对码无效或已过期")
             val body = resp.body?.string()
-            val msg = try {
-                JSONObject(body ?: "{}").optString("error")
-                    .ifBlank { httpStatusText(resp.code) }
+            val serverMsg = try {
+                val o = JSONObject(body ?: "{}")
+                o.optString("error").takeIf { it.isNotBlank() }
             } catch (_: Exception) {
-                httpStatusText(resp.code)
+                null
             }
-            throw ApiException(msg, resp.code)
+            val finalMsg = serverMsg ?: httpStatusText(resp.code)
+            throw ApiException(finalMsg, resp.code)
         }
         resp
+    } catch (e: ApiException) {
+        throw e
     } catch (e: java.io.IOException) {
         throw ApiException(networkErrorText(e))
     }

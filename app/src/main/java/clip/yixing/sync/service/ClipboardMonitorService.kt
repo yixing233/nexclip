@@ -81,7 +81,6 @@ class ClipboardMonitorService : Service() {
 
     override fun onDestroy() {
         uploadJob?.cancel()
-        legacyMigrationJob?.cancel()
         push?.disconnect()
         push = null
         clipboard.removePrimaryClipChangedListener(listener)
@@ -98,38 +97,9 @@ class ClipboardMonitorService : Service() {
         val url = SyncSettings.serverUrl(ctx)
         val deviceId = SyncSettings.ensureDeviceId(ctx)
         val deviceToken = SyncSettings.deviceToken(ctx)
-        if (url.isBlank() || !SyncSettings.isPaired(ctx)) {
+        if (url.isBlank() || !SyncSettings.isPaired(ctx) || deviceToken.isBlank()) {
             isServerConnected.value = false
             serverConnectionState.value = ServerConnectionState.DISCONNECTED
-            return
-        }
-        if (deviceToken.isBlank()) {
-            isServerConnected.value = false
-            serverConnectionState.value = ServerConnectionState.CONNECTING
-            if (legacyMigrationJob?.isActive != true) {
-                legacyMigrationJob = scope.launch {
-                    try {
-                        if (!migrateLegacyCredential(ctx, url, deviceId)) {
-                            SyncSettings.clearPairing(ctx)
-                            serverConnectionState.value = ServerConnectionState.DISCONNECTED
-                            return@launch
-                        }
-                        connectPush()
-                        pullAndApply()
-                    } catch (e: clip.yixing.sync.data.ApiException) {
-                        if (e.statusCode == 401 || e.statusCode == 403 ||
-                            e.statusCode == 404 || e.statusCode == 409 || e.statusCode == 410) {
-                            SyncSettings.clearPairing(ctx)
-                        }
-                        serverConnectionState.value = ServerConnectionState.DISCONNECTED
-                    } catch (_: Exception) {
-                        // 网络暂时不可用时保留旧状态，下次服务启动继续尝试迁移。
-                        serverConnectionState.value = ServerConnectionState.DISCONNECTED
-                    } finally {
-                        legacyMigrationJob = null
-                    }
-                }
-            }
             return
         }
         serverConnectionState.value = ServerConnectionState.CONNECTING
@@ -164,47 +134,15 @@ class ClipboardMonitorService : Service() {
         client.onAuthFailure = {
             isServerConnected.value = false
             serverConnectionState.value = ServerConnectionState.DISCONNECTED
-            // onAuthFailure 可能来自 SignalR 的 onClosed 回调，避免在回调线程同步 stop 导致重入。
-            if (legacyMigrationJob?.isActive != true) {
-                legacyMigrationJob = scope.launch {
-                    try {
-                        client.disconnect()
-                        if (push === client) push = null
-                        if (migrateLegacyCredential(ctx, url, deviceId)) {
-                            connectPush()
-                            pullAndApply()
-                        } else {
-                            SyncSettings.clearPairing(ctx)
-                        }
-                    } catch (e: clip.yixing.sync.data.ApiException) {
-                        if (e.statusCode == 401 || e.statusCode == 403 ||
-                            e.statusCode == 404 || e.statusCode == 409 || e.statusCode == 410) {
-                            SyncSettings.clearPairing(ctx)
-                        }
-                    } catch (_: Exception) {
-                        // 保留本地状态，网络恢复后重启服务会再次尝试迁移。
-                    } finally {
-                        legacyMigrationJob = null
-                    }
-                }
+            // 服务端通知凭证失效或设备已被移除,清空配对状态并断开,绝不私自重新注册建档
+            SyncSettings.clearPairing(ctx)
+            scope.launch {
+                client.disconnect()
+                if (push === client) push = null
             }
         }
         push = client
         client.connect()
-    }
-
-    /** 旧版设备没有专属 Token，使用已登记的 deviceId 一次性领取并立即作废迁移码。 */
-    private fun migrateLegacyCredential(ctx: Context, url: String, deviceId: String): Boolean {
-        val migration = SyncApi(url, deviceId, "")
-            .createPairingCode(deviceId, SyncSettings.deviceName(ctx))
-        val issuedToken = migration.deviceToken ?: return false
-        if (issuedToken.isBlank()) return false
-        SyncSettings.setDeviceToken(ctx, issuedToken)
-        SyncSettings.setPaired(ctx, true)
-        runCatching {
-            SyncApi(url, deviceId, issuedToken).revokePairingCode(migration.code)
-        }
-        return true
     }
 
     private fun pullAndApply() {
@@ -221,6 +159,7 @@ class ClipboardMonitorService : Service() {
             if (e.statusCode == 401 || e.statusCode == 403 || e.statusCode == 410) {
                 SyncSettings.clearPairing(this)
                 push?.disconnect()
+                push = null
             }
         } catch (_: Exception) {
             // 未配置/离线时静默
