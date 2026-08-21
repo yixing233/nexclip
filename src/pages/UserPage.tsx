@@ -6,7 +6,7 @@ import {
 import {
   Home, Clock, Settings, KeyRound, RefreshCw, Check, X, LogOut, Pencil, Copy,
   Monitor, Trash2, Search, Send, Image as ImageIcon, Code2, Globe, ExternalLink,
-  Smartphone, Laptop, UploadCloud, ChevronRight, Filter, ShieldCheck, QrCode as QrIcon,
+  Smartphone, Laptop, UploadCloud, ChevronRight, Filter, ShieldCheck, QrCode as QrIcon, AlertTriangle,
 } from 'lucide-react'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
@@ -129,7 +129,7 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
   // 监听新设备加入: 弹窗开启期间一旦检测到新设备连入, 自动提示成功并平滑关闭弹窗
   useEffect(() => {
     if (pairing && devices.length > prevDevCountRef.current && prevDevCountRef.current > 0) {
-      message.success('🎉 新设备已成功扫码/验证接入！')
+      message.success('新设备已成功扫码/验证接入！')
       setPairing(null)
     }
     prevDevCountRef.current = devices.length
@@ -1239,8 +1239,9 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
                 />
               </div>
             </div>
-            <div style={{ fontSize: 13, color: '#4B5563', fontWeight: 500, marginBottom: 16 }}>
-              📱 手机使用系统相机或扫一扫，即可一秒直连
+            <div style={{ fontSize: 13, color: '#4B5563', fontWeight: 500, marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+              <Smartphone size={16} color="#2563EB" />
+              <span>手机使用系统相机或扫一扫，即可一秒直连</span>
             </div>
 
             {/* 分隔线与方案 2 提示 */}
@@ -1291,9 +1292,12 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
               验证码有效时间剩余: <Text strong style={{ color: '#F59E0B' }}>{countdown}</Text>
             </div>
 
-            <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 16 }}>
-              在另一台设备输入上述 6 位数字验证码或扫码即可直接连接。<br />
-              <span style={{ color: '#EF4444' }}>⚠️ 关闭对话框后配对码将立即失效。</span>
+            <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+              <div>在另一台设备输入上述 6 位数字验证码或扫码即可直接连接。</div>
+              <div style={{ color: '#EF4444', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <AlertTriangle size={13} color="#EF4444" />
+                <span>关闭对话框后配对码将立即失效。</span>
+              </div>
             </div>
 
             {/* 操作按钮 */}

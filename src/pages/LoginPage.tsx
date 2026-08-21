@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Card, Form, Input, Button, message, Typography, theme, Spin, Tag } from 'antd'
-import { User, Lock, ArrowRight } from 'lucide-react'
+import { User, Lock, ArrowRight, Smartphone } from 'lucide-react'
 import { login as apiLogin, pairDirect, setSession, getDefaultDeviceName } from '../api'
 
 const { Title, Text } = Typography
@@ -106,8 +106,9 @@ export default function LoginPage({ mode, onLogin }: { mode: 'user' | 'admin'; o
           autoPairing ? (
             <div style={{ textAlign: 'center', padding: '32px 0' }}>
               <Spin size="large" />
-              <div style={{ marginTop: 20, fontSize: 15, fontWeight: 600 }}>
-                📱 正在通过扫码直连加入同步组...
+              <div style={{ marginTop: 20, fontSize: 15, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+                <Smartphone size={18} color={token.colorPrimary} />
+                <span>正在通过扫码直连加入同步组...</span>
               </div>
               <Text type="secondary" style={{ fontSize: 13, marginTop: 8, display: 'block' }}>
                 验证通过后将自动进入控制台
