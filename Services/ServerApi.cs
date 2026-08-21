@@ -240,35 +240,14 @@ public sealed class ServerApi
     }
 
     /// <summary>
-    /// POST /api/pair: 发起配对 (配对码 + 用户ID + 本机设备信息), 提交后进入 pending 状态等待对方确认。
+    /// POST /api/pair: 6 位纯数字验证码 / 扫码单向即入配对 (无需二次确认)。
     /// </summary>
     public async Task<PairResult> PairAsync(
-        string serverUrl, string pairingCode, string userId,
-        string deviceId, string deviceName, CancellationToken ct = default)
-    {
-        var payload = new { pairingCode, userId, deviceId, deviceName };
-        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(serverUrl, "/api/pair"))
-        {
-            Content = JsonContent.Create(payload),
-        };
-        var json = await SendAsync<JsonElement>(request, "", "", ct);
-        return new PairResult
-        {
-            DeviceId = deviceId,
-            DeviceToken = json.TryGetProperty("deviceToken", out var token) ? token.GetString() ?? "" : "",
-            Status = json.TryGetProperty("status", out var status) ? status.GetString() ?? "pending" : "pending",
-        };
-    }
-
-    /// <summary>
-    /// POST /api/pair/direct: 方案 1/2 单向即入配对 (凭 6 位纯数字验证码直接准入, 无需二次确认)。
-    /// </summary>
-    public async Task<PairResult> PairDirectAsync(
         string serverUrl, string code,
         string deviceId, string deviceName, string platform = "Windows", CancellationToken ct = default)
     {
         var payload = new { code = code.Trim(), deviceId, deviceName, platform };
-        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(serverUrl, "/api/pair/direct"))
+        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(serverUrl, "/api/pair"))
         {
             Content = JsonContent.Create(payload),
         };
@@ -282,44 +261,11 @@ public sealed class ServerApi
         };
     }
 
-    /// <summary>
-    /// GET /api/pair/status: 轮询配对审核状态 (pending / approved / rejected / expired)。
-    /// </summary>
-    public async Task<PairStatusResult> GetPairStatusAsync(
-        string serverUrl, string pairingCode, string deviceId, CancellationToken ct = default)
-    {
-        var url = Endpoint(serverUrl, $"/api/pair/status?code={Uri.EscapeDataString(pairingCode)}&deviceId={Uri.EscapeDataString(deviceId)}");
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        var json = await SendAsync<JsonElement>(request, "", "", ct);
-        return json.Deserialize<PairStatusResult>(new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? new();
-    }
-
-    /// <summary>
-    /// GET /api/pairing-requests: 生成方轮询待确认的配对请求 (凭配对码 + 生成方设备ID)。
-    /// </summary>
-    public async Task<List<PairingRequestInfo>> GetPairingRequestsAsync(
-        string serverUrl, string code, string generatorId, string deviceToken = "", CancellationToken ct = default)
-    {
-        var url = Endpoint(serverUrl, $"/api/pairing-requests?code={Uri.EscapeDataString(code)}&generatorId={Uri.EscapeDataString(generatorId)}");
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        var json = await SendAsync<JsonElement>(request, generatorId, deviceToken, ct);
-        return json.Deserialize<List<PairingRequestInfo>>(new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? new();
-    }
-
-    /// <summary>
-    /// POST /api/pairing-requests/confirm: 生成方确认或拒绝待处理的配对请求。
-    /// </summary>
-    public async Task<bool> ConfirmPairingRequestAsync(
-        string serverUrl, string code, string action, string generatorId, string deviceToken = "", CancellationToken ct = default)
-    {
-        var payload = new { code, action, generatorId };
-        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(serverUrl, "/api/pairing-requests/confirm"))
-        {
-            Content = JsonContent.Create(payload),
-        };
-        var json = await SendAsync<JsonElement>(request, generatorId, deviceToken, ct);
-        return json.TryGetProperty("status", out var s) && s.GetString() == action;
-    }
+    /// <summary>别名</summary>
+    public Task<PairResult> PairDirectAsync(
+        string serverUrl, string code,
+        string deviceId, string deviceName, string platform = "Windows", CancellationToken ct = default)
+        => PairAsync(serverUrl, code, deviceId, deviceName, platform, ct);
 
     /// <summary>GET /api/devices:设备列表(含在线状态)。失败返回空列表。</summary>
     public async Task<List<DeviceInfo>> GetDevicesAsync(

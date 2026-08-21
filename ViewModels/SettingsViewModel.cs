@@ -75,12 +75,9 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool isTesting;
 
-    // ---- 设备配对(配对码 + 用户ID → 等待对方确认) ----
+    // ---- 设备配对(6 位纯数字验证码单向即入) ----
     [ObservableProperty]
     private string pairingCode = "";
-
-    [ObservableProperty]
-    private string pairUserId = "";
 
     [ObservableProperty]
     private bool isPairing;
@@ -513,13 +510,12 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 配对: 输入 6 位配对验证码, 采用单向即入配对 (同时兼容旧版双向握手)。
+    /// 配对: 输入 6 位纯数字验证码, 单向直接接入设备组 (无需用户 ID 与二次确认)。
     /// </summary>
     [RelayCommand]
     public async Task PairDeviceAsync()
     {
         var code = PairingCode?.Trim().ToUpperInvariant();
-        var uid = PairUserId?.Trim();
         if (string.IsNullOrWhiteSpace(code))
         {
             ShowMessage("请输入 6 位配对验证码");
@@ -532,50 +528,10 @@ public partial class SettingsViewModel : ObservableObject
             return;
         }
         IsPairing = true;
-        ShowMessage("正在连接服务器进行配对…");
+        ShowMessage("正在连接服务器进行即时配对…");
         try
         {
-            // 优先使用全新 6 位数字单向即入配对 (无需输入用户ID, 无需对方二次确认)
-            PairResult? pairResult = null;
-            if (string.IsNullOrWhiteSpace(uid) || code.Length == 6)
-            {
-                try
-                {
-                    pairResult = await _svc.Api.PairDirectAsync(ServerUrl.Trim(), code, s.DeviceId, s.DeviceName);
-                }
-                catch (Exception directEx)
-                {
-                    if (string.IsNullOrWhiteSpace(uid)) throw;
-                    Log.Warn("单向配对失败，尝试兼容双向握手配对: " + directEx.Message);
-                }
-            }
-
-            if (pairResult == null && !string.IsNullOrWhiteSpace(uid))
-            {
-                pairResult = await _svc.Api.PairAsync(ServerUrl.Trim(), code, uid, s.DeviceId, s.DeviceName);
-                if (string.IsNullOrWhiteSpace(pairResult.DeviceToken))
-                {
-                    throw new ApiException("服务器未返回设备凭证，请确认服务端已更新。", System.Net.HttpStatusCode.BadGateway);
-                }
-
-                // 轮询配对审核结果 (最多等待 2 分钟，120 秒超时倒计时)
-                var deadline = DateTime.UtcNow.AddSeconds(120);
-                string status = "pending";
-                while (DateTime.UtcNow < deadline)
-                {
-                    var remaining = (int)Math.Max(0, Math.Ceiling((deadline - DateTime.UtcNow).TotalSeconds));
-                    ShowMessage($"已发起配对请求，等待对方设备确认接入（剩余 {remaining}s）…");
-                    await Task.Delay(2000);
-                    var statusRes = await _svc.Api.GetPairStatusAsync(ServerUrl.Trim(), code, s.DeviceId);
-                    status = statusRes.Status;
-                    if (status == "approved" || status == "rejected" || status == "expired" || status == "not-found")
-                    {
-                        break;
-                    }
-                }
-                pairResult.Status = status;
-            }
-
+            var pairResult = await _svc.Api.PairDirectAsync(ServerUrl.Trim(), code, s.DeviceId, s.DeviceName);
             if (pairResult != null && pairResult.Status == "approved" && !string.IsNullOrWhiteSpace(pairResult.DeviceToken))
             {
                 s.AuthToken = pairResult.DeviceToken;
@@ -584,28 +540,19 @@ public partial class SettingsViewModel : ObservableObject
                 _svc.Main.RefreshConnectionState();
                 ShowMessage("配对成功！本设备已成功加入同步设备组", InfoBarSeverity.Success);
                 PairingCode = "";
-                PairUserId = "";
                 _ = _svc.Engine?.ReconfigureAsync();
                 _ = RefreshDevicesAsync();
                 NotifyPairingStateChanged();
             }
-            else if (pairResult?.Status == "rejected")
-            {
-                ShowMessage("配对请求已被对方设备拒绝", InfoBarSeverity.Error);
-            }
-            else if (pairResult?.Status == "expired")
-            {
-                ShowMessage("配对码已过期，请重新获取配对码", InfoBarSeverity.Error);
-            }
             else
             {
-                ShowMessage("配对失败或等待对方确认超时，请重新发起配对", InfoBarSeverity.Error);
+                ShowMessage("配对验证失败，请确认验证码正确且未过期", InfoBarSeverity.Error);
             }
         }
         catch (Exception ex)
         {
             Log.Error("设备配对失败", ex);
-            ShowMessage($"配对失败：{ServerApi.DescribeException(ex, "请检查配对码和服务器配置后重试。")}", InfoBarSeverity.Error);
+            ShowMessage($"配对失败：{ServerApi.DescribeException(ex, "请检查 6 位验证码和服务器配置后重试。")}", InfoBarSeverity.Error);
         }
         finally
         {

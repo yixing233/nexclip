@@ -181,23 +181,19 @@
                                     <TextBlock Text="在另一台设备上输入此码即可接入" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
                                 </StackPanel>
 
-                                <!-- ② 输入配对码与用户 ID (本机接入现有设备组) -->
-                                <TextBlock Text="加入现有设备组" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <!-- ② 输入 6 位配对验证码 (本机单向即入) -->
+                                <TextBlock Text="加入现有设备组 (输入其他设备屏幕显示的 6 位纯数字验证码)" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                 <Grid ColumnSpacing="8">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <TextBox
-                                        PlaceholderText="输入用户 ID"
-                                        Text="{Binding PairUserId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                    <TextBox
-                                        Grid.Column="1"
-                                        PlaceholderText="输入 8 位配对码"
+                                        PlaceholderText="输入 6 位配对验证码 (例如: 839201)"
+                                        MaxLength="6"
                                         Text="{Binding PairingCode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                     <Button
-                                        Grid.Column="2"
+                                        Grid.Column="1"
                                         Command="{Binding PairDeviceCommand}"
                                         Style="{StaticResource AccentButtonStyle}">
                                         <StackPanel Orientation="Horizontal" Spacing="6">
@@ -206,7 +202,7 @@
                                                 Width="14"
                                                 Height="14"
                                                 Visibility="{Binding IsPairing, Converter={StaticResource BoolToVis}}" />
-                                            <TextBlock Text="发起配对" />
+                                            <TextBlock Text="立即连接" />
                                         </StackPanel>
                                     </Button>
                                 </Grid>

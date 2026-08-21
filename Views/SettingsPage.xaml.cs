@@ -80,16 +80,16 @@ public sealed partial class SettingsPage : Page
                 BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(16, 12, 16, 12),
+                Padding = new Thickness(16, 14, 16, 14),
             };
             var codeGrid = new Grid();
-            codeGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(70) });
+            codeGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(85) });
             codeGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             codeGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             var codeLabel = new TextBlock
             {
-                Text = "配对码",
+                Text = "配对验证码",
                 FontSize = 13,
                 FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -99,14 +99,16 @@ public sealed partial class SettingsPage : Page
                 Text = result.Code,
                 FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
                 FontWeight = Microsoft.UI.Text.FontWeights.Bold,
-                FontSize = 22,
+                FontSize = 26,
+                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
                 VerticalAlignment = VerticalAlignment.Center,
             };
             var copyCodeBtn = new Button
             {
-                Content = "复制配对码",
-                Padding = new Thickness(10, 5, 10, 5),
+                Content = "复制验证码",
+                Padding = new Thickness(12, 6, 12, 6),
                 VerticalAlignment = VerticalAlignment.Center,
+                Style = (Style)Application.Current.Resources["AccentButtonStyle"],
             };
             copyCodeBtn.Click += (_, _) =>
             {
@@ -125,106 +127,10 @@ public sealed partial class SettingsPage : Page
             codeContainer.Child = codeGrid;
             panel.Children.Add(codeContainer);
 
-            // 2. 用户 ID 卡片 (配对必需信息)
-            var uidContainer = new Border
-            {
-                Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
-                BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(16, 12, 16, 12),
-            };
-            var uidGrid = new Grid();
-            uidGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(70) });
-            uidGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            uidGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-            var uidLabel = new TextBlock
-            {
-                Text = "用户 ID",
-                FontSize = 13,
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            var uidVal = new TextBlock
-            {
-                Text = string.IsNullOrWhiteSpace(result.UserId) ? "（未分配）" : result.UserId,
-                FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
-                FontSize = 15,
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            var copyUidBtn = new Button
-            {
-                Content = "复制用户 ID",
-                Padding = new Thickness(10, 5, 10, 5),
-                VerticalAlignment = VerticalAlignment.Center,
-                IsEnabled = !string.IsNullOrWhiteSpace(result.UserId),
-            };
-            copyUidBtn.Click += (_, _) =>
-            {
-                var pkg = new DataPackage();
-                pkg.SetText(result.UserId ?? "");
-                Clipboard.SetContent(pkg);
-                copyUidBtn.Content = "已复制";
-            };
-
-            Grid.SetColumn(uidLabel, 0);
-            Grid.SetColumn(uidVal, 1);
-            Grid.SetColumn(copyUidBtn, 2);
-            uidGrid.Children.Add(uidLabel);
-            uidGrid.Children.Add(uidVal);
-            uidGrid.Children.Add(copyUidBtn);
-            uidContainer.Child = uidGrid;
-            panel.Children.Add(uidContainer);
-
-            // 3. 一键复制快捷按钮
-            var copyAllBtn = new Button
-            {
-                Content = "一键复制 (配对码 + 用户 ID)",
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                Padding = new Thickness(10, 6, 10, 6),
-            };
-            copyAllBtn.Click += (_, _) =>
-            {
-                var pkg = new DataPackage();
-                pkg.SetText($"配对码: {result.Code}\n用户 ID: {result.UserId}");
-                Clipboard.SetContent(pkg);
-                copyAllBtn.Content = "已复制配对信息";
-            };
-            panel.Children.Add(copyAllBtn);
-
-            // 4. 实时配对状态与待确认请求交互容器
-            var requestContainer = new Border
-            {
-                Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardBackgroundFillColorDefaultBrush"],
-                BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
-                BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(14, 12, 14, 12),
-            };
-
-            // 默认等待状态
-            var waitingPanel = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 10,
-                HorizontalAlignment = HorizontalAlignment.Center,
-            };
-            waitingPanel.Children.Add(new ProgressRing { IsActive = true, Width = 16, Height = 16, VerticalAlignment = VerticalAlignment.Center });
-            waitingPanel.Children.Add(new TextBlock
-            {
-                Text = "等待另一台设备输入配对码并接入…",
-                FontSize = 12,
-                Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
-                VerticalAlignment = VerticalAlignment.Center,
-            });
-            requestContainer.Child = waitingPanel;
-            panel.Children.Add(requestContainer);
-
-            // 5. 提示说明
+            // 2. 提示说明
             panel.Children.Add(new TextBlock
             {
-                Text = "在另一台设备上输入上述用户 ID 与配对码即可发起配对。\n关闭对话框后配对码立即失效。",
+                Text = "在另一台设备上输入上述 6 位数字验证码即可直接连接并加入同步组。\n关闭对话框后验证码立即失效。",
                 FontSize = 12,
                 Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
                 TextWrapping = TextWrapping.Wrap,
@@ -232,111 +138,16 @@ public sealed partial class SettingsPage : Page
                 TextAlignment = TextAlignment.Center,
             });
 
-            ContentDialog? dialog = null;
-            var isDialogActive = true;
-
-            // 启动定时器轮询待确认配对请求 (每 1.5 秒轮询一次)
-            var pollTimer = DispatcherQueue.CreateTimer();
-            pollTimer.Interval = TimeSpan.FromMilliseconds(1500);
-            pollTimer.Tick += async (_, _) =>
+            var dialog = new ContentDialog
             {
-                if (!isDialogActive || dialog is null)
-                {
-                    pollTimer.Stop();
-                    return;
-                }
-                try
-                {
-                    var reqs = await App.Services.Api.GetPairingRequestsAsync(serverUrl, result.Code, generatorId, App.Services.Settings.AuthToken);
-                    var pending = reqs.FirstOrDefault(r => string.Equals(r.Status, "pending", StringComparison.OrdinalIgnoreCase));
-                    if (pending != null && isDialogActive)
-                    {
-                        // 渲染待确认卡片
-                        var confirmStack = new StackPanel { Spacing = 10 };
-                        var tipText = new TextBlock
-                        {
-                            Text = $"🔔 设备「{pending.DeviceName ?? pending.DeviceId ?? "新设备"}」请求接入同步",
-                            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                            FontSize = 13,
-                            Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
-                        };
-                        var btnGrid = new Grid { ColumnSpacing = 10 };
-                        btnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-                        btnGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-
-                        var approveBtn = new Button
-                        {
-                            Content = "同意加入",
-                            Style = (Style)Application.Current.Resources["AccentButtonStyle"],
-                            HorizontalAlignment = HorizontalAlignment.Stretch,
-                        };
-                        approveBtn.Click += async (_, _) =>
-                        {
-                            approveBtn.IsEnabled = false;
-                            try
-                            {
-                                await App.Services.Api.ConfirmPairingRequestAsync(serverUrl, result.Code, "approve", generatorId, App.Services.Settings.AuthToken);
-                                isDialogActive = false;
-                                pollTimer.Stop();
-                                dialog.Hide();
-                                _vm.ShowMessage($"已同意配对！设备「{pending.DeviceName ?? pending.DeviceId}」已成功加入", InfoBarSeverity.Success);
-                                await _vm.RefreshDevicesCommand.ExecuteAsync(null);
-                            }
-                            catch (Exception ex)
-                            {
-                                _vm.ShowMessage($"确认配对失败: {ex.Message}", InfoBarSeverity.Error);
-                                approveBtn.IsEnabled = true;
-                            }
-                        };
-
-                        var rejectBtn = new Button
-                        {
-                            Content = "拒绝",
-                            HorizontalAlignment = HorizontalAlignment.Stretch,
-                        };
-                        rejectBtn.Click += async (_, _) =>
-                        {
-                            rejectBtn.IsEnabled = false;
-                            try
-                            {
-                                await App.Services.Api.ConfirmPairingRequestAsync(serverUrl, result.Code, "reject", generatorId, App.Services.Settings.AuthToken);
-                                requestContainer.Child = waitingPanel;
-                            }
-                            catch (Exception ex)
-                            {
-                                _vm.ShowMessage($"拒绝配对失败: {ex.Message}", InfoBarSeverity.Error);
-                            }
-                        };
-
-                        Grid.SetColumn(approveBtn, 0);
-                        Grid.SetColumn(rejectBtn, 1);
-                        btnGrid.Children.Add(approveBtn);
-                        btnGrid.Children.Add(rejectBtn);
-
-                        confirmStack.Children.Add(tipText);
-                        confirmStack.Children.Add(btnGrid);
-                        requestContainer.Child = confirmStack;
-                    }
-                }
-                catch
-                {
-                    // 轮询异常静默处理
-                }
-            };
-            pollTimer.Start();
-
-            dialog = new ContentDialog
-            {
-                Title = "配对码已生成",
+                Title = "设备配对验证码",
                 Content = panel,
-                PrimaryButtonText = "关闭",
+                PrimaryButtonText = "完成",
                 DefaultButton = ContentDialogButton.Primary,
                 XamlRoot = XamlRoot,
             };
 
             await dialog.ShowAsync();
-            isDialogActive = false;
-            pollTimer.Stop();
             // 对话框关闭(无论按钮/遮罩)→ 配对码作废
             await _vm.RevokeGeneratedCodeAsync();
         };
