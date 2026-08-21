@@ -452,26 +452,36 @@ public sealed class SyncEngine : IDisposable
                 ? ClipboardMonitor.HashBytes(imageBytes)
                 : null;
 
-        // 写入本地历史(远端条目)
-        History.Insert(new Models.HistoryItem
+        // 写入本地历史(远端条目: 先尝试命中已有相同内容的条目并置顶, 否则插入新记录)
+        var touched = contentHash is not null && History.TouchByHash(
+            contentHash,
+            entry.Id,
+            entry.DeviceId,
+            entry.DeviceName,
+            entry.CreatedAt != default ? entry.CreatedAt : DateTime.UtcNow);
+
+        if (!touched)
         {
-            ServerId = entry.Id,
-            Type = entry.Type,
-            Text = entry.Text,
-            ImagePath = imagePath,
-            ImageRef = entry.ImageRef,
-            DeviceId = entry.DeviceId,
-            DeviceName = entry.DeviceName,
-            CreatedAt = entry.CreatedAt != default ? entry.CreatedAt : DateTime.UtcNow,
-            Origin = 1,
-            ContentHash = contentHash,
-        });
+            History.Insert(new Models.HistoryItem
+            {
+                ServerId = entry.Id,
+                Type = entry.Type,
+                Text = entry.Text,
+                ImagePath = imagePath,
+                ImageRef = entry.ImageRef,
+                DeviceId = entry.DeviceId,
+                DeviceName = entry.DeviceName,
+                CreatedAt = entry.CreatedAt != default ? entry.CreatedAt : DateTime.UtcNow,
+                Origin = 1,
+                ContentHash = contentHash,
+            });
+        }
 
         if (s.AutoPaste)
         {
             try
             {
-                using var _ = _monitor?.PauseCapture();
+                using var _ = _monitor?.PauseCapture(TimeSpan.FromSeconds(3));
                 if (entry.Type == "Text" && entry.Text is not null)
                 {
                     ImageCodec.SetClipboardText(entry.Text);

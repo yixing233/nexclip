@@ -55,6 +55,34 @@ public static class SourceAppDetector
     private const uint ProcessQueryLimitedInformation = 0x1000;
 
     /// <summary>
+    /// 判断剪贴板当前所有者是否为本进程自身
+    /// </summary>
+    public static bool IsClipboardOwnedByCurrentProcess()
+    {
+        try
+        {
+            var currentPid = (uint)Process.GetCurrentProcess().Id;
+            IntPtr hwnd = GetClipboardOwner();
+            if (hwnd != IntPtr.Zero && NativeMethods.IsWindow(hwnd))
+            {
+                GetWindowThreadProcessId(hwnd, out uint pid);
+                if (pid == currentPid) return true;
+            }
+            IntPtr openHwnd = GetOpenClipboardWindow();
+            if (openHwnd != IntPtr.Zero && NativeMethods.IsWindow(openHwnd))
+            {
+                GetWindowThreadProcessId(openHwnd, out uint pid);
+                if (pid == currentPid) return true;
+            }
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// 嗅探当前向剪贴板写入内容或正在前台交互的应用程序来源
     /// </summary>
     public static SourceAppInfo? DetectSourceApp()
@@ -85,13 +113,10 @@ public static class SourceAppDetector
 
             GetWindowThreadProcessId(hwnd, out uint pid);
 
-            // 若获取到的是本程序自身，则改取当前前台窗口
+            // 若所有者就是本程序自身，则直接返回 null（说明是自身写回）
             if (pid == currentPid || pid == 0)
             {
-                hwnd = GetForegroundWindow();
-                if (hwnd == IntPtr.Zero || !NativeMethods.IsWindow(hwnd)) return null;
-                GetWindowThreadProcessId(hwnd, out pid);
-                if (pid == currentPid || pid == 0) return null;
+                return null;
             }
 
             // 4. 处理 UWP 宿主进程 (ApplicationFrameHost.exe)
@@ -100,6 +125,10 @@ public static class SourceAppDetector
             {
                 hwnd = realHwnd;
                 pid = realPid;
+            }
+            else if (realPid == currentPid)
+            {
+                return null;
             }
 
             using var process = Process.GetProcessById((int)pid);

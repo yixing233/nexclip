@@ -82,6 +82,22 @@ public static class ImageCodec
         }
     }
 
+    public const string SelfOriginProperty = "SyncClipboard_Self";
+
+    /// <summary>检查当前剪贴板是否由本应用自身写回(远端同步/历史列表复制)。</summary>
+    public static bool IsSelfWrittenClipboard()
+    {
+        try
+        {
+            var content = Clipboard.GetContent();
+            return content.Properties.ContainsKey(SelfOriginProperty);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     /// <summary>保存 PNG 字节到本地缓存,返回文件路径。</summary>
     public static async Task<string> SavePngAsync(byte[] pngBytes, long entryId)
     {
@@ -98,6 +114,7 @@ public static class ImageCodec
     {
         var file = await StorageFile.GetFileFromPathAsync(filePath);
         var package = new DataPackage();
+        package.Properties.Add(SelfOriginProperty, true);
         package.SetBitmap(RandomAccessStreamReference.CreateFromFile(file));
         Clipboard.SetContent(package);
     }
@@ -106,6 +123,7 @@ public static class ImageCodec
     public static void SetClipboardText(string text)
     {
         var package = new DataPackage();
+        package.Properties.Add(SelfOriginProperty, true);
         package.SetText(text);
         Clipboard.SetContent(package);
     }

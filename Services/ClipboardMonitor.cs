@@ -108,18 +108,24 @@ public sealed class ClipboardMonitor
         if (_capturing) return;
         if (!_settings.MonitorEnabled) return;
         if (_pauseCount > 0 || DateTime.UtcNow < _pauseUntil) return;
+
+        // 彻底杜绝自写回环: 若剪贴板内容由本程序写回(远端同步/历史列表复制),直接忽略
+        if (ImageCodec.IsSelfWrittenClipboard() || SourceAppDetector.IsClipboardOwnedByCurrentProcess())
+        {
+            return;
+        }
+
         _capturing = true;
         try
         {
-
-        // 图片优先:Windows 中截图/设计软件经常同时提供 Bitmap + Text/HTML,
-        // 若先读文本会把图片误判成文本条目。只有确认没有位图时才读取文本。
-        byte[]? image = await ImageCodec.CaptureClipboardPngAsync();
-        string? text = null;
-        if (image is null || image.LongLength == 0)
-        {
-            text = await ImageCodec.ReadClipboardTextAsync();
-        }
+            // 图片优先:Windows 中截图/设计软件经常同时提供 Bitmap + Text/HTML,
+            // 若先读文本会把图片误判成文本条目。只有确认没有位图时才读取文本。
+            byte[]? image = await ImageCodec.CaptureClipboardPngAsync();
+            string? text = null;
+            if (image is null || image.LongLength == 0)
+            {
+                text = await ImageCodec.ReadClipboardTextAsync();
+            }
 
         string hash;
         if (image is not null && image.LongLength > 0)
