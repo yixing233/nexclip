@@ -305,6 +305,28 @@ class SyncApi(
         }
     }
 
+    /** POST /api/pair/direct → 方案 1 扫码直连 + 方案 2 纯 6 位验证码单向即入 */
+    fun pairDirect(code: String, deviceId: String, deviceName: String, platform: String = "Android"): PairStatus {
+        val json = JSONObject().apply {
+            put("code", code.trim())
+            put("deviceId", deviceId)
+            put("deviceName", deviceName)
+            put("platform", platform)
+        }.toString()
+        val req = builder("POST", "/api/pair/direct")
+            .header("Content-Type", "application/json")
+            .post(json.toRequestBody("application/json".toMediaType()))
+            .build()
+        val resp = execute(req)
+        resp.use {
+            val o = JSONObject(it.body?.string() ?: "{}")
+            return PairStatus(
+                status = o.optString("status", "approved"),
+                deviceToken = o.optString("deviceToken").takeIf { it.isNotBlank() }
+            )
+        }
+    }
+
     /** GET /api/pair/status?code&deviceId → 轮询配对结果:pending/approved/rejected/expired */
     fun pairStatus(pairingCode: String, deviceId: String): String {
         val req = builder(

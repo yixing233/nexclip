@@ -1242,15 +1242,15 @@ internal fun SettingsPage(
     ) {
         TextField(
             state = dialogCodeState,
-            label = "配对码",
+            label = "6 位配对验证码",
             useLabelAsPlaceholder = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(10.dp))
         TextField(
             state = dialogUidState,
-            label = "用户ID",
+            label = "用户ID (选填)",
             useLabelAsPlaceholder = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
             modifier = Modifier.fillMaxWidth()
@@ -1278,23 +1278,49 @@ internal fun SettingsPage(
                         return@Button
                     }
                     if (code.isEmpty()) {
-                        scope.launch { snackbarHostState.showAppSnack("请输入配对码", SnackType.Info) }
-                        return@Button
-                    }
-                    if (dialogUidState.text.toString().trim().isEmpty()) {
-                        scope.launch { snackbarHostState.showAppSnack("请输入用户ID", SnackType.Info) }
+                        scope.launch { snackbarHostState.showAppSnack("请输入 6 位配对验证码", SnackType.Info) }
                         return@Button
                     }
                     pairing = true
                     showPairDialog = false
-                    isPairWaiting = true
-                    pairWaitingCountdown = 120
                     val deviceId = SyncSettings.ensureDeviceId(context)
                     val genDevName = SyncSettings.deviceName(context)
                     val api = SyncApi(url, deviceId, SyncSettings.deviceToken(context))
                     val uid = dialogUidState.text.toString().trim()
                     pairWaitingJob?.cancel()
                     pairWaitingJob = scope.launch {
+                        // 优先使用 6 位数字单向即入配对 (无须输入用户ID, 无须对方确认)
+                        if (code.length == 6 || uid.isEmpty()) {
+                            val directRes = withContext(Dispatchers.IO) {
+                                runCatching { api.pairDirect(code, deviceId, genDevName) }
+                            }
+                            if (directRes.isSuccess && !directRes.getOrNull()?.deviceToken.isNullOrBlank()) {
+                                val token = directRes.getOrNull()!!.deviceToken!!
+                                prefs.edit().putString(SyncSettings.KEY_SERVER_URL, url).apply()
+                                SyncSettings.setDeviceToken(context, token)
+                                SyncSettings.setPaired(context, true)
+                                dialogCodeState.edit { replace(0, length, "") }
+                                dialogUidState.edit { replace(0, length, "") }
+                                pairing = false
+                                snackbarHostState.showAppSnack("配对成功！已加入设备组", SnackType.Success)
+                                devicesReload++
+                                autoRefreshUntil = System.currentTimeMillis() + 60_000L
+                                if (ClipboardMonitorService.isRunning.value) {
+                                    ClipboardMonitorService.stop(context)
+                                    ClipboardMonitorService.start(context)
+                                }
+                                return@launch
+                            } else if (uid.isEmpty()) {
+                                pairing = false
+                                val errMsg = directRes.exceptionOrNull()?.message ?: "配对失败"
+                                snackbarHostState.showAppSnack(errMsg, SnackType.Error)
+                                return@launch
+                            }
+                        }
+
+                        // 兼容旧版双向握手配对
+                        isPairWaiting = true
+                        pairWaitingCountdown = 120
                         val result = withContext(Dispatchers.IO) {
                             runCatching { api.pair(code, uid, deviceId, genDevName) }
                         }
