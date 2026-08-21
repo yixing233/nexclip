@@ -140,7 +140,11 @@ class ClipboardMonitorService : Service() {
         )
         client.onEntryReceived = { entry ->
             val text = entry.text
-            if (!text.isNullOrBlank()) {
+            val imgRef = entry.imageRef
+            if (!imgRef.isNullOrBlank()) {
+                addCaptured(ctx, "[图片]", imgRef)
+                notifyPush(entry.deviceName ?: "其他设备", "[图片]")
+            } else if (!text.isNullOrBlank()) {
                 addCaptured(ctx, text)
                 runCatching {
                     clipboard.setPrimaryClip(ClipData.newPlainText("SyncClipboard", text))
@@ -208,7 +212,9 @@ class ClipboardMonitorService : Service() {
             if (!SyncSettings.isPaired(this) || SyncSettings.deviceToken(this).isBlank()) return
             val api = SyncApi(SyncSettings.serverUrl(this), SyncSettings.ensureDeviceId(this), SyncSettings.deviceToken(this))
             val cur = api.getCurrent() ?: return
-            if (!cur.text.isNullOrBlank() && captured.value.firstOrNull()?.text != cur.text) {
+            if (!cur.imageRef.isNullOrBlank() && captured.value.firstOrNull()?.imageRef != cur.imageRef) {
+                addCaptured(this, "[图片]", cur.imageRef)
+            } else if (!cur.text.isNullOrBlank() && captured.value.firstOrNull()?.text != cur.text) {
                 addCaptured(this, cur.text)
             }
         } catch (e: clip.yixing.sync.data.ApiException) {
@@ -223,9 +229,52 @@ class ClipboardMonitorService : Service() {
 
     private val listener = ClipboardManager.OnPrimaryClipChangedListener {
         android.util.Log.i("SyncClipboard", "OnPrimaryClipChangedListener triggered")
-        val clipData = runCatching { clipboard.primaryClip }.getOrNull()
-        val item = clipData?.getItemAt(0)
-        val text = item?.coerceToText(this)?.toString()
+        val clipData = runCatching { clipboard.primaryClip }.getOrNull() ?: return@OnPrimaryClipChangedListener
+        val item = clipData.getItemAt(0) ?: return@OnPrimaryClipChangedListener
+
+        // 1. 检查是否复制了图片 (Uri / MIME 类型为 image/*)
+        val uri = item.uri
+        val mimeType = clipData.description?.let { desc ->
+            (0 until desc.mimeTypeCount).map { desc.getMimeType(it) }.firstOrNull { it.startsWith("image/") }
+        } ?: uri?.let { contentResolver.getType(it) }
+
+        if (uri != null && mimeType?.startsWith("image/") == true) {
+            val bytes = runCatching {
+                contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            }.getOrNull()
+
+            if (bytes != null && bytes.isNotEmpty() && bytes.size <= 30 * 1024 * 1024) {
+                val hash = sha256Bytes(bytes)
+                if (hash == lastUploadHash) return@OnPrimaryClipChangedListener
+                lastUploadHash = hash
+                addCaptured(this, "[图片]", null)
+
+                val clip = CapturedClip(text = "[图片]", time = System.currentTimeMillis())
+                SyncNotificationManager.notifyNewClip(this, clip, "本机", isPush = false)
+                refreshForegroundNotification()
+
+                uploadJob?.cancel()
+                uploadJob = scope.launch(Dispatchers.IO) {
+                    delay(600)
+                    val ctx = this@ClipboardMonitorService
+                    try {
+                        if (!SyncSettings.isPaired(ctx) || SyncSettings.deviceToken(ctx).isBlank()) return@launch
+                        val api = SyncApi(SyncSettings.serverUrl(ctx), SyncSettings.ensureDeviceId(ctx), SyncSettings.deviceToken(ctx))
+                        api.uploadImage(bytes, SyncSettings.ensureDeviceId(ctx), SyncSettings.deviceName(ctx))
+                    } catch (e: clip.yixing.sync.data.ApiException) {
+                        if (e.statusCode == 401 || e.statusCode == 403 || e.statusCode == 410) {
+                            SyncSettings.clearPairing(ctx)
+                            connectPush()
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
+                return@OnPrimaryClipChangedListener
+            }
+        }
+
+        // 2. 纯文本处理
+        val text = item.coerceToText(this)?.toString()
         android.util.Log.i("SyncClipboard", "primaryClip read: hasClip=${clipData != null}, textLen=${text?.length ?: 0}")
         if (text.isNullOrBlank() || text.length > 500_000) return@OnPrimaryClipChangedListener
         if (SyncSettings.isContentFiltered(this, text)) return@OnPrimaryClipChangedListener
@@ -239,7 +288,7 @@ class ClipboardMonitorService : Service() {
         refreshForegroundNotification()
 
         uploadJob?.cancel()
-        uploadJob = scope.launch {
+        uploadJob = scope.launch(Dispatchers.IO) {
             delay(600) // 去抖
             val ctx = this@ClipboardMonitorService
             try {
@@ -265,6 +314,11 @@ class ClipboardMonitorService : Service() {
     private fun sha256(s: String): String {
         val md = java.security.MessageDigest.getInstance("SHA-256")
         return md.digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
+    }
+
+    private fun sha256Bytes(bytes: ByteArray): String {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        return md.digest(bytes).joinToString("") { "%02x".format(it) }
     }
 
     private fun refreshForegroundNotification() {
