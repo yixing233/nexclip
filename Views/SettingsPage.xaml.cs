@@ -6,10 +6,13 @@ using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media.Imaging;
+using QRCoder;
 using SyncClipboard.Desktop.Services;
 using SyncClipboard.Desktop.ViewModels;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage.Pickers;
+using Windows.Storage.Streams;
 using Windows.System;
 using Windows.UI.Core;
 
@@ -66,21 +69,76 @@ public sealed partial class SettingsPage : Page
             // 网络请求期间可能触发了焦点恢复/布局重算，再补一次定位。
             ResetContentScroll();
         };
-        // 配对码生成完成 → 弹出对话框展示(大号配对码 + 用户 ID + 专属复制 + 待确认请求实时交互);关闭即作废
+        // 配对码生成完成 → 弹出对话框展示(二维码扫码直连 + 6位纯数字验证码);关闭即作废
         _vm.PairingCodeGenerated += async (result) =>
         {
             var serverUrl = _vm.ServerUrl?.Trim() ?? "";
-            var generatorId = App.Services.Settings.DeviceId;
-            var panel = new StackPanel { Spacing = 14, MinWidth = 360 };
+            var qrPayload = !string.IsNullOrWhiteSpace(result.QrPayload)
+                ? result.QrPayload
+                : (!string.IsNullOrWhiteSpace(serverUrl) ? $"{serverUrl.TrimEnd('/')}/index?pairCode={result.Code}" : result.Code);
 
-            // 1. 配对码卡片
+            var qrBitmap = await GenerateQrCodeBitmapAsync(qrPayload);
+
+            var panel = new StackPanel { Spacing = 12, MinWidth = 340, HorizontalAlignment = HorizontalAlignment.Center };
+
+            // 1. 方案 1: 二维码扫码直连卡片
+            if (qrBitmap != null)
+            {
+                var qrBorder = new Border
+                {
+                    Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(255, 255, 255, 255)),
+                    BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(12),
+                    Padding = new Thickness(12),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                };
+                var qrImg = new Image
+                {
+                    Source = qrBitmap,
+                    Width = 160,
+                    Height = 160,
+                    Stretch = Microsoft.UI.Xaml.Media.Stretch.Uniform,
+                };
+                qrBorder.Child = qrImg;
+                panel.Children.Add(qrBorder);
+
+                panel.Children.Add(new TextBlock
+                {
+                    Text = "📱 手机使用系统相机或扫一扫即可一秒直连",
+                    FontSize = 12,
+                    Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                });
+
+                // 分隔提示
+                var dividerGrid = new Grid { Margin = new Thickness(0, 4, 0, 4) };
+                dividerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                dividerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                dividerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+                var div1 = new Border { Height = 1, Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"], VerticalAlignment = VerticalAlignment.Center };
+                var divText = new TextBlock { Text = " 或输入 6 位验证码 ", FontSize = 11, Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorTertiaryBrush"] };
+                var div2 = new Border { Height = 1, Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"], VerticalAlignment = VerticalAlignment.Center };
+
+                Grid.SetColumn(div1, 0);
+                Grid.SetColumn(divText, 1);
+                Grid.SetColumn(div2, 2);
+                dividerGrid.Children.Add(div1);
+                dividerGrid.Children.Add(divText);
+                dividerGrid.Children.Add(div2);
+                panel.Children.Add(dividerGrid);
+            }
+
+            // 2. 方案 2: 6 位纯数字验证码卡片
             var codeContainer = new Border
             {
                 Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
                 BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(16, 14, 16, 14),
+                Padding = new Thickness(16, 12, 16, 12),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
             };
             var codeGrid = new Grid();
             codeGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(85) });
@@ -99,7 +157,7 @@ public sealed partial class SettingsPage : Page
                 Text = result.Code,
                 FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"),
                 FontWeight = Microsoft.UI.Text.FontWeights.Bold,
-                FontSize = 26,
+                FontSize = 24,
                 Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AccentTextFillColorPrimaryBrush"],
                 VerticalAlignment = VerticalAlignment.Center,
             };
@@ -127,10 +185,10 @@ public sealed partial class SettingsPage : Page
             codeContainer.Child = codeGrid;
             panel.Children.Add(codeContainer);
 
-            // 2. 提示说明
+            // 3. 提示说明
             panel.Children.Add(new TextBlock
             {
-                Text = "在另一台设备上输入上述 6 位数字验证码即可直接连接并加入同步组。\n关闭对话框后验证码立即失效。",
+                Text = "在另一台设备上扫码或输入 6 位数字验证码即可直接连接。\n关闭对话框后验证码立即失效。",
                 FontSize = 12,
                 Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
                 TextWrapping = TextWrapping.Wrap,
@@ -140,9 +198,9 @@ public sealed partial class SettingsPage : Page
 
             var dialog = new ContentDialog
             {
-                Title = "设备配对验证码",
+                Title = "添加新设备 (配对)",
                 Content = panel,
-                PrimaryButtonText = "完成",
+                PrimaryButtonText = "完成并关闭",
                 DefaultButton = ContentDialogButton.Primary,
                 XamlRoot = XamlRoot,
             };
@@ -507,6 +565,34 @@ public sealed partial class SettingsPage : Page
             {
                 await _vm.RemoveDeviceAsync(device);
             }
+        }
+    }
+
+    private static async Task<BitmapImage?> GenerateQrCodeBitmapAsync(string payload)
+    {
+        if (string.IsNullOrWhiteSpace(payload)) return null;
+        try
+        {
+            using var generator = new QRCodeGenerator();
+            using var data = generator.CreateQrCode(payload, QRCodeGenerator.ECCLevel.M);
+            var qr = new PngByteQRCode(data);
+            var bytes = qr.GetGraphic(20);
+
+            var bitmap = new BitmapImage();
+            using var stream = new InMemoryRandomAccessStream();
+            using (var writer = new DataWriter(stream.GetOutputStreamAt(0)))
+            {
+                writer.WriteBytes(bytes);
+                await writer.StoreAsync();
+            }
+            stream.Seek(0);
+            await bitmap.SetSourceAsync(stream);
+            return bitmap;
+        }
+        catch (Exception ex)
+        {
+            Log.Error("生成二维码位图失败", ex);
+            return null;
         }
     }
 }
