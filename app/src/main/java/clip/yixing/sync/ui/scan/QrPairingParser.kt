@@ -16,10 +16,12 @@ object QrPairingParser {
 
     /**
      * 智能解析二维码内容
-     * 支持三种格式:
-     * 1. 直连 URL (如 http://192.168.0.100:9999/index?pairCode=123456)
-     * 2. JSON 格式 (如 {"serverUrl":"http://...","code":"123456"})
-     * 3. 纯配对码 (如 123456)
+     * 支持多种格式:
+     * 1. 网页直连 URL (如 http://192.168.0.100:5033/index?pairCode=123456)
+     * 2. 普通服务端 URL (如 http://192.168.0.100:5033)
+     * 3. JSON 格式 (如 {"serverUrl":"http://...","code":"123456"})
+     * 4. 纯配对码 (如 123456 或 SYNC-1234)
+     * 5. 任意字符串保底
      */
     fun parse(rawContent: String, fallbackServerUrl: String = ""): QrPairingResult? {
         val trimmed = rawContent.trim()
@@ -33,12 +35,20 @@ object QrPairingParser {
                     ?: uri.getQueryParameter("code")
                     ?: uri.getQueryParameter("pairingCode")
 
-                if (!pairCode.isNullOrBlank()) {
-                    val portStr = if (uri.port != -1 && uri.port != 80 && uri.port != 443) ":${uri.port}" else ""
-                    val serverUrl = "${uri.scheme}://${uri.host}$portStr"
-                    return QrPairingResult(
+                val portStr = if (uri.port != -1 && uri.port != 80 && uri.port != 443) ":${uri.port}" else ""
+                val serverUrl = "${uri.scheme}://${uri.host}$portStr"
+
+                return if (!pairCode.isNullOrBlank()) {
+                    QrPairingResult(
                         serverUrl = serverUrl,
                         pairCode = pairCode.trim(),
+                        rawContent = trimmed
+                    )
+                } else {
+                    // 如果 URL 中没有明确带 pairCode 参数，则该 URL 为服务端地址，配对码留空由用户在弹窗填写
+                    QrPairingResult(
+                        serverUrl = serverUrl,
+                        pairCode = "",
                         rawContent = trimmed
                     )
                 }
@@ -57,26 +67,30 @@ object QrPairingParser {
                 val url = json.optString("serverUrl").ifBlank {
                     json.optString("url")
                 }
-                if (code.isNotBlank()) {
-                    return QrPairingResult(
-                        serverUrl = url.ifBlank { fallbackServerUrl.ifBlank { null } },
-                        pairCode = code.trim(),
-                        rawContent = trimmed
-                    )
-                }
+                return QrPairingResult(
+                    serverUrl = url.ifBlank { fallbackServerUrl.ifBlank { null } },
+                    pairCode = code.trim(),
+                    rawContent = trimmed
+                )
             }
         }
 
-        // 3. 尝试匹配纯 6 位数字或字母配对码
-        val codeRegex = Regex("^[A-Za-z0-9]{4,8}$")
-        if (codeRegex.matches(trimmed)) {
+        // 3. 尝试匹配配对码
+        val cleanCode = trimmed.replace("-", "").replace(" ", "")
+        val codeRegex = Regex("^[A-Za-z0-9]{4,12}$")
+        if (codeRegex.matches(cleanCode)) {
             return QrPairingResult(
                 serverUrl = fallbackServerUrl.ifBlank { null },
-                pairCode = trimmed.uppercase(),
+                pairCode = cleanCode.uppercase(),
                 rawContent = trimmed
             )
         }
 
-        return null
+        // 4. 任意文本保底带入弹窗
+        return QrPairingResult(
+            serverUrl = fallbackServerUrl.ifBlank { null },
+            pairCode = trimmed,
+            rawContent = trimmed
+        )
     }
 }

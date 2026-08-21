@@ -412,7 +412,7 @@ fun QrScanPage(
 }
 
 /**
- * CameraX 实时相机预览与 ML Kit 二维码帧分析器
+ * CameraX 实时相机预览与 ZXing + ML Kit 双核二维码帧分析器
  */
 @OptIn(ExperimentalGetImage::class)
 @Composable
@@ -434,7 +434,9 @@ private fun CameraPreviewView(
 
     AndroidView(
         factory = { ctx ->
-            val previewView = PreviewView(ctx)
+            val previewView = PreviewView(ctx).apply {
+                scaleType = PreviewView.ScaleType.FILL_CENTER
+            }
             val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
 
             cameraProviderFuture.addListener({
@@ -445,24 +447,40 @@ private fun CameraPreviewView(
 
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                     .build()
 
                 imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                    val mediaImage = imageProxy.image
-                    if (mediaImage != null) {
-                        val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-                        barcodeScanner.process(image)
-                            .addOnSuccessListener { barcodes ->
-                                val qr = barcodes.firstOrNull { it.format == Barcode.FORMAT_QR_CODE }
-                                    ?: barcodes.firstOrNull()
-                                qr?.rawValue?.let { raw ->
-                                    onBarcodeDetected(raw)
+                    try {
+                        // 1. 优先使用 ZXing 离线解析
+                        val zxingResult = ZxingQrDecoder.decodeImageProxy(imageProxy)
+                        if (!zxingResult.isNullOrBlank()) {
+                            android.util.Log.d("QrScanPage", "ZXing detected QR: $zxingResult")
+                            onBarcodeDetected(zxingResult)
+                            imageProxy.close()
+                            return@setAnalyzer
+                        }
+
+                        // 2. 备用 ML Kit 解析
+                        val mediaImage = imageProxy.image
+                        if (mediaImage != null) {
+                            val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
+                            barcodeScanner.process(image)
+                                .addOnSuccessListener { barcodes ->
+                                    val qr = barcodes.firstOrNull { it.format == Barcode.FORMAT_QR_CODE }
+                                        ?: barcodes.firstOrNull()
+                                    qr?.rawValue?.let { raw ->
+                                        android.util.Log.d("QrScanPage", "MLKit detected QR: $raw")
+                                        onBarcodeDetected(raw)
+                                    }
                                 }
-                            }
-                            .addOnCompleteListener {
-                                imageProxy.close()
-                            }
-                    } else {
+                                .addOnCompleteListener {
+                                    imageProxy.close()
+                                }
+                        } else {
+                            imageProxy.close()
+                        }
+                    } catch (e: Exception) {
                         imageProxy.close()
                     }
                 }
@@ -478,6 +496,21 @@ private fun CameraPreviewView(
                     )
                     onCameraReady(camera)
                     camera.cameraControl.enableTorch(isTorchOn)
+
+                    // 支持点击对焦
+                    previewView.setOnTouchListener { v, event ->
+                        if (event.action == android.view.MotionEvent.ACTION_UP) {
+                            val factory = previewView.meteringPointFactory
+                            val point = factory.createPoint(event.x, event.y)
+                            val action = androidx.camera.core.FocusMeteringAction.Builder(
+                                point,
+                                androidx.camera.core.FocusMeteringAction.FLAG_AF or androidx.camera.core.FocusMeteringAction.FLAG_AE
+                            ).build()
+                            camera.cameraControl.startFocusAndMetering(action)
+                            v.performClick()
+                        }
+                        true
+                    }
                 } catch (e: Exception) {
                     android.util.Log.e("QrScanPage", "Camera binding failed", e)
                 }
