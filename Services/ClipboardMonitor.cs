@@ -11,7 +11,7 @@ namespace SyncClipboard.Desktop.Services;
 /// </summary>
 public sealed class ClipboardMonitor
 {
-    public readonly record struct CapturedClip(string? Text, byte[]? ImagePng, string Hash);
+    public readonly record struct CapturedClip(string? Text, byte[]? ImagePng, string Hash, SourceAppInfo? SourceApp = null);
 
     private readonly DispatcherQueue _dispatcher;
     private readonly SettingsStore _settings;
@@ -146,7 +146,8 @@ public sealed class ClipboardMonitor
         }
         if (hash == _lastSeenHash) return;
         _lastSeenHash = hash;
-        await _onCapture(new CapturedClip(text, image, hash), ct);
+        var sourceApp = SourceAppDetector.DetectSourceApp();
+        await _onCapture(new CapturedClip(text, image, hash, sourceApp), ct);
         }
         finally
         {
@@ -178,7 +179,8 @@ public sealed class ClipboardMonitor
         {
             return "";
         }
-        await _onCapture(new CapturedClip(text, image, hash), ct);
+        var sourceApp = SourceAppDetector.DetectSourceApp();
+        await _onCapture(new CapturedClip(text, image, hash, sourceApp), ct);
         return hash;
     }
 

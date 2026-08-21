@@ -268,10 +268,14 @@ public sealed class SyncEngine : IDisposable
     private async Task<LocalCapture> SaveLocalCaptureAsync(ClipboardMonitor.CapturedClip clip, SettingsStore s)
     {
         var now = DateTime.UtcNow;
+        var appName = clip.SourceApp?.Name;
+        var appPath = clip.SourceApp?.ExecutablePath;
+        var appIcon = clip.SourceApp?.IconPath;
+
         var existing = History.FindByHash(clip.Hash);
         if (existing is not null)
         {
-            History.TouchByHash(clip.Hash, null, s.DeviceId, s.DeviceName, now);
+            History.TouchByHash(clip.Hash, null, s.DeviceId, s.DeviceName, now, appName, appPath, appIcon);
             existing = History.FindByHash(clip.Hash) ?? existing;
             return new LocalCapture(ToClipboardEntry(existing), existing.ImagePath);
         }
@@ -290,6 +294,9 @@ public sealed class SyncEngine : IDisposable
             ImagePath = imagePath,
             DeviceId = s.DeviceId,
             DeviceName = s.DeviceName,
+            SourceAppName = appName,
+            SourceAppPath = appPath,
+            SourceAppIcon = appIcon,
             CreatedAt = now,
             Origin = 0,
             ContentHash = clip.Hash,

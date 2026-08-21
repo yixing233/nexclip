@@ -504,6 +504,10 @@ public sealed partial class ClipboardMainPage : Page
                     {
                         menuItem.Visibility = isImage ? Visibility.Visible : Visibility.Collapsed;
                     }
+                    if (menuItem.Name == "CopyAppNameMenuItem")
+                    {
+                        menuItem.Visibility = (_contextItem?.HasSourceApp ?? false) ? Visibility.Visible : Visibility.Collapsed;
+                    }
                 }
             }
         }
@@ -561,6 +565,16 @@ public sealed partial class ClipboardMainPage : Page
     private void LocateFileMenuItem_Click(object sender, RoutedEventArgs e)
     {
         if (_contextItem is { } vm) LocateInExplorer(vm.Item.ImagePath);
+    }
+
+    private void CopyAppNameMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (_contextItem is { HasSourceApp: true } vm)
+        {
+            var dataPackage = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            dataPackage.SetText(vm.SourceAppName);
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
+        }
     }
 
     private void DeleteMenuItem_Click(object sender, RoutedEventArgs e)

@@ -36,6 +36,7 @@ public partial class HistoryItemViewModel : ObservableObject
         Item = item;
         starred = item.Starred;
         Thumbnail = BuildThumbnail(item.ImagePath);
+        SourceAppIcon = BuildAppIcon(item.SourceAppIcon);
         CopyCommand = new RelayCommand(async () => await parent.CopyAsync(this));
         DeleteCommand = new RelayCommand(() => parent.DeleteAsync(this));
         ToggleStarCommand = new RelayCommand(() => parent.ToggleStarAsync(this));
@@ -63,6 +64,16 @@ public partial class HistoryItemViewModel : ObservableObject
     public string PreviewText => Item.Type == "Image" ? "" : (Item.Text ?? "");
 
     public string DeviceName => Item.DeviceName ?? "";
+
+    public string SourceAppName => Item.SourceAppName ?? "";
+
+    public bool HasSourceApp => !string.IsNullOrWhiteSpace(Item.SourceAppName);
+
+    public bool HasSourceAppIcon => SourceAppIcon != null;
+
+    public string? SourceAppPath => Item.SourceAppPath;
+
+    public BitmapImage? SourceAppIcon { get; }
 
     public BitmapImage? Thumbnail { get; }
 
@@ -112,5 +123,22 @@ public partial class HistoryItemViewModel : ObservableObject
         {
             DecodePixelWidth = 240,
         };
+    }
+
+    private static BitmapImage? BuildAppIcon(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
+        try
+        {
+            return new BitmapImage(new Uri("file:///" + path.Replace('\\', '/')))
+            {
+                DecodePixelWidth = 32,
+                DecodePixelHeight = 32,
+            };
+        }
+        catch
+        {
+            return null;
+        }
     }
 }
