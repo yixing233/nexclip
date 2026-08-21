@@ -91,6 +91,7 @@ internal fun HomePage(
     snackbarHostState: SnackbarHostState? = null,
     onNavigateToRecords: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
+    onOpenQrScanner: () -> Unit = {},
     onOverlayActiveChanged: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -154,7 +155,8 @@ internal fun HomePage(
                 serviceRunning = serviceRunning,
                 onlineDevicesCount = onlineDevicesCount,
                 totalDevicesCount = totalDevicesCount,
-                onNavigateToSettings = onNavigateToSettings
+                onNavigateToSettings = onNavigateToSettings,
+                onOpenQrScanner = onOpenQrScanner
             )
         }
 
@@ -343,19 +345,34 @@ private fun SyncOverviewCard(
     serviceRunning: Boolean,
     onlineDevicesCount: Int,
     totalDevicesCount: Int,
-    onNavigateToSettings: () -> Unit
+    onNavigateToSettings: () -> Unit,
+    onOpenQrScanner: () -> Unit,
 ) {
     SectionBlock(
         title = "同步状态",
         trailing = {
-            if (serverUrl.isNotBlank()) {
-                Text(
-                    text = "设置",
-                    color = MiuixTheme.colorScheme.primary,
-                    modifier = Modifier
-                        .clickable(onClick = onNavigateToSettings)
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = onOpenQrScanner,
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = LucideIcons.Scan,
+                        contentDescription = "扫码配对",
+                        tint = MiuixTheme.colorScheme.primary,
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
+                Spacer(Modifier.width(4.dp))
+                if (serverUrl.isNotBlank()) {
+                    Text(
+                        text = "设置",
+                        color = MiuixTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clickable(onClick = onNavigateToSettings)
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
+                }
             }
         },
     ) {

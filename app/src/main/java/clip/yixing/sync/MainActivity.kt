@@ -2,6 +2,7 @@ package clip.yixing.sync
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
@@ -63,6 +64,7 @@ import clip.yixing.sync.ui.SearchPage
 import clip.yixing.sync.ui.FloatingBottomBar
 import clip.yixing.sync.ui.FloatingBottomBarItem
 import clip.yixing.sync.ui.SettingsPage
+import clip.yixing.sync.ui.scan.QrScanPage
 import clip.yixing.sync.ui.theme.SyncClipboardTheme
 import clip.yixing.sync.util.SyncSettings
 import kotlin.math.abs
@@ -194,10 +196,15 @@ private fun MainScreen() {
     val appContext = LocalContext.current
     var floatingBar by remember { mutableStateOf(SyncSettings.floatingBottomBarEnabled(appContext)) }
     var isOverlayActive by remember { mutableStateOf(false) }
+    var isScanOpen by remember { mutableStateOf(false) }
     var enterMultiSelectTrigger by remember { mutableIntStateOf(0) }
     var clearDialogTrigger by remember { mutableIntStateOf(0) }
     var settingsSubPageTitle by remember { mutableStateOf<String?>(null) }
     var settingsBackTrigger by remember { mutableIntStateOf(0) }
+
+    BackHandler(enabled = isScanOpen) {
+        isScanOpen = false
+    }
 
     // 单个 backdrop:录制外层 content(Pager 整体,含各页大标题顶栏),底栏 blur
     // 表面读取它 —— 录制范围不含任何 blur 表面(顶栏在页面内无模糊,与 KernelSU
@@ -246,6 +253,7 @@ private fun MainScreen() {
                                 tabIndex = 2
                                 pagerNavigator.animateTo(pagerState, 2)
                             },
+                            onOpenQrScanner = { isScanOpen = true },
                             onOverlayActiveChanged = { isOverlayActive = it }
                         )
                     }
@@ -361,6 +369,7 @@ private fun MainScreen() {
                             },
                             onOverlayActiveChanged = { isOverlayActive = it },
                             onSubPageTitleChanged = { settingsSubPageTitle = it },
+                            onOpenQrScanner = { isScanOpen = true },
                             backTrigger = settingsBackTrigger
                         )
                     }
@@ -404,9 +413,9 @@ private fun MainScreen() {
     }
 
     // 底栏:悬浮(液态玻璃)或普通贴底,由设置开关控制,默认开启
-    // 当全屏搜索或任一弹层/对话框/多选操作激活时平滑隐藏,防止遮挡弹层内容与操作按钮
+    // 当全屏搜索或任一弹层/对话框/多选操作/扫码激活时平滑隐藏,防止遮挡弹层内容与操作按钮
     AnimatedVisibility(
-        visible = !searchOpen && !isOverlayActive,
+        visible = !searchOpen && !isOverlayActive && !isScanOpen,
         enter = fadeIn(tween(180)) + slideInVertically(initialOffsetY = { it }, animationSpec = tween(180)),
         exit = fadeOut(tween(180)) + slideOutVertically(targetOffsetY = { it }, animationSpec = tween(180)),
         modifier = Modifier.align(Alignment.BottomCenter)
@@ -507,6 +516,23 @@ private fun MainScreen() {
             onQueryChange = { searchQuery = it },
             onClose = { searchOpen = false },
             snackbarHostState = snackbarHostState,
+        )
+    }
+
+    // 全屏扫码配对页(全屏覆盖,独立返回手势)
+    AnimatedVisibility(
+        visible = isScanOpen,
+        enter = fadeIn(tween(220)) + slideInVertically(initialOffsetY = { it }, animationSpec = tween(220)),
+        exit = fadeOut(tween(200)) + slideOutVertically(targetOffsetY = { it }, animationSpec = tween(200))
+    ) {
+        QrScanPage(
+            snackbarHostState = snackbarHostState,
+            onBack = { isScanOpen = false },
+            onPairSuccess = {
+                isScanOpen = false
+                tabIndex = 0
+                pagerNavigator.animateTo(pagerState, 0)
+            }
         )
     }
     }

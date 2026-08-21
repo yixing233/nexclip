@@ -130,6 +130,7 @@ internal fun SettingsPage(
     onFloatingBarChange: (Boolean) -> Unit,
     onOverlayActiveChanged: (Boolean) -> Unit = {},
     onSubPageTitleChanged: (String?) -> Unit = {},
+    onOpenQrScanner: () -> Unit = {},
     backTrigger: Int = 0,
 ) {
     val context = LocalContext.current
@@ -717,48 +718,74 @@ internal fun SettingsPage(
 
                     item {
                         SectionBlock(title = "配对管理") {
+                            // 1. 扫码配对主按钮
                             Button(
-                                onClick = {
-                                    val url = urlState.text.toString().trim()
-                                        .ifEmpty { SyncSettings.serverUrl(context) }
-                                    if (url.isEmpty()) {
-                                        scope.launch { snackbarHostState.showAppSnack("请先填写服务器地址", SnackType.Info) }
-                                        return@Button
-                                    }
-                                    generatingCode = true
-                                    val genDeviceId = SyncSettings.ensureDeviceId(context)
-                                    val genDeviceName = SyncSettings.deviceName(context)
-                                    val api = SyncApi(url, genDeviceId, SyncSettings.deviceToken(context))
-                                    scope.launch {
-                                        val r = withContext(Dispatchers.IO) {
-                                            runCatching { api.createPairingCode(genDeviceId, genDeviceName) }
-                                        }
-                                        generatingCode = false
-                                        r.onSuccess {
-                                            it.deviceToken?.let { token ->
-                                                SyncSettings.setDeviceToken(context, token)
-                                                SyncSettings.setPaired(context, true)
-                                            }
-                                            generatedCode = it
-                                            showCodeSheet = true
-                                            snackbarHostState.showAppSnack("配对码已生成", SnackType.Success)
-                                        }.onFailure { e ->
-                                            snackbarHostState.showAppSnack(e.message ?: "生成失败", SnackType.Error)
-                                        }
-                                    }
-                                },
-                                enabled = !generatingCode,
+                                onClick = onOpenQrScanner,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text(if (generatingCode) "生成中…" else "生成配对码")
+                                Icon(
+                                    imageVector = LucideIcons.Scan,
+                                    contentDescription = "扫码配对",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text("扫码配对 (推荐)")
                             }
                             Spacer(Modifier.height(8.dp))
-                            Button(
-                                onClick = { showPairDialog = true },
-                                enabled = !pairing,
-                                modifier = Modifier.fillMaxWidth()
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Text(if (pairing) "配对中…" else "输入配对码")
+                                Button(
+                                    onClick = {
+                                        val url = urlState.text.toString().trim()
+                                            .ifEmpty { SyncSettings.serverUrl(context) }
+                                        if (url.isEmpty()) {
+                                            scope.launch { snackbarHostState.showAppSnack("请先填写服务器地址", SnackType.Info) }
+                                            return@Button
+                                        }
+                                        generatingCode = true
+                                        val genDeviceId = SyncSettings.ensureDeviceId(context)
+                                        val genDeviceName = SyncSettings.deviceName(context)
+                                        val api = SyncApi(url, genDeviceId, SyncSettings.deviceToken(context))
+                                        scope.launch {
+                                            val r = withContext(Dispatchers.IO) {
+                                                runCatching { api.createPairingCode(genDeviceId, genDeviceName) }
+                                            }
+                                            generatingCode = false
+                                            r.onSuccess {
+                                                it.deviceToken?.let { token ->
+                                                    SyncSettings.setDeviceToken(context, token)
+                                                    SyncSettings.setPaired(context, true)
+                                                }
+                                                generatedCode = it
+                                                showCodeSheet = true
+                                                snackbarHostState.showAppSnack("配对码已生成", SnackType.Success)
+                                            }.onFailure { e ->
+                                                snackbarHostState.showAppSnack(e.message ?: "生成失败", SnackType.Error)
+                                            }
+                                        }
+                                    },
+                                    enabled = !generatingCode,
+                                    colors = ButtonDefaults.buttonColors(
+                                        color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                                        contentColor = MiuixTheme.colorScheme.onSurface
+                                    ),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(if (generatingCode) "生成中…" else "生成配对码")
+                                }
+                                Button(
+                                    onClick = { showPairDialog = true },
+                                    enabled = !pairing,
+                                    colors = ButtonDefaults.buttonColors(
+                                        color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                                        contentColor = MiuixTheme.colorScheme.onSurface
+                                    ),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(if (pairing) "配对中…" else "输入配对码")
+                                }
                             }
                             if (pairing) {
                                 Spacer(Modifier.height(6.dp))
@@ -1248,11 +1275,36 @@ internal fun SettingsPage(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            Button(
+                onClick = {
+                    showPairDialog = false
+                    onOpenQrScanner()
+                },
+                enabled = !pairing,
+                colors = ButtonDefaults.buttonColors(
+                    color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                    contentColor = MiuixTheme.colorScheme.primary
+                ),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(
+                    imageVector = LucideIcons.Scan,
+                    contentDescription = "扫码",
+                    tint = MiuixTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+                Text("扫一扫")
+            }
             Button(
                 onClick = { showPairDialog = false },
                 enabled = !pairing,
+                colors = ButtonDefaults.buttonColors(
+                    color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                    contentColor = MiuixTheme.colorScheme.onSurface
+                ),
                 modifier = Modifier.weight(1f)
             ) {
                 Text("取消")

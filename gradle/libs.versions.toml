@@ -13,6 +13,9 @@ core-ktx = "1.15.0"
 lifecycle-runtime = "2.8.7"
 navigationevent = "1.1.2"
 compose-icons = "2.2.1"
+camerax = "1.4.1"
+mlkit-barcode = "17.3.0"
+zxing = "3.5.3"
 
 [plugins]
 agp-app = { id = "com.android.application", version.ref = "agp" }
@@ -28,6 +31,12 @@ androidx-compose-foundation = { group = "androidx.compose.foundation", name = "f
 
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "core-ktx" }
 androidx-lifecycle-runtime = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle-runtime" }
+androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "camerax" }
+androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
+androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
+androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
+mlkit-barcode-scanning = { group = "com.google.mlkit", name = "barcode-scanning", version.ref = "mlkit-barcode" }
+zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 signalr = { group = "com.microsoft.signalr", name = "signalr", version.ref = "signalr" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }

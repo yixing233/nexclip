@@ -404,4 +404,82 @@ object LucideIcons {
             }
         }.build()
     }
+
+    /** Lucide QrCode 二维码图标 */
+    val QrCode: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.QrCode",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(3f, 7f)
+                lineTo(3f, 5f)
+                curveTo(3f, 3.9f, 3.9f, 3f, 5f, 3f)
+                lineTo(7f, 3f)
+                curveTo(8.1f, 3f, 9f, 3.9f, 9f, 5f)
+                lineTo(9f, 7f)
+                curveTo(9f, 8.1f, 8.1f, 9f, 7f, 9f)
+                lineTo(5f, 9f)
+                curveTo(3.9f, 9f, 3f, 8.1f, 3f, 7f)
+                close()
+
+                moveTo(15f, 7f)
+                lineTo(15f, 5f)
+                curveTo(15f, 3.9f, 15.9f, 3f, 17f, 3f)
+                lineTo(19f, 3f)
+                curveTo(20.1f, 3f, 21f, 3.9f, 21f, 5f)
+                lineTo(21f, 7f)
+                curveTo(21f, 8.1f, 20.1f, 9f, 19f, 9f)
+                lineTo(17f, 9f)
+                curveTo(15.9f, 9f, 15f, 8.1f, 15f, 7f)
+                close()
+
+                moveTo(3f, 19f)
+                lineTo(3f, 17f)
+                curveTo(3f, 15.9f, 3.9f, 15f, 5f, 15f)
+                lineTo(7f, 15f)
+                curveTo(8.1f, 15f, 9f, 15.9f, 9f, 17f)
+                lineTo(9f, 19f)
+                curveTo(9f, 20.1f, 8.1f, 21f, 7f, 21f)
+                lineTo(5f, 21f)
+                curveTo(3.9f, 21f, 3f, 20.1f, 3f, 19f)
+                close()
+
+                moveTo(21f, 15f); lineTo(19f, 15f); lineTo(19f, 17f); lineTo(21f, 17f)
+                moveTo(15f, 15f); lineTo(15f, 21f)
+                moveTo(19f, 21f); lineTo(21f, 21f)
+            }
+        }.build()
+    }
+
+    /** Lucide Scan 扫描框图标 */
+    val Scan: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Scan",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(3f, 7f); lineTo(3f, 5f); curveTo(3f, 3.9f, 3.9f, 3f, 5f, 3f); lineTo(7f, 3f)
+                moveTo(17f, 3f); lineTo(19f, 3f); curveTo(20.1f, 3f, 21f, 3.9f, 21f, 5f); lineTo(21f, 7f)
+                moveTo(21f, 17f); lineTo(21f, 19f); curveTo(21f, 20.1f, 20.1f, 21f, 19f, 21f); lineTo(17f, 21f)
+                moveTo(7f, 21f); lineTo(5f, 21f); curveTo(3.9f, 21f, 3f, 20.1f, 3f, 19f); lineTo(3f, 17f)
+            }
+        }.build()
+    }
 }
