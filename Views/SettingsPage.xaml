@@ -98,66 +98,6 @@
                                         </StackPanel>
                                     </Button>
                                 </Grid>
-
-                                <Border
-                                    Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
-                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                    BorderThickness="1"
-                                    CornerRadius="8"
-                                    Padding="14,12">
-                                    <Grid ColumnSpacing="16">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Spacing="3">
-                                            <TextBlock Text="本机状态" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                                <Ellipse
-                                                    Width="8"
-                                                    Height="8"
-                                                    VerticalAlignment="Center"
-                                                    Fill="{Binding IsPaired, Converter={StaticResource BoolToBrush}}" />
-                                                <TextBlock Text="{Binding PairingStatusText}" FontWeight="SemiBold" />
-                                            </StackPanel>
-                                            <TextBlock
-                                                Text="{Binding PairingStatusHint}"
-                                                FontSize="11"
-                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                                TextWrapping="Wrap" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="1" Spacing="3" HorizontalAlignment="Right">
-                                            <TextBlock Text="本机 ID" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" HorizontalAlignment="Right" />
-                                            <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
-                                                <TextBlock
-                                                    Text="{Binding DeviceIdText}"
-                                                    FontFamily="Consolas"
-                                                    FontSize="11"
-                                                    MaxWidth="140"
-                                                    TextTrimming="CharacterEllipsis"
-                                                    ToolTipService.ToolTip="{Binding DeviceIdText}"
-                                                    VerticalAlignment="Center" />
-                                                <Button
-                                                    Padding="4,2"
-                                                    Background="Transparent"
-                                                    BorderThickness="0"
-                                                    Command="{Binding CopyDeviceIdCommand}"
-                                                    ToolTipService.ToolTip="复制本机 ID">
-                                                    <Image Source="{x:Bind services:Lucide.Copy}" Width="13" Height="13" />
-                                                </Button>
-                                                <Button
-                                                    Padding="4,2"
-                                                    Background="Transparent"
-                                                    BorderThickness="0"
-                                                    Click="RegenerateDeviceId_Click"
-                                                    ToolTipService.ToolTip="重新生成本机 ID">
-                                                    <Image Source="{x:Bind services:Lucide.RefreshCw}" Width="13" Height="13" />
-                                                </Button>
-                                            </StackPanel>
-                                        </StackPanel>
-                                    </Grid>
-                                </Border>
-
                             </StackPanel>
                         </Border>
 
