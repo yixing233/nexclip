@@ -182,4 +182,170 @@ object LucideIcons {
             }
         }.build()
     }
+
+    /** Lucide Smartphone 手机图标 */
+    val Smartphone: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Smartphone",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(7f, 2f)
+                lineTo(17f, 2f)
+                curveTo(18.1f, 2f, 19f, 2.9f, 19f, 4f)
+                lineTo(19f, 20f)
+                curveTo(19f, 21.1f, 18.1f, 22f, 17f, 22f)
+                lineTo(7f, 22f)
+                curveTo(5.9f, 22f, 5f, 21.1f, 5f, 20f)
+                lineTo(5f, 4f)
+                curveTo(5f, 2.9f, 5.9f, 2f, 7f, 2f)
+                close()
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(12f, 18f)
+                lineTo(12.01f, 18f)
+            }
+        }.build()
+    }
+
+    /** Lucide Laptop 笔记本图标 */
+    val Laptop: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Laptop",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(20f, 16f)
+                lineTo(20f, 7f)
+                curveTo(20f, 5.9f, 19.1f, 5f, 18f, 5f)
+                lineTo(6f, 5f)
+                curveTo(4.9f, 5f, 4f, 5.9f, 4f, 7f)
+                lineTo(4f, 16f)
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(2f, 19f)
+                lineTo(22f, 19f)
+            }
+        }.build()
+    }
+
+    /** Lucide Monitor 桌面台式电脑图标 */
+    val Monitor: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Monitor",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(4f, 3f)
+                lineTo(20f, 3f)
+                curveTo(21.1f, 3f, 22f, 3.9f, 22f, 5f)
+                lineTo(22f, 15f)
+                curveTo(22f, 16.1f, 21.1f, 17f, 20f, 17f)
+                lineTo(4f, 17f)
+                curveTo(2.9f, 17f, 2f, 16.1f, 2f, 15f)
+                lineTo(2f, 5f)
+                curveTo(2f, 3.9f, 2.9f, 3f, 4f, 3f)
+                close()
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(8f, 21f)
+                lineTo(16f, 21f)
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(12f, 17f)
+                lineTo(12f, 21f)
+            }
+        }.build()
+    }
+
+    /** Lucide Globe 网页/地球图标 */
+    val Globe: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Globe",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(12f, 22f)
+                curveTo(17.52f, 22f, 22f, 17.52f, 22f, 12f)
+                curveTo(22f, 6.48f, 17.52f, 2f, 12f, 2f)
+                curveTo(6.48f, 2f, 2f, 6.48f, 2f, 12f)
+                curveTo(2f, 17.52f, 6.48f, 22f, 12f, 22f)
+                close()
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(2f, 12f)
+                lineTo(22f, 12f)
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(12f, 2f)
+                curveTo(14.5f, 5f, 16f, 8.5f, 16f, 12f)
+                curveTo(16f, 15.5f, 14.5f, 19f, 12f, 22f)
+                curveTo(9.5f, 19f, 8f, 15.5f, 8f, 12f)
+                curveTo(8f, 8.5f, 9.5f, 5f, 12f, 2f)
+                close()
+            }
+        }.build()
+    }
 }

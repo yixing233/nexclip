@@ -1688,6 +1688,17 @@ private fun SettingsNavRow(
     }
 }
 
+private fun platformIcon(platform: String): androidx.compose.ui.graphics.vector.ImageVector {
+    val p = platform.lowercase()
+    return when {
+        p.contains("android") || p.contains("phone") || p.contains("ios") -> LucideIcons.Smartphone
+        p.contains("win") || p.contains("windows") || p.contains("desktop") -> LucideIcons.Laptop
+        p.contains("mac") || p.contains("linux") -> LucideIcons.Monitor
+        p.contains("web") || p.contains("browser") -> LucideIcons.Globe
+        else -> LucideIcons.Monitor
+    }
+}
+
 @Composable
 private fun DeviceCard(
     device: DeviceInfo,
@@ -1695,169 +1706,137 @@ private fun DeviceCard(
     onDeleteClick: (DeviceInfo) -> Unit,
     onCopyId: (String) -> Unit
 ) {
-    Column(
+    val lastSeen = relativeTime(device.lastSeenAt)
+    val statusText = if (device.online) "在线" else if (lastSeen.isNotEmpty()) lastSeen else "离线"
+    val statusColor = if (device.online) Color(0xFF10B981) else MiuixTheme.colorScheme.onBackgroundVariant
+
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
             .background(MiuixTheme.colorScheme.surfaceContainer)
-            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .clickable { onCopyId(device.id) }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        // 头部整行：左侧（在线点+设备名+本机标签）与 右侧（状态徽章+Lucide删除按钮）
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+        // 左侧：平台图标容器 (38x38dp)
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.08f)),
+            contentAlignment = Alignment.Center
         ) {
-            // 左侧：状态圆点 + 设备名称 + 本机 Pill
+            Icon(
+                imageVector = platformIcon(device.platform),
+                contentDescription = device.platform,
+                tint = MiuixTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+
+        Spacer(Modifier.width(12.dp))
+
+        // 中间：两行核心信息区 (自适应填充)
+        Column(
+            modifier = Modifier.weight(1f)
+        ) {
+            // 第一行：设备名称 + 本机徽章 + 状态胶囊
             Row(
-                modifier = Modifier
-                    .weight(1f, fill = true)
-                    .padding(end = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .background(
-                            color = if (device.online) Color(0xFF34C759)
-                            else MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.35f),
-                            shape = CircleShape
-                        )
-                )
-                Spacer(Modifier.width(8.dp))
                 Text(
                     text = device.name,
-                    fontSize = 15.sp,
+                    fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
+                    color = MiuixTheme.colorScheme.onBackground,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false)
                 )
+
                 if (isSelf) {
                     Spacer(Modifier.width(6.dp))
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
                             .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                            .padding(horizontal = 5.dp, vertical = 1.5.dp)
                     ) {
                         Text(
                             text = "本机",
-                            fontSize = 11.sp,
+                            fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = MiuixTheme.colorScheme.primary
                         )
                     }
                 }
-            }
 
-            // 右侧：在线/离线状态指示 + (非本机提供 Lucide 删除按钮)
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Box(
+                Spacer(Modifier.width(6.dp))
+
+                // 状态小胶囊 (绿色/灰色圆点 + 文字)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
-                        .background(
-                            (if (device.online) Color(0xFF34C759) else MiuixTheme.colorScheme.onBackgroundVariant)
-                                .copy(alpha = 0.12f)
-                        )
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .background(statusColor.copy(alpha = 0.1f))
+                        .padding(horizontal = 5.dp, vertical = 1.5.dp)
                 ) {
-                    Text(
-                        text = if (device.online) "在线" else "离线",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = if (device.online) Color(0xFF34C759) else MiuixTheme.colorScheme.onBackgroundVariant
-                    )
-                }
-
-                if (!isSelf) {
                     Box(
                         modifier = Modifier
-                            .size(28.dp)
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(Color(0xFFE53935).copy(alpha = 0.12f))
-                            .clickable { onDeleteClick(device) },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = LucideIcons.Trash2,
-                            contentDescription = "移除设备",
-                            tint = Color(0xFFE53935),
-                            modifier = Modifier.size(15.dp)
-                        )
-                    }
+                            .size(5.dp)
+                            .background(statusColor, CircleShape)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = statusText,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = statusColor
+                    )
                 }
             }
-        }
 
-        Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(3.dp))
 
-        // 中部: 真实 IP 地址展示 (高亮样式) + 平台/版本
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = "IP: ",
-                    fontSize = 12.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant
-                )
-                Text(
-                    text = device.ip ?: "未获取",
-                    fontSize = 12.sp,
-                    fontWeight = if (device.ip != null) FontWeight.Medium else FontWeight.Normal,
-                    color = if (device.ip != null) MiuixTheme.colorScheme.onBackground else MiuixTheme.colorScheme.onBackgroundVariant
-                )
+            // 第二行：平台 · IP · 版本
+            val subText = buildString {
+                append(device.platform)
+                if (!device.ip.isNullOrBlank()) {
+                    append(" · ")
+                    append(device.ip)
+                }
+                if (!device.version.isNullOrBlank()) {
+                    append(" · v")
+                    append(device.version)
+                }
             }
             Text(
-                text = buildString {
-                    append(device.platform)
-                    if (!device.version.isNullOrBlank()) append(" v${device.version}")
-                },
-                fontSize = 12.sp,
-                color = MiuixTheme.colorScheme.onBackgroundVariant
+                text = subText,
+                fontSize = 11.sp,
+                color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.75f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
 
-        Spacer(Modifier.height(6.dp))
-
-        // 底部: 设备 ID (可点击复制) + 最近活跃时间
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
+        // 右侧：非本机显示删除按钮
+        if (!isSelf) {
+            Spacer(Modifier.width(8.dp))
+            Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .clickable { onCopyId(device.id) }
-                    .padding(vertical = 2.dp)
+                    .size(32.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0xFFEF4444).copy(alpha = 0.1f))
+                    .clickable { onDeleteClick(device) },
+                contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = "ID: " + if (device.id.length > 14) device.id.take(14) + "…" else device.id,
-                    fontSize = 11.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.85f)
-                )
-                Spacer(Modifier.width(4.dp))
                 Icon(
-                    imageVector = LucideIcons.Copy,
-                    contentDescription = "复制ID",
-                    tint = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.6f),
-                    modifier = Modifier.size(12.dp)
-                )
-            }
-            val lastSeen = relativeTime(device.lastSeenAt)
-            if (lastSeen.isNotEmpty()) {
-                Text(
-                    text = "活跃: $lastSeen",
-                    fontSize = 11.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.7f)
+                    imageVector = LucideIcons.Trash2,
+                    contentDescription = "移除设备",
+                    tint = Color(0xFFEF4444),
+                    modifier = Modifier.size(15.dp)
                 )
             }
         }
