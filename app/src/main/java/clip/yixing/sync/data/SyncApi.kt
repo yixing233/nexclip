@@ -34,22 +34,11 @@ data class DeviceInfo(
     val lastSeenAt: String,
 )
 
-/** 配对结果(POST /api/pair → pending + 一次性设备凭证) */
+/** 配对结果(POST /api/pair → approved + 一次性设备凭证) */
 data class PairStatus(val status: String, val deviceToken: String? = null)
 
-/** 配对码(POST /api/pairing-codes → { code, expiresAt, userId });未绑定设备生成时自动创建用户ID */
-data class PairingCode(val code: String, val expiresAt: String, val userId: String, val deviceToken: String? = null)
-
-/** 待确认配对请求 (GET /api/pairing-requests) */
-data class PairingRequestItem(
-    val code: String,
-    val generatorId: String,
-    val userId: String,
-    val deviceId: String?,
-    val deviceName: String?,
-    val status: String,
-    val createdAt: String?,
-)
+/** 6 位纯数字配对码(POST /api/pairing-codes → { code, expiresAt, userId }) */
+data class PairingCode(val code: String, val expiresAt: String, val userId: String, val deviceToken: String? = null, val qrPayload: String? = null)
 
 class ApiException(message: String, val statusCode: Int? = null) : Exception(message)
 
@@ -238,82 +227,15 @@ class SyncApi(
         }
     }
 
-    /** GET /api/pairing-requests?code&generatorId → 待确认请求列表 */
-    fun listPairingRequests(code: String, generatorId: String): List<PairingRequestItem> {
-        val req = builder(
-            "GET",
-            "/api/pairing-requests?code=" + java.net.URLEncoder.encode(code, "UTF-8") +
-                "&generatorId=" + java.net.URLEncoder.encode(generatorId, "UTF-8")
-        ).build()
-        val resp = execute(req)
-        resp.use {
-            val body = it.body?.string() ?: "[]"
-            val arr = JSONArray(body)
-            val list = mutableListOf<PairingRequestItem>()
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                list.add(
-                    PairingRequestItem(
-                        code = o.optString("code"),
-                        generatorId = o.optString("generatorId"),
-                        userId = o.optString("userId"),
-                        deviceId = o.optString("deviceId").takeIf { s -> s.isNotEmpty() },
-                        deviceName = o.optString("deviceName").takeIf { s -> s.isNotEmpty() },
-                        status = o.optString("status"),
-                        createdAt = o.optString("createdAt")
-                    )
-                )
-            }
-            return list
-        }
-    }
-
-    /** POST /api/pairing-requests/confirm → 确认/拒绝配对请求 */
-    fun confirmPairing(code: String, action: String, generatorId: String): Boolean {
-        val json = JSONObject().apply {
-            put("code", code)
-            put("action", action)
-            put("generatorId", generatorId)
-        }.toString()
-        val req = builder("POST", "/api/pairing-requests/confirm")
-            .header("Content-Type", "application/json")
-            .post(json.toRequestBody("application/json".toMediaType()))
-            .build()
-        val resp = execute(req)
-        resp.use {
-            val o = JSONObject(it.body?.string() ?: "{}")
-            return o.optString("status") == action
-        }
-    }
-
-    /** POST /api/pair → 发起配对(免认证):配对码 + 用户ID → 挂起待确认 */
-    fun pair(pairingCode: String, userId: String, deviceId: String, deviceName: String): PairStatus {
-        val json = JSONObject().apply {
-            put("pairingCode", pairingCode)
-            put("userId", userId)
-            put("deviceId", deviceId)
-            put("deviceName", deviceName)
-        }.toString()
-        val req = builder("POST", "/api/pair")
-            .header("Content-Type", "application/json")
-            .post(json.toRequestBody("application/json".toMediaType()))
-            .build()
-        val resp = execute(req)
-        resp.use {
-            val o = JSONObject(it.body?.string() ?: "{}")
-            return PairStatus(status = o.optString("status", "pending"), deviceToken = o.optString("deviceToken").takeIf { it.isNotBlank() })
-        }
-    }
-
-    /** POST /api/pair/direct → 方案 1 扫码直连 + 方案 2 纯 6 位验证码单向即入 */
-    fun pairDirect(code: String, deviceId: String, deviceName: String, platform: String = "Android"): PairStatus {
+    /** POST /api/pair → 6 位纯数字验证码 / 扫码单向即入配对 (无需二次确认) */
+    fun pair(code: String, deviceId: String, deviceName: String, platform: String = "Android"): PairStatus {
         val json = JSONObject().apply {
             put("code", code.trim())
             put("deviceId", deviceId)
             put("deviceName", deviceName)
             put("platform", platform)
         }.toString()
-        val req = builder("POST", "/api/pair/direct")
+        val req = builder("POST", "/api/pair")
             .header("Content-Type", "application/json")
             .post(json.toRequestBody("application/json".toMediaType()))
             .build()
@@ -327,19 +249,9 @@ class SyncApi(
         }
     }
 
-    /** GET /api/pair/status?code&deviceId → 轮询配对结果:pending/approved/rejected/expired */
-    fun pairStatus(pairingCode: String, deviceId: String): String {
-        val req = builder(
-            "GET",
-            "/api/pair/status?code=" + java.net.URLEncoder.encode(pairingCode, "UTF-8") +
-                "&deviceId=" + java.net.URLEncoder.encode(deviceId, "UTF-8")
-        ).build()
-        val resp = execute(req)
-        resp.use {
-            val o = JSONObject(it.body?.string() ?: "{}")
-            return o.optString("status", "pending")
-        }
-    }
+    /** 别名 */
+    fun pairDirect(code: String, deviceId: String, deviceName: String, platform: String = "Android"): PairStatus
+        = pair(code, deviceId, deviceName, platform)
 
     /** POST /api/clipboard/image(multipart) */
     fun uploadImage(pngBytes: ByteArray, deviceId: String, deviceName: String): ClipboardEntry {

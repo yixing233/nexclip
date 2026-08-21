@@ -72,7 +72,6 @@ import clip.yixing.sync.StatusRow
 import clip.yixing.sync.data.DeviceInfo
 import clip.yixing.sync.showAppSnack
 import clip.yixing.sync.data.PairingCode
-import clip.yixing.sync.data.PairingRequestItem
 import clip.yixing.sync.data.SyncApi
 import clip.yixing.sync.service.ClipboardMonitorService
 import clip.yixing.sync.util.NotificationStyle
@@ -174,23 +173,18 @@ internal fun SettingsPage(
         )
     }
 
-    // ---- 2. 同步设置状态 ----
+    // ---- 2. 同步设置状态 (6 位纯数字单向即入) ----
     val urlState = remember { TextFieldState(SyncSettings.serverUrl(context)) }
     var testing by remember { mutableStateOf(false) }
     var pairing by remember { mutableStateOf(false) }
 
     var showPairDialog by remember { mutableStateOf(false) }
     val dialogCodeState = remember { TextFieldState("") }
-    val dialogUidState = remember { TextFieldState("") }
 
     var generatingCode by remember { mutableStateOf(false) }
     var generatedCode by remember { mutableStateOf<PairingCode?>(null) }
     var showCodeSheet by remember { mutableStateOf(false) }
-    var pendingPairRequest by remember { mutableStateOf<PairingRequestItem?>(null) }
     var deleteTargetDevice by remember { mutableStateOf<DeviceInfo?>(null) }
-    var isPairWaiting by remember { mutableStateOf(false) }
-    var pairWaitingCountdown by remember { mutableIntStateOf(120) }
-    var pairWaitingJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     var devices by remember { mutableStateOf<List<DeviceInfo>>(emptyList()) }
     var devicesLoading by remember { mutableStateOf(true) }
@@ -199,31 +193,6 @@ internal fun SettingsPage(
     var devicesManual by remember { mutableStateOf(false) }
     val isServerConnected by ClipboardMonitorService.isServerConnected.collectAsState()
     var autoRefreshUntil by remember { mutableLongStateOf(0L) }
-
-    // 轮询待确认配对请求 (当生成配对码弹层处于开启状态时)
-    LaunchedEffect(showCodeSheet, generatedCode) {
-        val code = generatedCode
-        if (!showCodeSheet || code == null) {
-            pendingPairRequest = null
-            return@LaunchedEffect
-        }
-        val serverUrl = SyncSettings.serverUrl(context)
-        val genDeviceId = SyncSettings.ensureDeviceId(context)
-        if (serverUrl.isBlank()) return@LaunchedEffect
-
-        val api = SyncApi(serverUrl, genDeviceId, SyncSettings.deviceToken(context))
-        while (showCodeSheet && generatedCode != null) {
-            try {
-                val reqs = withContext(Dispatchers.IO) {
-                    api.listPairingRequests(code.code, genDeviceId)
-                }
-                val pending = reqs.firstOrNull { it.status.equals("pending", ignoreCase = true) }
-                pendingPairRequest = pending
-            } catch (_: Exception) {
-            }
-            delay(1500)
-        }
-    }
 
     // ① 设备列表基础加载
     LaunchedEffect(devicesReload) {
@@ -1233,26 +1202,18 @@ internal fun SettingsPage(
 
     // ---- 对话框与弹层 ----
 
-    // 配对对话框
+    // 配对对话框 (6 位纯数字验证码单向即入)
     OverlayDialog(
         show = showPairDialog,
-        title = "设备配对",
-        summary = "输入另一台设备提供的 配对码 + 用户ID,由对方确认后接入",
+        title = "加入设备组",
+        summary = "输入其他设备屏幕上显示的 6 位配对验证码即可直接接入",
         onDismissRequest = { showPairDialog = false }
     ) {
         TextField(
             state = dialogCodeState,
-            label = "6 位配对验证码",
+            label = "6 位数字验证码",
             useLabelAsPlaceholder = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(10.dp))
-        TextField(
-            state = dialogUidState,
-            label = "用户ID (选填)",
-            useLabelAsPlaceholder = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
             modifier = Modifier.fillMaxWidth()
         )
         Row(
@@ -1286,154 +1247,34 @@ internal fun SettingsPage(
                     val deviceId = SyncSettings.ensureDeviceId(context)
                     val genDevName = SyncSettings.deviceName(context)
                     val api = SyncApi(url, deviceId, SyncSettings.deviceToken(context))
-                    val uid = dialogUidState.text.toString().trim()
-                    pairWaitingJob?.cancel()
-                    pairWaitingJob = scope.launch {
-                        // 优先使用 6 位数字单向即入配对 (无须输入用户ID, 无须对方确认)
-                        if (code.length == 6 || uid.isEmpty()) {
-                            val directRes = withContext(Dispatchers.IO) {
-                                runCatching { api.pairDirect(code, deviceId, genDevName) }
-                            }
-                            if (directRes.isSuccess && !directRes.getOrNull()?.deviceToken.isNullOrBlank()) {
-                                val token = directRes.getOrNull()!!.deviceToken!!
-                                prefs.edit().putString(SyncSettings.KEY_SERVER_URL, url).apply()
-                                SyncSettings.setDeviceToken(context, token)
-                                SyncSettings.setPaired(context, true)
-                                dialogCodeState.edit { replace(0, length, "") }
-                                dialogUidState.edit { replace(0, length, "") }
-                                pairing = false
-                                snackbarHostState.showAppSnack("配对成功！已加入设备组", SnackType.Success)
-                                devicesReload++
-                                autoRefreshUntil = System.currentTimeMillis() + 60_000L
-                                if (ClipboardMonitorService.isRunning.value) {
-                                    ClipboardMonitorService.stop(context)
-                                    ClipboardMonitorService.start(context)
-                                }
-                                return@launch
-                            } else if (uid.isEmpty()) {
-                                pairing = false
-                                val errMsg = directRes.exceptionOrNull()?.message ?: "配对失败"
-                                snackbarHostState.showAppSnack(errMsg, SnackType.Error)
-                                return@launch
-                            }
+                    scope.launch {
+                        val directRes = withContext(Dispatchers.IO) {
+                            runCatching { api.pair(code, deviceId, genDevName) }
                         }
-
-                        // 兼容旧版双向握手配对
-                        isPairWaiting = true
-                        pairWaitingCountdown = 120
-                        val result = withContext(Dispatchers.IO) {
-                            runCatching { api.pair(code, uid, deviceId, genDevName) }
-                        }
-                        result.onFailure { e ->
-                            pairing = false
-                            isPairWaiting = false
-                            snackbarHostState.showAppSnack(e.message ?: "配对失败", SnackType.Error)
-                            return@launch
-                        }
-                        val issuedToken = result.getOrNull()?.deviceToken
-                        if (issuedToken.isNullOrBlank()) {
-                            pairing = false
-                            isPairWaiting = false
-                            snackbarHostState.showAppSnack("服务器未返回设备凭证，请确认服务端已更新", SnackType.Error)
-                            return@launch
-                        }
-
-                        // 启动倒计时协程
-                        val timerJob = launch {
-                            while (pairWaitingCountdown > 0) {
-                                delay(1000)
-                                pairWaitingCountdown--
-                            }
-                        }
-
-                        var status = "pending"
-                        val deadline = System.currentTimeMillis() + 120_000L
-                        while (System.currentTimeMillis() < deadline && isActive) {
-                            delay(2000)
-                            status = withContext(Dispatchers.IO) {
-                                runCatching { api.pairStatus(code, deviceId) }.getOrDefault("pending")
-                            }
-                            if (status == "approved" || status == "rejected" || status == "expired" || status == "not-found") break
-                        }
-                        timerJob.cancel()
                         pairing = false
-                        isPairWaiting = false
-                        when (status) {
-                            "approved" -> {
-                                prefs.edit()
-                                    .putString(SyncSettings.KEY_SERVER_URL, url)
-                                    .apply()
-                                SyncSettings.setDeviceToken(context, issuedToken)
-                                SyncSettings.setPaired(context, true)
-                                dialogCodeState.edit { replace(0, length, "") }
-                                dialogUidState.edit { replace(0, length, "") }
-                                snackbarHostState.showAppSnack("配对成功！已加入设备组", SnackType.Success)
-                                devicesReload++
-                                autoRefreshUntil = System.currentTimeMillis() + 60_000L
-                                if (ClipboardMonitorService.isRunning.value) {
-                                    ClipboardMonitorService.stop(context)
-                                    ClipboardMonitorService.start(context)
-                                }
+                        if (directRes.isSuccess && !directRes.getOrNull()?.deviceToken.isNullOrBlank()) {
+                            val token = directRes.getOrNull()!!.deviceToken!!
+                            prefs.edit().putString(SyncSettings.KEY_SERVER_URL, url).apply()
+                            SyncSettings.setDeviceToken(context, token)
+                            SyncSettings.setPaired(context, true)
+                            dialogCodeState.edit { replace(0, length, "") }
+                            snackbarHostState.showAppSnack("配对成功！已加入设备组", SnackType.Success)
+                            devicesReload++
+                            autoRefreshUntil = System.currentTimeMillis() + 60_000L
+                            if (ClipboardMonitorService.isRunning.value) {
+                                ClipboardMonitorService.stop(context)
+                                ClipboardMonitorService.start(context)
                             }
-                            "rejected" -> snackbarHostState.showAppSnack("配对请求已被对方设备拒绝", SnackType.Error)
-                            "expired" -> snackbarHostState.showAppSnack("配对码已过期，请重新获取", SnackType.Error)
-                            else -> snackbarHostState.showAppSnack("等待对方确认超时，请重新发起配对", SnackType.Error)
+                        } else {
+                            val errMsg = directRes.exceptionOrNull()?.message ?: "配对验证失败，请检查验证码"
+                            snackbarHostState.showAppSnack(errMsg, SnackType.Error)
                         }
                     }
                 },
                 enabled = !pairing,
                 modifier = Modifier.weight(1f)
             ) {
-                Text(if (pairing) "发起中…" else "确认配对")
-            }
-        }
-    }
-
-    // 等待对方确认接入弹窗 (带 120s 超时倒计时与取消)
-    OverlayDialog(
-        show = isPairWaiting,
-        title = "等待对方设备确认",
-        onDismissRequest = {
-            isPairWaiting = false
-            pairing = false
-            pairWaitingJob?.cancel()
-            scope.launch { snackbarHostState.showAppSnack("已取消配对等待", SnackType.Info) }
-        }
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = "已发起配对请求，请在另一台设备上点击「同意加入」",
-                fontSize = 13.sp,
-                color = MiuixTheme.colorScheme.onBackgroundVariant,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-            )
-            Spacer(Modifier.height(14.dp))
-            Text(
-                text = "剩余 ${pairWaitingCountdown}s",
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                color = MiuixTheme.colorScheme.primary
-            )
-            Spacer(Modifier.height(16.dp))
-            Button(
-                onClick = {
-                    isPairWaiting = false
-                    pairing = false
-                    pairWaitingJob?.cancel()
-                    scope.launch { snackbarHostState.showAppSnack("已取消配对等待", SnackType.Info) }
-                },
-                colors = ButtonDefaults.buttonColors(
-                    color = MiuixTheme.colorScheme.surfaceContainerHigh,
-                    contentColor = MiuixTheme.colorScheme.onSurface
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("取消等待")
+                Text(if (pairing) "连接中…" else "立即连接")
             }
         }
     }
@@ -1441,12 +1282,11 @@ internal fun SettingsPage(
     // 生成的配对码用底部弹层查看
     OverlayBottomSheet(
         show = showCodeSheet,
-        title = "配对码与用户 ID",
+        title = "设备配对验证码",
         onDismissRequest = {
             showCodeSheet = false
             val revokeCode = generatedCode?.code
             generatedCode = null
-            pendingPairRequest = null
             if (revokeCode != null) {
                 scope.launch {
                     withContext(Dispatchers.IO) {
@@ -1465,7 +1305,7 @@ internal fun SettingsPage(
                     .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // 1. 配对码卡片
+                // 1. 6 位数字卡片
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1477,155 +1317,30 @@ internal fun SettingsPage(
                 ) {
                     Column {
                         Text(
-                            text = "配对码",
+                            text = "6 位配对验证码",
                             fontSize = 12.sp,
                             color = MiuixTheme.colorScheme.onBackgroundVariant
                         )
                         Text(
                             text = code.code,
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Bold
+                            fontSize = 26.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MiuixTheme.colorScheme.primary
                         )
                     }
                     Button(
                         onClick = {
                             copyPairingCode(context, code.code)
-                            scope.launch { snackbarHostState.showAppSnack("配对码已复制", SnackType.Success) }
+                            scope.launch { snackbarHostState.showAppSnack("验证码已复制", SnackType.Success) }
                         }
                     ) {
-                        Text("复制配对码")
+                        Text("复制验证码")
                     }
-                }
-
-                Spacer(Modifier.height(10.dp))
-
-                // 2. 用户 ID 卡片
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(MiuixTheme.colorScheme.surfaceContainer)
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "用户 ID",
-                            fontSize = 12.sp,
-                            color = MiuixTheme.colorScheme.onBackgroundVariant
-                        )
-                        Text(
-                            text = code.userId.ifEmpty { "（未分配）" },
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                    if (code.userId.isNotEmpty()) {
-                        Button(
-                            onClick = {
-                                copyPairingCode(context, code.userId)
-                                scope.launch { snackbarHostState.showAppSnack("用户 ID 已复制", SnackType.Success) }
-                            }
-                        ) {
-                            Text("复制用户 ID")
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(12.dp))
-
-                // 3. 一键复制全部
-                Button(
-                    onClick = {
-                        copyPairingCode(context, "配对码: " + code.code + "\n用户 ID: " + code.userId)
-                        scope.launch { snackbarHostState.showAppSnack("配对信息已全部复制", SnackType.Success) }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("一键复制 (配对码 + 用户 ID)")
                 }
 
                 Spacer(Modifier.height(14.dp))
-
-                // 4. 待确认请求卡片 vs 等待状态
-                val req = pendingPairRequest
-                if (req != null) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
-                            .padding(14.dp)
-                    ) {
-                        Text(
-                            text = "🔔 检测到设备「" + (req.deviceName ?: req.deviceId ?: "新设备") + "」请求接入",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            color = MiuixTheme.colorScheme.primary
-                        )
-                        Spacer(Modifier.height(10.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Button(
-                                onClick = {
-                                    scope.launch {
-                                        val ok = withContext(Dispatchers.IO) {
-                                            runCatching {
-                                                val api = SyncApi(SyncSettings.serverUrl(context), SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
-                                                api.confirmPairing(code.code, "approve", SyncSettings.ensureDeviceId(context))
-                                            }.getOrDefault(false)
-                                        }
-                                        if (ok) {
-                                            showCodeSheet = false
-                                            generatedCode = null
-                                            pendingPairRequest = null
-                                            snackbarHostState.showAppSnack("已同意配对！新设备已加入", SnackType.Success)
-                                            devicesReload++
-                                        }
-                                    }
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("同意加入")
-                            }
-                            Button(
-                                onClick = {
-                                    scope.launch {
-                                        withContext(Dispatchers.IO) {
-                                            runCatching {
-                                                val api = SyncApi(SyncSettings.serverUrl(context), SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
-                                                api.confirmPairing(code.code, "reject", SyncSettings.ensureDeviceId(context))
-                                            }
-                                        }
-                                        pendingPairRequest = null
-                                    }
-                                },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Text("拒绝")
-                            }
-                        }
-                    }
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "等待另一台设备输入配对码并接入…",
-                            fontSize = 13.sp,
-                            color = MiuixTheme.colorScheme.onBackgroundVariant
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(10.dp))
                 Text(
-                    text = "在另一台设备上输入上述配对码与用户 ID 即可发起接入。\n关闭弹层后配对码立即失效。",
+                    text = "在另一台设备上输入上述 6 位数字验证码即可直接加入。\n关闭弹层后验证码立即失效。",
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                     fontSize = 12.sp,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
