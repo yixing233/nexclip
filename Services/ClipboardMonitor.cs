@@ -22,6 +22,8 @@ public sealed class ClipboardMonitor
     private string _lastSeenHash = "";
     private string _suppressHash = "";
     private DateTime _suppressUntil = DateTime.MinValue;
+    private int _pauseCount;
+    private DateTime _pauseUntil = DateTime.MinValue;
     private bool _started;
 
     public ClipboardMonitor(DispatcherQueue dispatcher, SettingsStore settings, Func<CapturedClip, CancellationToken, Task> onCapture)
@@ -50,7 +52,27 @@ public sealed class ClipboardMonitor
         _pollTimer?.Stop();
     }
 
-    /// <summary>记录"由本端写入"的内容 hash,监听回调时忽略(防回环)。</summary>
+    /// <summary>暂停剪贴板捕获作用域:写回剪贴板时使用,彻底阻断写回触发的回环风暴。</summary>
+    public IDisposable PauseCapture(TimeSpan? duration = null)
+    {
+        Interlocked.Increment(ref _pauseCount);
+        _pauseUntil = DateTime.UtcNow.Add(duration ?? TimeSpan.FromMilliseconds(1500));
+        return new ActionDisposable(() =>
+        {
+            Interlocked.Decrement(ref _pauseCount);
+            _pauseUntil = DateTime.UtcNow.AddMilliseconds(1000);
+        });
+    }
+
+    /// <summary>记录已知内容 Hash,避免自写回后再次捕获或上传。</summary>
+    public void RecordLastSeen(string hash)
+    {
+        if (string.IsNullOrEmpty(hash)) return;
+        _lastSeenHash = hash;
+        _suppressHash = hash;
+        _suppressUntil = DateTime.UtcNow.AddSeconds(5);
+    }
+
     /// <summary>记录"由本端写入"的内容 hash,时间窗内的一次捕获忽略(防回环);过期后不再拦截,外部复制同一内容仍可正常捕获。</summary>
     public void SuppressNext(string hash)
     {
@@ -60,6 +82,7 @@ public sealed class ClipboardMonitor
 
     private void OnContentChanged(object? sender, object e)
     {
+        if (_pauseCount > 0 || DateTime.UtcNow < _pauseUntil) return;
         _debounceCts?.Cancel();
         _debounceCts = new CancellationTokenSource();
         var ct = _debounceCts.Token;
@@ -84,6 +107,7 @@ public sealed class ClipboardMonitor
     {
         if (_capturing) return;
         if (!_settings.MonitorEnabled) return;
+        if (_pauseCount > 0 || DateTime.UtcNow < _pauseUntil) return;
         _capturing = true;
         try
         {
@@ -164,5 +188,15 @@ public sealed class ClipboardMonitor
     {
         var sha = SHA256.HashData(bytes);
         return Convert.ToHexStringLower(sha);
+    }
+}
+
+file sealed class ActionDisposable : IDisposable
+{
+    private Action? _action;
+    public ActionDisposable(Action action) => _action = action;
+    public void Dispose()
+    {
+        Interlocked.Exchange(ref _action, null)?.Invoke();
     }
 }

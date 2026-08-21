@@ -108,6 +108,9 @@ public partial class HistoryItemViewModel : ObservableObject
     private static BitmapImage? BuildThumbnail(string? path)
     {
         if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
-        return new BitmapImage(new Uri("file:///" + path.Replace('\\', '/')));
+        return new BitmapImage(new Uri("file:///" + path.Replace('\\', '/')))
+        {
+            DecodePixelWidth = 240,
+        };
     }
 }

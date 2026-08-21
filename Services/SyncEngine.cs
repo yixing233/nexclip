@@ -464,15 +464,16 @@ public sealed class SyncEngine : IDisposable
         {
             try
             {
+                using var _ = _monitor?.PauseCapture();
                 if (entry.Type == "Text" && entry.Text is not null)
                 {
                     ImageCodec.SetClipboardText(entry.Text);
-                    _monitor?.SuppressNext(ClipboardMonitor.HashText(entry.Text));
+                    if (contentHash is not null) _monitor?.RecordLastSeen(contentHash);
                 }
                 else if (imagePath is not null)
                 {
                     await ImageCodec.SetClipboardImageAsync(imagePath);
-                    _monitor?.SuppressNext(ClipboardMonitor.HashBytes(await File.ReadAllBytesAsync(imagePath)));
+                    if (contentHash is not null) _monitor?.RecordLastSeen(contentHash);
                 }
             }
             catch (Exception ex)
@@ -530,10 +531,12 @@ public sealed class SyncEngine : IDisposable
     {
         try
         {
+            using var _ = _monitor?.PauseCapture();
             if (item.Type == "Text" && item.Text is not null)
             {
                 ImageCodec.SetClipboardText(item.Text);
-                _monitor?.SuppressNext(ClipboardMonitor.HashText(item.Text));
+                var hash = item.ContentHash ?? ClipboardMonitor.HashText(item.Text);
+                _monitor?.RecordLastSeen(hash);
             }
             else if (item.Type == "Image")
             {
@@ -547,7 +550,8 @@ public sealed class SyncEngine : IDisposable
                     path = await ImageCodec.SavePngAsync(bytes, item.ServerId ?? item.Id);
                 }
                 await ImageCodec.SetClipboardImageAsync(path!);
-                _monitor?.SuppressNext(ClipboardMonitor.HashBytes(await File.ReadAllBytesAsync(path!)));
+                var hash = item.ContentHash ?? ClipboardMonitor.HashBytes(await File.ReadAllBytesAsync(path!));
+                _monitor?.RecordLastSeen(hash);
             }
         }
         catch (Exception ex)
