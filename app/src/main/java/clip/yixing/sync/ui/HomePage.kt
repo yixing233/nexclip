@@ -351,28 +351,14 @@ private fun SyncOverviewCard(
     SectionBlock(
         title = "同步状态",
         trailing = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(
-                    onClick = onOpenQrScanner,
-                    modifier = Modifier.size(28.dp)
-                ) {
-                    Icon(
-                        imageVector = LucideIcons.Scan,
-                        contentDescription = "扫码配对",
-                        tint = MiuixTheme.colorScheme.primary,
-                        modifier = Modifier.size(17.dp)
-                    )
-                }
-                Spacer(Modifier.width(4.dp))
-                if (serverUrl.isNotBlank()) {
-                    Text(
-                        text = "设置",
-                        color = MiuixTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .clickable(onClick = onNavigateToSettings)
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                    )
-                }
+            if (serverUrl.isNotBlank()) {
+                Text(
+                    text = "设置",
+                    color = MiuixTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clickable(onClick = onNavigateToSettings)
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                )
             }
         },
     ) {

@@ -724,7 +724,7 @@ internal fun SettingsPage(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Icon(
-                                    imageVector = LucideIcons.Scan,
+                                    imageVector = LucideIcons.ScanLine,
                                     contentDescription = "扫码配对",
                                     modifier = Modifier.size(18.dp)
                                 )
@@ -1290,7 +1290,7 @@ internal fun SettingsPage(
                 modifier = Modifier.weight(1f)
             ) {
                 Icon(
-                    imageVector = LucideIcons.Scan,
+                    imageVector = LucideIcons.ScanLine,
                     contentDescription = "扫码",
                     tint = MiuixTheme.colorScheme.primary,
                     modifier = Modifier.size(16.dp)

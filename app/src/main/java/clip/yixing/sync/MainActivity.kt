@@ -59,6 +59,7 @@ import androidx.navigationevent.compose.rememberNavigationEventDispatcherOwner
 import clip.yixing.sync.service.ClipboardMonitorService
 import clip.yixing.sync.ui.BottomBarIcons
 import clip.yixing.sync.ui.HomePage
+import clip.yixing.sync.ui.LucideIcons
 import clip.yixing.sync.ui.RecordsPage
 import clip.yixing.sync.ui.SearchPage
 import clip.yixing.sync.ui.FloatingBottomBar
@@ -239,7 +240,19 @@ private fun MainScreen() {
                 beyondViewportPageCount = 3
             ) { page ->
                 when (page) {
-                    0 -> PageShell(title = "NexClip", bottomInnerPadding = bottomInnerPadding) { scrollBehavior, topPadding ->
+                    0 -> PageShell(
+                        title = "NexClip",
+                        bottomInnerPadding = bottomInnerPadding,
+                        actions = {
+                            IconButton(onClick = { isScanOpen = true }) {
+                                Icon(
+                                    imageVector = LucideIcons.ScanLine,
+                                    contentDescription = "扫一扫",
+                                    tint = MiuixTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    ) { scrollBehavior, topPadding ->
                         HomePage(
                             scrollBehavior = scrollBehavior,
                             topPadding = topPadding,

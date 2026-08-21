@@ -482,4 +482,93 @@ object LucideIcons {
             }
         }.build()
     }
+
+    /** Lucide ScanLine 扫码图标(带中心扫描线) */
+    val ScanLine: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.ScanLine",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(3f, 7f); lineTo(3f, 5f); curveTo(3f, 3.9f, 3.9f, 3f, 5f, 3f); lineTo(7f, 3f)
+                moveTo(17f, 3f); lineTo(19f, 3f); curveTo(20.1f, 3f, 21f, 3.9f, 21f, 5f); lineTo(21f, 7f)
+                moveTo(21f, 17f); lineTo(21f, 19f); curveTo(21f, 20.1f, 20.1f, 21f, 19f, 21f); lineTo(17f, 21f)
+                moveTo(7f, 21f); lineTo(5f, 21f); curveTo(3.9f, 21f, 3f, 20.1f, 3f, 19f); lineTo(3f, 17f)
+                moveTo(7f, 12f); lineTo(17f, 12f)
+            }
+        }.build()
+    }
+
+    /** Lucide Zap 闪电/闪光灯图标 */
+    val Zap: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Zap",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(13f, 2f)
+                lineTo(3f, 14f)
+                lineTo(12f, 14f)
+                lineTo(11f, 22f)
+                lineTo(21f, 10f)
+                lineTo(12f, 10f)
+                close()
+            }
+        }.build()
+    }
+
+    /** Lucide Image 图片图标 */
+    val Image: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Image",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(5f, 3f)
+                curveTo(3.9f, 3f, 3f, 3.9f, 3f, 5f)
+                lineTo(3f, 19f)
+                curveTo(3f, 20.1f, 3.9f, 21f, 5f, 21f)
+                lineTo(19f, 21f)
+                curveTo(20.1f, 21f, 21f, 20.1f, 21f, 19f)
+                lineTo(21f, 5f)
+                curveTo(21f, 3.9f, 20.1f, 3f, 19f, 3f)
+                close()
+
+                moveTo(9f, 9f)
+                curveTo(9f, 9.55f, 8.55f, 10f, 8f, 10f)
+                curveTo(7.45f, 10f, 7f, 9.55f, 7f, 9f)
+                curveTo(7f, 8.45f, 7.45f, 8f, 8f, 8f)
+                curveTo(8.55f, 8f, 9f, 8.45f, 9f, 9f)
+                close()
+
+                moveTo(21f, 15f)
+                lineTo(16f, 10f)
+                lineTo(5f, 21f)
+            }
+        }.build()
+    }
 }

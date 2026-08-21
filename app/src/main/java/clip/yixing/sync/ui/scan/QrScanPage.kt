@@ -254,11 +254,16 @@ fun QrScanPage(
                         modifier = Modifier
                             .size(40.dp)
                             .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.5f))
+                            .background(
+                                if (isTorchOn) Color(0xFFFFD60A).copy(alpha = 0.35f)
+                                else Color.Black.copy(alpha = 0.5f)
+                            )
                     ) {
-                        Text(
-                            text = if (isTorchOn) "🔦" else "💡",
-                            fontSize = 16.sp
+                        Icon(
+                            imageVector = LucideIcons.Zap,
+                            contentDescription = "闪光灯",
+                            tint = if (isTorchOn) Color(0xFFFFD60A) else Color.White,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
@@ -275,9 +280,11 @@ fun QrScanPage(
                         .clip(CircleShape)
                         .background(Color.Black.copy(alpha = 0.5f))
                 ) {
-                    Text(
-                        text = "🖼️",
-                        fontSize = 16.sp
+                    Icon(
+                        imageVector = LucideIcons.Image,
+                        contentDescription = "相册选图",
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
