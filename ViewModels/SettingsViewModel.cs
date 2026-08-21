@@ -12,6 +12,7 @@ namespace SyncClipboard.Desktop.ViewModels;
 public partial class SettingsViewModel : ObservableObject
 {
     private readonly AppServices _svc;
+    private bool _initialized;
 
     /// <summary>配对码生成完成事件,供页面弹出对话框展示(含配对码、过期时间及用户ID)。</summary>
     public event Action<PairingCodeResult>? PairingCodeGenerated;
@@ -230,6 +231,7 @@ public partial class SettingsViewModel : ObservableObject
         var rIdx = Array.IndexOf(RetentionDaysOptions, s.RetentionDays);
         RetentionDaysIndex = rIdx >= 0 ? rIdx : 0;
         PasteKeyIndex = s.PasteKey == "CtrlV" ? 1 : 0;
+        _initialized = true;
         // 快捷键占用等长久态错误:注册失败时在快捷键页对应区域常驻提示
         RefreshHotkeyStatus();
     }
@@ -237,22 +239,27 @@ public partial class SettingsViewModel : ObservableObject
     /// <summary>根据当前注册状态刷新热键常驻提示(占用/非法时显示)。</summary>
     public void RefreshHotkeyStatus()
     {
-        HotkeyStatusText = App.Hotkey is { IsRegistered: true }
+        if (App.Hotkey is null)
+        {
+            HotkeyStatusText = "";
+            HasHotkeyIssue = false;
+            HotkeySettingsStatusText = "";
+            HasHotkeySettingsIssue = false;
+            return;
+        }
+
+        HotkeyStatusText = App.Hotkey.IsRegistered
             ? ""
             : $"“{Hotkey}”已被其他程序占用或格式非法,当前无法使用";
         HasHotkeyIssue = !string.IsNullOrEmpty(HotkeyStatusText);
+
         HotkeySettingsStatusText = App.HotkeySettings is { IsRegistered: true }
             ? ""
             : $"“{HotkeySettings}”已被其他程序占用或格式非法,当前无法使用";
         HasHotkeySettingsIssue = !string.IsNullOrEmpty(HotkeySettingsStatusText);
-        HotkeyOpenUrl = App.HotkeyOpenUrl is { IsRegistered: true } ? HotkeyOpenUrl : HotkeyOpenUrl;
-        // 打开链接热键的占用提示并入设置热键状态区(同一常驻提示)
-        var openUrlOk = App.HotkeyOpenUrl is { IsRegistered: true };
-        if (openUrlOk && IsRegisteredHotkeyTextEmpty())
-        {
-            // 全部正常时无提示
-        }
-        else if (string.IsNullOrEmpty(HotkeySettingsStatusText) && !openUrlOk)
+
+        var openUrlOk = App.HotkeyOpenUrl is null || App.HotkeyOpenUrl.IsRegistered;
+        if (!openUrlOk && string.IsNullOrEmpty(HotkeySettingsStatusText))
         {
             HotkeySettingsStatusText = $"“{HotkeyOpenUrl}”已被其他程序占用或格式非法,当前无法使用";
             HasHotkeySettingsIssue = true;
@@ -752,6 +759,7 @@ public partial class SettingsViewModel : ObservableObject
     // ---- 开关变更即保存 ----
     partial void OnBootStartEnabledChanged(bool value)
     {
+        if (!_initialized) return;
         _svc.Settings.BootStartEnabled = value;
         _svc.Settings.Save();
         var ok = StartupService.SetEnabled(value);
@@ -760,14 +768,15 @@ public partial class SettingsViewModel : ObservableObject
             ShowMessage(value ? "开机自启动设置失败(注册表写入被拒)" : "开机自启动已取消,但注册表清理失败", InfoBarSeverity.Error);
         }
     }
-    partial void OnStartMinimizedChanged(bool value) { _svc.Settings.StartMinimized = value; _svc.Settings.Save(); }
-    partial void OnCloseToTrayChanged(bool value) { _svc.Settings.CloseToTray = value; _svc.Settings.Save(); }
-    partial void OnMonitorEnabledChanged(bool value) { _svc.Settings.MonitorEnabled = value; _svc.Settings.Save(); }
-    partial void OnAutoPasteChanged(bool value) { _svc.Settings.AutoPaste = value; _svc.Settings.Save(); }
-    partial void OnNotifyEnabledChanged(bool value) { _svc.Settings.NotifyEnabled = value; _svc.Settings.Save(); }
-    partial void OnCopyDirectEnabledChanged(bool value) { _svc.Settings.CopyDirectEnabled = value; _svc.Settings.Save(); }
+    partial void OnStartMinimizedChanged(bool value) { if (!_initialized) return; _svc.Settings.StartMinimized = value; _svc.Settings.Save(); }
+    partial void OnCloseToTrayChanged(bool value) { if (!_initialized) return; _svc.Settings.CloseToTray = value; _svc.Settings.Save(); }
+    partial void OnMonitorEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.MonitorEnabled = value; _svc.Settings.Save(); }
+    partial void OnAutoPasteChanged(bool value) { if (!_initialized) return; _svc.Settings.AutoPaste = value; _svc.Settings.Save(); }
+    partial void OnNotifyEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.NotifyEnabled = value; _svc.Settings.Save(); }
+    partial void OnCopyDirectEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.CopyDirectEnabled = value; _svc.Settings.Save(); }
     partial void OnHotkeyChanged(string value)
     {
+        if (!_initialized) return;
         _svc.Settings.Hotkey = value;
         _svc.Settings.Save();
         var ok = App.Hotkey?.Apply(value) ?? false;
@@ -777,6 +786,7 @@ public partial class SettingsViewModel : ObservableObject
 
     partial void OnHotkeySettingsChanged(string value)
     {
+        if (!_initialized) return;
         _svc.Settings.HotkeySettings = value;
         _svc.Settings.Save();
         var ok = App.HotkeySettings?.Apply(value) ?? false;
@@ -785,6 +795,7 @@ public partial class SettingsViewModel : ObservableObject
     }
     partial void OnHotkeyOpenUrlChanged(string value)
     {
+        if (!_initialized) return;
         _svc.Settings.HotkeyOpenUrl = value;
         _svc.Settings.Save();
         var ok = App.HotkeyOpenUrl?.Apply(value) ?? false;
@@ -792,29 +803,34 @@ public partial class SettingsViewModel : ObservableObject
     }
     partial void OnThemeModeIndexChanged(int value)
     {
+        if (!_initialized) return;
         _svc.Settings.ThemeMode = value switch { 0 => "light", 1 => "dark", _ => "system" };
         _svc.Settings.Save();
         App.ApplyTheme(_svc.Settings.ThemeMode);
     }
     partial void OnBackdropIndexChanged(int value)
     {
+        if (!_initialized) return;
         _svc.Settings.BackdropMode = value switch { 1 => "MicaAlt", 2 => "Acrylic", _ => "Mica" };
         _svc.Settings.Save();
         App.ApplyBackdrop(_svc.Settings.BackdropMode);
     }
     partial void OnBackdropTintOpacityChanged(double value)
     {
+        if (!_initialized) return;
         _svc.Settings.BackdropTintOpacity = Math.Clamp(value, 0.5, 1.0);
         _svc.Settings.Save();
         App.ApplyBackdrop(_svc.Settings.BackdropMode);
     }
     partial void OnWindowPositionIndexChanged(int value)
     {
+        if (!_initialized) return;
         _svc.Settings.WindowPositionMode = value == 1 ? "center" : "cursor";
         _svc.Settings.Save();
     }
     partial void OnMaxHistoryIndexChanged(int value)
     {
+        if (!_initialized) return;
         _svc.Settings.MaxHistory = MaxHistoryOptions[value];
         _svc.Settings.Save();
         _svc.History.MaxEntries = _svc.Settings.MaxHistory; // 立即按新上限清理
@@ -823,6 +839,7 @@ public partial class SettingsViewModel : ObservableObject
     }
     partial void OnRetentionDaysIndexChanged(int value)
     {
+        if (!_initialized) return;
         _svc.Settings.RetentionDays = RetentionDaysOptions[value];
         _svc.Settings.Save();
         var removed = _svc.History.PruneOlderThan(_svc.Settings.RetentionDays); // 立即按时间清理
@@ -832,6 +849,7 @@ public partial class SettingsViewModel : ObservableObject
     }
     partial void OnPasteKeyIndexChanged(int value)
     {
+        if (!_initialized) return;
         _svc.Settings.PasteKey = value == 1 ? "CtrlV" : "ShiftInsert";
         _svc.Settings.Save();
     }
