@@ -6,6 +6,7 @@ import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
 import com.google.zxing.MultiFormatReader
 import com.google.zxing.PlanarYUVLuminanceSource
+import com.google.zxing.common.GlobalHistogramBinarizer
 import com.google.zxing.common.HybridBinarizer
 import java.nio.ByteBuffer
 import java.util.EnumMap
@@ -14,6 +15,12 @@ import java.util.EnumMap
  * 纯离线、零 GMS 依赖的 ZXing 极速二维码解码引擎
  */
 object ZxingQrDecoder {
+
+    private val HINTS: Map<DecodeHintType, Any> = EnumMap<DecodeHintType, Any>(DecodeHintType::class.java).apply {
+        put(DecodeHintType.POSSIBLE_FORMATS, listOf(BarcodeFormat.QR_CODE))
+        put(DecodeHintType.CHARACTER_SET, "utf-8")
+        put(DecodeHintType.TRY_HARDER, java.lang.Boolean.TRUE)
+    }
 
     /**
      * 从 ImageProxy（YUV_420_888）亮度平面中实时解码二维码
@@ -24,7 +31,7 @@ object ZxingQrDecoder {
             if (planes.isEmpty()) return null
 
             val yPlane = planes[0]
-            val buffer: ByteBuffer = yPlane.buffer
+            val buffer: ByteBuffer = yPlane.buffer.duplicate()
             val remaining = buffer.remaining()
             if (remaining == 0) return null
 
@@ -36,7 +43,7 @@ object ZxingQrDecoder {
             val rowStride = yPlane.rowStride
             val pixelStride = yPlane.pixelStride
 
-            // 紧凑排布 Y 亮度数据（去除行填充）
+            // 提取紧凑的 Y 灰度数组
             val data = if (rowStride == width && pixelStride == 1) {
                 bytes
             } else {
@@ -44,50 +51,81 @@ object ZxingQrDecoder {
                 for (row in 0 until height) {
                     val srcPos = row * rowStride
                     val dstPos = row * width
-                    if (srcPos + width <= bytes.size && dstPos + width <= compact.size) {
-                        System.arraycopy(bytes, srcPos, compact, dstPos, width)
+                    val copyLen = minOf(width, bytes.size - srcPos)
+                    if (copyLen > 0 && dstPos + copyLen <= compact.size) {
+                        System.arraycopy(bytes, srcPos, compact, dstPos, copyLen)
                     }
                 }
                 compact
             }
 
-            // 根据相机旋转角度旋转灰度图像
             val rotation = image.imageInfo.rotationDegrees
-            val (rotatedData, rotatedWidth, rotatedHeight) = when (rotation) {
-                90 -> rotate90(data, width, height)
-                180 -> rotate180(data, width, height)
-                270 -> rotate270(data, width, height)
-                else -> Triple(data, width, height)
+
+            // 1. 尝试当前相机旋转角度
+            val res1 = decodeRotatedYuv(data, width, height, rotation)
+            if (res1 != null) return res1
+
+            // 2. 备用尝试 0 度原图
+            if (rotation != 0) {
+                val res0 = decodeRotatedYuv(data, width, height, 0)
+                if (res0 != null) return res0
             }
 
-            tryDecodeYuv(rotatedData, rotatedWidth, rotatedHeight)
-        } catch (_: Exception) {
+            null
+        } catch (e: Exception) {
             null
         }
     }
 
-    private fun tryDecodeYuv(data: ByteArray, width: Int, height: Int): String? {
-        return try {
-            val source = PlanarYUVLuminanceSource(
-                data,
-                width,
-                height,
-                0,
-                0,
-                width,
-                height,
-                false
-            )
-            val binaryBitmap = BinaryBitmap(HybridBinarizer(source))
-            val hints = EnumMap<DecodeHintType, Any>(DecodeHintType::class.java).apply {
-                put(DecodeHintType.POSSIBLE_FORMATS, listOf(BarcodeFormat.QR_CODE))
-                put(DecodeHintType.CHARACTER_SET, "utf-8")
-            }
-            val reader = MultiFormatReader().apply { setHints(hints) }
-            reader.decodeWithState(binaryBitmap)?.text
-        } catch (_: Exception) {
-            null
+    private fun decodeRotatedYuv(data: ByteArray, width: Int, height: Int, rotation: Int): String? {
+        val (rotatedData, rotW, rotH) = when (rotation) {
+            90 -> rotate90(data, width, height)
+            180 -> rotate180(data, width, height)
+            270 -> rotate270(data, width, height)
+            else -> Triple(data, width, height)
         }
+
+        val source = PlanarYUVLuminanceSource(
+            rotatedData,
+            rotW,
+            rotH,
+            0,
+            0,
+            rotW,
+            rotH,
+            false
+        )
+
+        val reader = MultiFormatReader().apply { setHints(HINTS) }
+
+        // A. 尝试 HybridBinarizer (常规)
+        try {
+            val bitmap = BinaryBitmap(HybridBinarizer(source))
+            val res = reader.decodeWithState(bitmap)
+            if (!res.text.isNullOrBlank()) return res.text
+        } catch (_: Exception) {
+            reader.reset()
+        }
+
+        // B. 尝试 GlobalHistogramBinarizer (低对比度/反光)
+        try {
+            val bitmap = BinaryBitmap(GlobalHistogramBinarizer(source))
+            val res = reader.decodeWithState(bitmap)
+            if (!res.text.isNullOrBlank()) return res.text
+        } catch (_: Exception) {
+            reader.reset()
+        }
+
+        // C. 尝试反转颜色 (黑底白码)
+        try {
+            val bitmap = BinaryBitmap(HybridBinarizer(source.invert()))
+            val res = reader.decodeWithState(bitmap)
+            if (!res.text.isNullOrBlank()) return res.text
+        } catch (_: Exception) {
+            reader.reset()
+        }
+
+        return null
     }
 
     private fun rotate90(data: ByteArray, width: Int, height: Int): Triple<ByteArray, Int, Int> {
