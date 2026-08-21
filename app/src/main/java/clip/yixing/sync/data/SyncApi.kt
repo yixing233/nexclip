@@ -274,14 +274,36 @@ class SyncApi(
         resp.use { return it.body?.bytes() }
     }
 
-    /** 连接测试 */
-    fun testConnection(): Pair<Boolean, String> = try {
-        val cur = getCurrent()
-        true to (cur?.let { "连接成功,当前条目来自 " + (it.deviceName ?: "未知设备") } ?: "连接成功(服务器暂无内容)")
-    } catch (e: ApiException) {
-        false to (if (e.statusCode == 401) "未授权(401)" else e.message ?: "连接失败")
-    } catch (e: Exception) {
-        false to "连接失败: " + (e.message ?: e.javaClass.simpleName)
+    /** 服务连通性与网络延迟测试 (GET /api/health) */
+    fun testConnection(): Pair<Boolean, String> {
+        val start = System.currentTimeMillis()
+        return try {
+            val req = Request.Builder()
+                .url(serverUrl.trimEnd('/') + "/api/health")
+                .get()
+                .build()
+            client.newCall(req).execute().use { resp ->
+                val elapsed = System.currentTimeMillis() - start
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string()
+                    val ver = try {
+                        JSONObject(body ?: "{}").optString("version").takeIf { it.isNotBlank() }
+                    } catch (_: Exception) {
+                        null
+                    }
+                    val verText = if (ver != null) " (v$ver)" else ""
+                    true to "连接成功！服务器响应正常，延迟 ${elapsed}ms$verText"
+                } else if (resp.code == 404 || resp.code == 401 || resp.code == 204) {
+                    true to "连接成功！服务器已响应，延迟 ${elapsed}ms"
+                } else {
+                    false to "服务器返回异常状态码: ${resp.code} ${resp.message}"
+                }
+            }
+        } catch (e: java.io.IOException) {
+            false to networkErrorText(e)
+        } catch (e: Exception) {
+            false to "连接失败: ${e.message ?: e.javaClass.simpleName}"
+        }
     }
 }
 
