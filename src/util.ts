@@ -5,6 +5,10 @@ export function sha256Hex(s: string): string {
   return createHash('sha256').update(s, 'utf8').digest('hex').toUpperCase();
 }
 
+export function sha256Bytes(b: Buffer): string {
+  return createHash('sha256').update(b).digest('hex').toUpperCase();
+}
+
 /** 入库时间格式(与 EF Core SQLite 存储一致):"yyyy-MM-dd HH:mm:ss.fff" (UTC) */
 export function dbNow(): string {
   return new Date().toISOString().replace('T', ' ').replace('Z', '');

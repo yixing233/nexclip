@@ -3,7 +3,7 @@ import { join, extname, resolve, dirname, isAbsolute } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AppConfig } from './config.js';
 import type { EntryRow, DeviceRow, ActivityRow, PairingRequestRow, AuditRow } from './db.js';
-import { dbNow, toIso, sha256Hex, truncate, clamp, randomHex, randomCode, randomNumericCode, detectPlatform } from './util.js';
+import { dbNow, toIso, sha256Hex, sha256Bytes, truncate, clamp, randomHex, randomCode, randomNumericCode, detectPlatform } from './util.js';
 import type { SignalRHub } from './signalr.js';
 
 export interface EntryDto {
@@ -203,6 +203,12 @@ export class SyncService {
 
   // ---------- 图片上传 ----------
   uploadImage(fileName: string, data: Buffer, deviceId: string, deviceName: string, ip: string | null, platform: string | null = null, version: string | null = null): EntryDto {
+    const hash = sha256Bytes(data);
+    const current = this.getCurrent();
+    if (current && current.Type === 'Image' && current.ContentHash === hash) {
+      this.touchDevice(deviceId, deviceName, platform, version, ip);
+      return this.toDto(current);
+    }
     let ext = extname(fileName);
     if (!ext) ext = '.png';
     const dir = new Date().toISOString().slice(0, 10).replace(/-/g, ''); // yyyyMMdd
@@ -213,7 +219,7 @@ export class SyncService {
     writeFileSync(full, data);
     const now = dbNow();
     this.db.prepare(`INSERT INTO "Entries" ("Type","Text","ImageRef","ContentHash","DeviceId","DeviceName","CreatedAt") VALUES ('Image', ?, ?, ?, ?, ?, ?)`)
-      .run(fileName, rel, sha256Hex(rel), deviceId, deviceName, now);
+      .run(fileName, rel, hash, deviceId, deviceName, now);
     const entry = this.getById(this.lastInsertId())!;
     this.touchDevice(deviceId, deviceName, platform, version, ip);
     this.addActivity('push', deviceName, truncate(fileName, 120), now, deviceId);
