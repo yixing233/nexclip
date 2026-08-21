@@ -7,6 +7,8 @@ export interface SessionPayload {
   username?: string;
   userId?: string;
   deviceId?: string;
+  /** 兑换会话时的设备令牌哈希,用于设备移除/重新配对后使旧会话永久失效。 */
+  deviceTokenHash?: string;
 }
 
 /** 会话存储:内存态随机令牌 + TTL,携带角色载荷 */

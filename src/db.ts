@@ -8,6 +8,7 @@ export interface EntryRow {
 export interface DeviceRow {
   Id: string; Name: string; Platform: string; Ip: string | null; Version: string | null;
   LastSeenAt: string; Token: string | null; PairedAt: string | null; UserId: string | null;
+  RevokedAt: string | null;
 }
 export interface UserRow {
   Id: string; Name: string; CreatedAt: string;
@@ -15,7 +16,9 @@ export interface UserRow {
 export interface PairingRequestRow {
   Code: string; GeneratorId: string; UserId: string;
   TargetDeviceId: string | null; TargetDeviceName: string | null;
+  TargetTokenHash: string | null;
   Status: string; ExpiresAt: string; CreatedAt: string; ConfirmedAt: string | null;
+  SessionIssuedAt: string | null;
 }
 export interface AuditRow {
   Id: number; Action: string; Detail: string | null; Ip: string | null; CreatedAt: string;
@@ -68,10 +71,12 @@ CREATE TABLE IF NOT EXISTS "PairingRequests" (
   "UserId" TEXT NOT NULL,
   "TargetDeviceId" TEXT NULL,
   "TargetDeviceName" TEXT NULL,
+  "TargetTokenHash" TEXT NULL,
   "Status" TEXT NOT NULL,
   "ExpiresAt" TEXT NOT NULL,
   "CreatedAt" TEXT NOT NULL,
-  "ConfirmedAt" TEXT NULL
+  "ConfirmedAt" TEXT NULL,
+  "SessionIssuedAt" TEXT NULL
 );
 CREATE INDEX IF NOT EXISTS "IX_PairingRequests_UserId" ON "PairingRequests" ("UserId");
 CREATE INDEX IF NOT EXISTS "IX_PairingRequests_Status" ON "PairingRequests" ("Status");
@@ -92,8 +97,21 @@ CREATE TABLE IF NOT EXISTS "Settings" (
   if (!devCols.has('Token')) db.exec('ALTER TABLE "Devices" ADD COLUMN "Token" TEXT NULL');
   if (!devCols.has('PairedAt')) db.exec('ALTER TABLE "Devices" ADD COLUMN "PairedAt" TEXT NULL');
   if (!devCols.has('UserId')) db.exec('ALTER TABLE "Devices" ADD COLUMN "UserId" TEXT NULL');
+  if (!devCols.has('RevokedAt')) db.exec('ALTER TABLE "Devices" ADD COLUMN "RevokedAt" TEXT NULL');
+  const pairCols = new Set((db.prepare('PRAGMA table_info("PairingRequests")').all() as { name: string }[]).map(c => c.name));
+  if (!pairCols.has('TargetTokenHash')) db.exec('ALTER TABLE "PairingRequests" ADD COLUMN "TargetTokenHash" TEXT NULL');
+  if (!pairCols.has('SessionIssuedAt')) db.exec('ALTER TABLE "PairingRequests" ADD COLUMN "SessionIssuedAt" TEXT NULL');
   const actCols = new Set((db.prepare('PRAGMA table_info("Activities")').all() as { name: string }[]).map(c => c.name));
   if (!actCols.has('DeviceId')) db.exec('ALTER TABLE "Activities" ADD COLUMN "DeviceId" TEXT NULL');
-  // 设备行兼容:Token/PairedAt 列保留但不再签发令牌(设计变更)
+  // 平滑修复历史遗留的 Unknown Web 平台设备
+  try {
+    db.exec(`
+      UPDATE "Devices"
+      SET "Platform" = 'Web'
+      WHERE ("Platform" = 'Unknown' OR "Platform" IS NULL OR "Platform" = '')
+        AND ("Name" LIKE '%Web%' OR "Name" LIKE '%浏览器%' OR "Name" LIKE '%管理页%' OR "Name" LIKE '%控制台%');
+    `);
+  } catch { /* 忽略 */ }
+  // 旧版本已有绑定关系但未签发令牌；客户端通过一次性 legacy claim 平滑迁移。
   return db;
 }

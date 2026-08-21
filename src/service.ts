@@ -1,9 +1,9 @@
-import { mkdirSync, existsSync, writeFileSync, unlinkSync } from 'node:fs';
-import { join, extname, resolve } from 'node:path';
+import { mkdirSync, existsSync, writeFileSync, unlinkSync, readdirSync, copyFileSync, cpSync } from 'node:fs';
+import { join, extname, resolve, dirname, isAbsolute } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { AppConfig } from './config.js';
 import type { EntryRow, DeviceRow, ActivityRow, PairingRequestRow, AuditRow } from './db.js';
-import { dbNow, toIso, sha256Hex, truncate, clamp, randomHex, randomCode } from './util.js';
+import { dbNow, toIso, sha256Hex, truncate, clamp, randomHex, randomCode, randomNumericCode, detectPlatform } from './util.js';
 import type { SignalRHub } from './signalr.js';
 
 export interface EntryDto {
@@ -17,6 +17,11 @@ export class PairError extends Error {
     super(message);
   }
 }
+
+export type PairingRequestActor =
+  | { kind: 'admin' }
+  | { kind: 'user'; userId: string }
+  | { kind: 'device'; deviceId: string };
 
 export class SyncService {
   /** 历史上限:启动时取配置,管理台可改(持久化到 Settings 表) */
@@ -45,6 +50,62 @@ export class SyncService {
       .run(String(this.maxHistoryCount));
     this.trimHistory();
     return this.maxHistoryCount;
+  }
+
+  /** 管理台:图片存储位置(持久化,重启保留) */
+  private _imageStoragePath: string | null = null;
+
+  getImageStoragePath(): string {
+    if (this._imageStoragePath === null) {
+      const saved = this.db.prepare('SELECT "Value" FROM "Settings" WHERE "Key" = ?').get('imageStoragePath') as { Value: string } | undefined;
+      this._imageStoragePath = saved?.Value ?? this.cfg.imageStoragePath;
+    }
+    return this._imageStoragePath;
+  }
+
+  setImageStoragePath(p: string): { path: string; moved: number } {
+    const raw = p.trim();
+    if (!raw) throw new PairError(400, '路径不能为空');
+    const root = resolve(raw);
+    const old = resolve(this.getImageStoragePath());
+    if (old === root) return { path: root, moved: 0 };
+    mkdirSync(root, { recursive: true });
+    let moved = 0;
+    if (existsSync(old) && old !== root) {
+      // 迁移现有图片目录内容(子目录递归,文件复制;目标已存在则跳过)
+      for (const entry of readdirSync(old, { withFileTypes: true })) {
+        const from = join(old, entry.name);
+        const to = join(root, entry.name);
+        try {
+          if (existsSync(to)) continue;
+          if (entry.isDirectory()) cpSync(from, to, { recursive: true });
+          else copyFileSync(from, to);
+          moved++;
+        } catch { /* 单项失败不阻断 */ }
+      }
+    }
+    this.db.prepare('INSERT OR REPLACE INTO "Settings" ("Key","Value") VALUES (?,?)').run('imageStoragePath', root);
+    this._imageStoragePath = root;
+    return { path: root, moved };
+  }
+
+  /** 管理台:目录浏览(仅列出子目录,用于选择存储位置) */
+  browseDirectory(p: string | null): { path: string; parent: string | null; exists: boolean; dirs: string[] } {
+    const root = resolve(p && p.trim() ? p.trim() : this.getImageStoragePath());
+    if (!isAbsolute(root)) throw new PairError(400, '仅支持绝对路径');
+    let dirs: string[] = [];
+    let exists = false;
+    try {
+      exists = existsSync(root);
+      if (exists) {
+        dirs = readdirSync(root, { withFileTypes: true })
+          .filter(e => e.isDirectory())
+          .map(e => e.name)
+          .sort();
+      }
+    } catch { /* 无权限等:返回空 */ }
+    const parent = dirname(root);
+    return { path: root, parent: parent === root ? null : parent, exists, dirs };
   }
 
   // ---------- 条目序列化 ----------
@@ -98,9 +159,11 @@ export class SyncService {
     return { items: rows.map(r => this.toDto(r)), total };
   }
 
-  listDevices(): Array<Record<string, unknown>> {
+  listDevices(userId: string | null = null): Array<Record<string, unknown>> {
     const threshold = new Date(Date.now() - this.cfg.onlineThresholdSeconds * 1000).toISOString().replace('T', ' ').replace('Z', '');
-    const rows = this.db.prepare('SELECT * FROM "Devices" ORDER BY "LastSeenAt" DESC').all() as unknown as DeviceRow[];
+    const rows = (userId
+      ? this.db.prepare('SELECT * FROM "Devices" WHERE "RevokedAt" IS NULL AND "UserId" = ? ORDER BY "LastSeenAt" DESC').all(userId)
+      : this.db.prepare('SELECT * FROM "Devices" WHERE "RevokedAt" IS NULL AND "UserId" IS NOT NULL ORDER BY "LastSeenAt" DESC').all()) as unknown as DeviceRow[];
     return rows.map(d => ({
       id: d.Id, name: d.Name, platform: d.Platform, ip: d.Ip, version: d.Version,
       online: d.LastSeenAt >= threshold,
@@ -139,20 +202,20 @@ export class SyncService {
   }
 
   // ---------- 图片上传 ----------
-  uploadImage(fileName: string, data: Buffer, deviceId: string, deviceName: string, ip: string | null): EntryDto {
+  uploadImage(fileName: string, data: Buffer, deviceId: string, deviceName: string, ip: string | null, platform: string | null = null, version: string | null = null): EntryDto {
     let ext = extname(fileName);
     if (!ext) ext = '.png';
     const dir = new Date().toISOString().slice(0, 10).replace(/-/g, ''); // yyyyMMdd
-    const fullDir = join(this.cfg.imageStoragePath, dir);
+    const fullDir = join(this.getImageStoragePath(), dir);
     mkdirSync(fullDir, { recursive: true });
     const rel = dir + '/' + randomHex(16) + ext.toLowerCase();
-    const full = join(this.cfg.imageStoragePath, rel);
+    const full = join(this.getImageStoragePath(), rel);
     writeFileSync(full, data);
     const now = dbNow();
     this.db.prepare(`INSERT INTO "Entries" ("Type","Text","ImageRef","ContentHash","DeviceId","DeviceName","CreatedAt") VALUES ('Image', ?, ?, ?, ?, ?, ?)`)
       .run(fileName, rel, sha256Hex(rel), deviceId, deviceName, now);
     const entry = this.getById(this.lastInsertId())!;
-    this.touchDevice(deviceId, deviceName, null, null, ip);
+    this.touchDevice(deviceId, deviceName, platform, version, ip);
     this.addActivity('push', deviceName, truncate(fileName, 120), now, deviceId);
     this.trimHistory();
     this.hub.broadcastUpdated(this.toDto(entry));
@@ -188,8 +251,8 @@ export class SyncService {
 
   private tryDeleteImage(rel: string): void {
     try {
-      const root = resolve(this.cfg.imageStoragePath);
-      const full = resolve(join(this.cfg.imageStoragePath, rel));
+      const root = resolve(this.getImageStoragePath());
+      const full = resolve(join(this.getImageStoragePath(), rel));
       if (full.toLowerCase().startsWith(root.toLowerCase()) && existsSync(full)) {
         unlinkSync(full);
       }
@@ -201,38 +264,100 @@ export class SyncService {
     return this.db.prepare('SELECT * FROM "Devices" WHERE "Id" = ?').get(id) as unknown as DeviceRow | null;
   }
 
+  /** 生成设备凭证;只将哈希写入数据库,明文只返回给刚完成配对的客户端。 */
+  private issueDeviceToken(): { token: string; hash: string } {
+    const token = randomHex(32);
+    return { token, hash: sha256Hex(token) };
+  }
+
+  /** 验证设备凭证。旧版本无 Token 的设备不能访问同步接口,必须重新配对。 */
+  authenticateDevice(deviceId: string, token: string): DeviceRow | null {
+    if (!deviceId || !token) return null;
+    const d = this.getDevice(deviceId);
+    if (!d || !d.UserId || d.RevokedAt || !d.Token) return null;
+    return d.Token === sha256Hex(token) ? d : null;
+  }
+
+  /** 设备凭证失败原因,供 REST 返回可操作的状态码。 */
+  deviceCredentialStatus(deviceId: string, token: string): 'ok' | 'missing' | 'revoked' | 'invalid' {
+    if (!deviceId || !token) return 'missing';
+    const d = this.getDevice(deviceId);
+    if (d?.RevokedAt) return 'revoked';
+    if (!d || !d.UserId || !d.Token) return 'invalid';
+    return d.Token === sha256Hex(token) ? 'ok' : 'invalid';
+  }
+
+  /**
+   * 设备初始化/旧版迁移：
+   * - 空服务器允许第一台设备建立用户组；
+   * - 已绑定但 Token 为空的旧设备可一次性领取新凭证；
+   * - 被移除设备保留 tombstone，不能通过重连或初始化复活。
+   */
+  initializeDevice(
+    deviceId: string, deviceName: string, platform: string | null,
+    version: string | null, ip: string | null, currentToken: string,
+  ): { status: 'active' | 'created' | 'migrated'; userId: string; deviceToken?: string } {
+    if (!deviceId) throw new PairError(400, 'deviceId 不能为空');
+    const now = dbNow();
+    const existing = this.getDevice(deviceId);
+    if (existing?.RevokedAt) throw new PairError(410, '设备已被移除,请使用其他已配对设备重新批准接入');
+    if (existing?.UserId && existing.Token) {
+      if (!currentToken || existing.Token !== sha256Hex(currentToken)) {
+        throw new PairError(401, '设备凭证无效,请重新配对');
+      }
+      this.touchDevice(deviceId, deviceName || existing.Name, platform, version, ip);
+      return { status: 'active', userId: existing.UserId };
+    }
+    if (existing?.UserId && !existing.Token) {
+      const issued = this.issueDeviceToken();
+      this.db.prepare('UPDATE "Devices" SET "Token" = ?, "PairedAt" = ?, "Name" = ?, "Platform" = ?, "Ip" = COALESCE(?, "Ip"), "Version" = COALESCE(?, "Version"), "LastSeenAt" = ? WHERE "Id" = ?')
+        .run(issued.hash, now, deviceName || existing.Name, platform ?? existing.Platform, ip, version, now, deviceId);
+      return { status: 'migrated', userId: existing.UserId, deviceToken: issued.token };
+    }
+    const activeCount = Number((this.db.prepare('SELECT COUNT(*) AS c FROM "Devices" WHERE "RevokedAt" IS NULL AND "UserId" IS NOT NULL').get() as { c: number }).c);
+    if (activeCount > 0) throw new PairError(409, '服务器已有设备组,请使用配对码加入');
+    const userId = this.createUser(now);
+    const issued = this.issueDeviceToken();
+    if (existing) {
+      this.db.prepare('UPDATE "Devices" SET "Name" = ?, "Platform" = ?, "Ip" = ?, "Version" = ?, "LastSeenAt" = ?, "Token" = ?, "PairedAt" = ?, "UserId" = ?, "RevokedAt" = NULL WHERE "Id" = ?')
+        .run(deviceName || existing.Name, platform ?? existing.Platform, ip, version, now, issued.hash, now, userId, deviceId);
+    } else {
+      this.db.prepare('INSERT INTO "Devices" ("Id","Name","Platform","Ip","Version","LastSeenAt","Token","PairedAt","UserId","RevokedAt") VALUES (?,?,?,?,?,?,?,?,?,NULL)')
+        .run(deviceId, deviceName || '未知设备', platform ?? 'Unknown', ip, version, now, issued.hash, now, userId);
+    }
+    return { status: 'created', userId, deviceToken: issued.token };
+  }
+
+  /** 生成方设备必须属于该用户组,返回设备行供控制器进行授权判断。 */
+  deviceForUser(deviceId: string, userId: string): DeviceRow | null {
+    const d = this.getDevice(deviceId);
+    return d?.UserId === userId && !d.RevokedAt ? d : null;
+  }
+
   touchDevice(id: string, name: string, platform: string | null, version: string | null, ip: string | null): void {
     if (!id) return;
     const d = this.db.prepare('SELECT * FROM "Devices" WHERE "Id" = ?').get(id) as unknown as DeviceRow | null;
+    if (!d) return; // 已删除或未登记设备不静默插表，防止删除后被自动复活
     const now = dbNow();
-    if (!d) {
-      this.db.prepare('INSERT INTO "Devices" ("Id","Name","Platform","Ip","Version","LastSeenAt") VALUES (?,?,?,?,?,?)')
-        .run(id, name || '未知设备', platform ?? 'Unknown', ip, version, now);
-    } else {
-      this.db.prepare('UPDATE "Devices" SET "Name" = ?, "Platform" = ?, "Ip" = ?, "Version" = ?, "LastSeenAt" = ? WHERE "Id" = ?')
-        .run(name || d.Name, platform ?? d.Platform, ip ?? d.Ip, version ?? d.Version, now, id);
-    }
+    this.db.prepare('UPDATE "Devices" SET "Name" = ?, "Platform" = ?, "Ip" = COALESCE(?, "Ip"), "Version" = COALESCE(?, "Version"), "LastSeenAt" = ? WHERE "Id" = ?')
+      .run(name || d.Name, platform ?? d.Platform, ip, version, now, id);
   }
 
-  /** hub 连接登记(与 .NET OnConnected 一致:不存在则建 未知设备/Web,每次记 connect 活动)。
-   *  携带 platform/version(客户端上报)时更新设备平台信息。 */
+  /** hub 连接登记：仅对已登记设备更新心跳与信息，避免未配对/已删除设备静默建档 */
   registerHubDevice(
     deviceId: string | null, deviceName: string | null = null,
     platform: string | null = null, version: string | null = null,
+    ip: string | null = null,
   ): void {
     if (!deviceId) return;
     const d = this.db.prepare('SELECT * FROM "Devices" WHERE "Id" = ?').get(deviceId) as unknown as DeviceRow | null;
+    if (!d) return; // 已删除或未登记设备不静默插表
     const now = dbNow();
-    const name = deviceName?.trim() || d?.Name || '未知设备';
-    const plat = platform?.trim() || d?.Platform || 'Web';
-    const ver = version?.trim() || d?.Version || null;
-    if (!d) {
-      this.db.prepare('INSERT INTO "Devices" ("Id","Name","Platform","Ip","Version","LastSeenAt") VALUES (?,?,?,NULL,?,?)')
-        .run(deviceId, name, plat, ver, now);
-    } else {
-      this.db.prepare('UPDATE "Devices" SET "Name" = ?, "Platform" = ?, "Version" = ?, "LastSeenAt" = ? WHERE "Id" = ?')
-        .run(name, plat, ver, now, deviceId);
-    }
+    const name = deviceName?.trim() || d.Name || '未知设备';
+    const plat = platform?.trim() || d.Platform || 'Unknown';
+    const ver = version?.trim() || d.Version || null;
+    this.db.prepare('UPDATE "Devices" SET "Name" = ?, "Platform" = ?, "Ip" = COALESCE(?, "Ip"), "Version" = COALESCE(?, "Version"), "LastSeenAt" = ? WHERE "Id" = ?')
+      .run(name, plat, ip, ver, now, deviceId);
     this.addActivity('connect', name, null, now, deviceId);
   }
 
@@ -249,62 +374,165 @@ export class SyncService {
   }
 
   /** 设备归属:未绑定则自动创建用户ID并绑定 */
-  private ensureUserBinding(deviceId: string, now: string): string {
+  private ensureUserBinding(deviceId: string, now: string, name: string = '未知设备', platform: string = 'Unknown', ip: string | null = null): string {
     const d = this.db.prepare('SELECT * FROM "Devices" WHERE "Id" = ?').get(deviceId) as unknown as DeviceRow | null;
     if (d?.UserId) return d.UserId;
+    if (!d) throw new PairError(404, '设备尚未登记,请先通过配对流程建立设备记录');
     const uid = this.createUser(now);
-    if (d) {
-      this.db.prepare('UPDATE "Devices" SET "UserId" = ? WHERE "Id" = ?').run(uid, deviceId);
-    } else {
-      this.db.prepare('INSERT INTO "Devices" ("Id","Name","Platform","Ip","Version","LastSeenAt","UserId") VALUES (?,?,?,NULL,NULL,?,?)')
-        .run(deviceId, '未知设备', 'Unknown', now, uid);
-    }
+    this.db.prepare('UPDATE "Devices" SET "UserId" = ?, "RevokedAt" = NULL WHERE "Id" = ?').run(uid, deviceId);
     return uid;
   }
 
   /** 生成配对码:归属生成方用户ID;未绑定则自动创建用户ID。
    *  返回 userId —— 未绑定场景界面需同时展示 用户ID + 配对码。 */
-  generatePairingCode(deviceId: string, deviceName: string | null): { code: string; expiresAt: string; userId: string } {
+  generatePairingCode(
+    deviceId: string, deviceName: string | null, ip: string | null = null,
+    currentToken = '', trustedUserId: string | null = null, platform: string | null = null,
+  ): { code: string; expiresAt: string; userId: string; deviceToken?: string } {
     const now = dbNow();
-    this.touchDevice(deviceId, deviceName || '未知设备', 'Unknown', null, null);
-    const userId = this.ensureUserBinding(deviceId, now);
+    const plat = detectPlatform(platform, null, deviceName);
+    const existing = this.getDevice(deviceId);
+    if (!existing) {
+      if (trustedUserId) {
+        const user = this.getUser(trustedUserId);
+        if (!user) throw new PairError(401, '网页会话对应的用户不存在,请重新配对登录');
+        let code: string;
+        do { code = randomNumericCode(6); } while (this.db.prepare('SELECT 1 FROM "PairingRequests" WHERE "Code" = ?').get(code));
+        const expiresAt = new Date(Date.now() + this.cfg.pairingCodeTtlSeconds * 1000).toISOString().replace('T', ' ').replace('Z', '');
+        this.db.prepare('INSERT INTO "PairingRequests" ("Code","GeneratorId","UserId","TargetDeviceId","TargetDeviceName","TargetTokenHash","Status","ExpiresAt","CreatedAt","ConfirmedAt") VALUES (?,?,?,NULL,NULL,NULL,\'open\',?,?,NULL)')
+          .run(code, deviceId, trustedUserId, expiresAt, now);
+        this.addAudit('pair_code', '网页会话生成配对码(用户 ' + trustedUserId + ')', ip);
+        return { code, expiresAt: toIso(expiresAt), userId: trustedUserId };
+      }
+      const activeCount = Number((this.db.prepare('SELECT COUNT(*) AS c FROM "Devices" WHERE "RevokedAt" IS NULL AND "UserId" IS NOT NULL').get() as { c: number }).c);
+      if (activeCount > 0) throw new PairError(404, '设备未登记,请使用现有设备生成的配对码加入');
+      const first = this.initializeDevice(deviceId, deviceName || '未知设备', plat, null, ip, '');
+      const result = this.generatePairingCode(deviceId, deviceName, ip, first.deviceToken ?? '', trustedUserId, plat);
+      return first.deviceToken ? { ...result, deviceToken: first.deviceToken } : result;
+    }
+    if (existing.RevokedAt) {
+      throw new PairError(410, '设备凭证已失效,请重新初始化后再配对');
+    }
+    if (trustedUserId && existing.UserId !== trustedUserId) {
+      throw new PairError(403, '当前网页会话无权使用该设备生成配对码');
+    }
+    let issuedToken: string | undefined;
+    if (existing.Token) {
+      const trustedSession = trustedUserId != null && existing.UserId === trustedUserId;
+      if (!trustedSession && (!currentToken || existing.Token !== sha256Hex(currentToken))) throw new PairError(401, '设备凭证无效,请重新配对');
+    } else {
+      const issued = this.issueDeviceToken();
+      issuedToken = issued.token;
+      this.db.prepare('UPDATE "Devices" SET "Token" = ?, "PairedAt" = ?, "LastSeenAt" = ? WHERE "Id" = ?')
+        .run(issued.hash, now, now, deviceId);
+    }
+    this.touchDevice(deviceId, deviceName || '未知设备', plat, null, ip);
+    const userId = this.ensureUserBinding(deviceId, now, deviceName || existing.Name, plat, ip);
     let code: string;
     do {
-      code = randomCode(8);
+      code = randomNumericCode(6);
     } while (this.db.prepare('SELECT 1 FROM "PairingRequests" WHERE "Code" = ?').get(code));
     const expiresAt = new Date(Date.now() + this.cfg.pairingCodeTtlSeconds * 1000).toISOString().replace('T', ' ').replace('Z', '');
     this.db.prepare('INSERT INTO "PairingRequests" ("Code","GeneratorId","UserId","TargetDeviceId","TargetDeviceName","Status","ExpiresAt","CreatedAt","ConfirmedAt") VALUES (?,?,?,NULL,NULL,\'open\',?,?,NULL)')
       .run(code, deviceId, userId, expiresAt, now);
-    this.addAudit('pair_code', '设备 ' + (deviceName || deviceId) + ' 生成配对码(用户 ' + userId + ')', null);
-    return { code, expiresAt: toIso(expiresAt), userId };
+    this.addAudit('pair_code', '设备 ' + (deviceName || deviceId) + ' 生成配对码(用户 ' + userId + ')', ip);
+    return { code, expiresAt: toIso(expiresAt), userId, ...(issuedToken ? { deviceToken: issuedToken } : {}) };
   }
 
-  /** 作废未用配对码(open 状态) */
-  revokePairingRequest(code: string): boolean {
-    const r = this.db.prepare('DELETE FROM "PairingRequests" WHERE "Code" = ? AND "Status" = \'open\'').run(code);
+  /**
+   * 单向即入配对(方案 1 扫码直连 + 方案 2 纯 6 位数字验证码):
+   * 凭有效 6 位码直接准入并关联设备,无需手动输入用户ID,无需原设备点击二次确认。
+   */
+  pairDirect(
+    code: string,
+    deviceId: string,
+    deviceName: string,
+    ip: string | null = null,
+    platform: string | null = null,
+    version: string | null = null,
+  ): { status: string; userId: string; deviceToken: string } {
+    const now = dbNow();
+    const plat = detectPlatform(platform, null, deviceName);
+    const normCode = code.trim().toUpperCase();
+    const r = this.db.prepare('SELECT * FROM "PairingRequests" WHERE "Code" = ?').get(normCode) as unknown as PairingRequestRow | null;
+    if (!r || !['open', 'pending'].includes(r.Status) || r.ExpiresAt < now) {
+      throw new PairError(400, '配对码无效或已过期');
+    }
+    if (r.GeneratorId === deviceId) {
+      throw new PairError(400, '不能与本机自身配对');
+    }
+    const userId = r.UserId;
+    const issued = this.issueDeviceToken();
+    const existing = this.db.prepare('SELECT * FROM "Devices" WHERE "Id" = ?').get(deviceId) as unknown as DeviceRow | null;
+    if (existing?.UserId && existing.UserId !== userId) {
+      throw new PairError(409, '设备已绑定其他用户组,不能重复配对');
+    }
+    // 将配对请求置为 approved 并关联目标设备
+    this.db.prepare('UPDATE "PairingRequests" SET "TargetDeviceId" = ?, "TargetDeviceName" = ?, "TargetTokenHash" = ?, "Status" = \'approved\', "ConfirmedAt" = ? WHERE "Code" = ?')
+      .run(deviceId, deviceName || existing?.Name || '未知设备', issued.hash, now, normCode);
+
+    if (existing) {
+      this.db.prepare('UPDATE "Devices" SET "UserId" = ?, "Platform" = ?, "Token" = ?, "PairedAt" = ?, "RevokedAt" = NULL, "LastSeenAt" = ?, "Version" = COALESCE(?, "Version"), "Ip" = COALESCE(?, "Ip") WHERE "Id" = ?')
+        .run(userId, plat, issued.hash, now, now, version, ip, deviceId);
+    } else {
+      this.db.prepare('INSERT INTO "Devices" ("Id","Name","Platform","Ip","Version","LastSeenAt","Token","PairedAt","UserId","RevokedAt") VALUES (?,?,?,?,?,?,?,?,?,NULL)')
+        .run(deviceId, deviceName || '未知设备', plat, ip, version, now, issued.hash, now, userId);
+    }
+    this.addAudit('pair_direct', '设备 ' + (deviceName || deviceId) + ' 通过 6 位数字码/扫码直连加入用户 ' + userId, ip);
+    this.hub.broadcastDevicesChanged();
+    return { status: 'approved', userId, deviceToken: issued.token };
+  }
+
+  /** 作废未完成配对码(open 或 pending 状态) */
+  revokePairingRequest(code: string, actor: PairingRequestActor): boolean {
+    const request = this.db.prepare('SELECT * FROM "PairingRequests" WHERE "Code" = ?').get(code) as unknown as PairingRequestRow | null;
+    if (!request || !['open', 'pending'].includes(request.Status)) return false;
+    const allowed =
+      actor.kind === 'admin' ||
+      (actor.kind === 'user' && actor.userId === request.UserId) ||
+      (actor.kind === 'device' && actor.deviceId === request.GeneratorId);
+    if (!allowed) throw new PairError(403, '无权作废该配对码');
+    const r = this.db.prepare('DELETE FROM "PairingRequests" WHERE "Code" = ? AND ("Status" = \'open\' OR "Status" = \'pending\')').run(code);
     return r.changes > 0;
   }
 
   /** 发起配对:校验 配对码 + 用户ID 匹配 → 挂起待确认请求 */
-  pair(pairingCode: string, userId: string, deviceId: string, deviceName: string): { status: string } {
+  pair(pairingCode: string, userId: string, deviceId: string, deviceName: string, ip: string | null = null, platform: string | null = null): { status: string; deviceToken: string } {
     const now = dbNow();
+    const plat = detectPlatform(platform, null, deviceName);
     const r = this.db.prepare('SELECT * FROM "PairingRequests" WHERE "Code" = ?').get(pairingCode) as unknown as PairingRequestRow | null;
-    if (!r || r.Status !== 'open' || r.ExpiresAt < now) {
+    if (!r || !['open', 'pending'].includes(r.Status) || r.ExpiresAt < now) {
       throw new PairError(400, '配对码无效或已过期');
     }
     if (r.UserId !== userId) {
       throw new PairError(400, '用户ID与配对码不匹配');
     }
-    const existing = this.db.prepare('SELECT * FROM "Devices" WHERE "Id" = ?').get(deviceId) as unknown as DeviceRow | null;
-    if (existing?.UserId) {
-      throw new PairError(409, '该设备已绑定用户');
+    if (r.GeneratorId === deviceId) {
+      throw new PairError(400, '不能与本机自身配对');
     }
-    this.db.prepare('UPDATE "PairingRequests" SET "TargetDeviceId" = ?, "TargetDeviceName" = ?, "Status" = \'pending\' WHERE "Code" = ?')
-      .run(deviceId, deviceName || '未知设备', pairingCode);
-    this.touchDevice(deviceId, deviceName || '未知设备', 'Unknown', null, null);
-    this.addAudit('pair_request', '设备 ' + (deviceName || deviceId) + ' 请求配对(用户 ' + userId + ')', null);
+    if (r.Status === 'pending') {
+      throw new PairError(409, r.TargetDeviceId === deviceId
+        ? '该设备已提交配对请求,请等待生成方确认'
+        : '该配对码已有设备等待确认');
+    }
+    const issued = this.issueDeviceToken();
+    const existing = this.db.prepare('SELECT * FROM "Devices" WHERE "Id" = ?').get(deviceId) as unknown as DeviceRow | null;
+    if (existing?.UserId && existing.UserId !== userId) {
+      throw new PairError(409, '设备已绑定其他用户组,不能重复配对');
+    }
+    if (existing?.UserId === userId) {
+      this.db.prepare('UPDATE "Devices" SET "Token" = ?, "Platform" = ?, "PairedAt" = ?, "RevokedAt" = NULL, "LastSeenAt" = ? WHERE "Id" = ?')
+        .run(issued.hash, plat, now, now, deviceId);
+      this.db.prepare('UPDATE "PairingRequests" SET "TargetDeviceId" = ?, "TargetDeviceName" = ?, "TargetTokenHash" = ?, "Status" = \'approved\', "ConfirmedAt" = ? WHERE "Code" = ?')
+        .run(deviceId, deviceName || existing.Name, issued.hash, now, pairingCode);
+      return { status: 'approved', deviceToken: issued.token };
+    }
+    this.db.prepare('UPDATE "PairingRequests" SET "TargetDeviceId" = ?, "TargetDeviceName" = ?, "TargetTokenHash" = ?, "Status" = \'pending\' WHERE "Code" = ?')
+      .run(deviceId, deviceName || '未知设备', issued.hash, pairingCode);
+    if (existing) this.touchDevice(deviceId, deviceName || existing.Name, plat, null, ip);
+    this.addAudit('pair_request', '设备 ' + (deviceName || deviceId) + ' 请求配对(用户 ' + userId + ')', ip);
     this.hub.broadcastDevicesChanged();
-    return { status: 'pending' };
+    return { status: 'pending', deviceToken: issued.token };
   }
 
   /** 新设备轮询配对结果 */
@@ -333,11 +561,21 @@ export class SyncService {
       (actor.kind === 'secret' && actor.generatorId === r.GeneratorId);
     if (!ok) throw new PairError(403, '无权确认该配对请求');
     if (action === 'approve') {
+      if (!r.TargetDeviceId || !r.TargetTokenHash) throw new PairError(400, '配对目标设备或凭证不存在');
+      const existing = this.db.prepare('SELECT * FROM "Devices" WHERE "Id" = ?').get(r.TargetDeviceId) as unknown as DeviceRow | null;
+      if (existing?.UserId && existing.UserId !== r.UserId) throw new PairError(409, '配对目标设备已绑定其他用户组');
       this.db.prepare('UPDATE "PairingRequests" SET "Status" = \'approved\', "ConfirmedAt" = ? WHERE "Code" = ?').run(now, pairingCode);
-      if (r.TargetDeviceId) {
-        this.db.prepare('UPDATE "Devices" SET "UserId" = ? WHERE "Id" = ?').run(r.UserId, r.TargetDeviceId);
+      const plat = detectPlatform(existing?.Platform, null, r.TargetDeviceName);
+      if (existing) {
+        this.db.prepare('UPDATE "Devices" SET "UserId" = ?, "Platform" = ?, "Token" = ?, "PairedAt" = ?, "RevokedAt" = NULL, "LastSeenAt" = ? WHERE "Id" = ?')
+          .run(r.UserId, plat, r.TargetTokenHash, now, now, r.TargetDeviceId);
+      } else {
+        this.db.prepare('INSERT INTO "Devices" ("Id","Name","Platform","Ip","Version","LastSeenAt","Token","PairedAt","UserId","RevokedAt") VALUES (?,?,?,NULL,NULL,?,?,?,?,NULL)')
+          .run(r.TargetDeviceId, r.TargetDeviceName || '未知设备', plat, now, r.TargetTokenHash, now, r.UserId);
       }
       this.addAudit('pair_approve', '设备 ' + (r.TargetDeviceName || r.TargetDeviceId) + ' 已加入用户 ' + r.UserId, null);
+      this.hub.broadcastDevicesChanged();
+      return { status: action };
     } else {
       this.db.prepare('UPDATE "PairingRequests" SET "Status" = \'rejected\', "ConfirmedAt" = ? WHERE "Code" = ?').run(now, pairingCode);
       this.addAudit('pair_reject', '拒绝设备 ' + (r.TargetDeviceName || r.TargetDeviceId) + ' 加入用户 ' + r.UserId, null);
@@ -368,12 +606,23 @@ export class SyncService {
   }
 
   /** 配对确认后:换取用户会话载荷(浏览器/应用) */
-  sessionForPair(pairingCode: string, deviceId: string): { role: 'user'; userId: string; deviceId: string } {
+  sessionForPair(pairingCode: string, deviceId: string): { role: 'user'; userId: string; deviceId: string; deviceTokenHash: string } {
     const r = this.db.prepare('SELECT * FROM "PairingRequests" WHERE "Code" = ?').get(pairingCode) as unknown as PairingRequestRow | null;
     if (!r || r.Status !== 'approved' || r.TargetDeviceId !== deviceId) {
       throw new PairError(400, '配对未完成或设备不匹配');
     }
-    return { role: 'user', userId: r.UserId, deviceId };
+    const device = this.getDevice(deviceId);
+    if (!device || device.RevokedAt) {
+      throw new PairError(410, '配对设备已被移除,无法建立会话');
+    }
+    if (!device.UserId || device.UserId !== r.UserId || !device.Token || !r.TargetTokenHash || device.Token !== r.TargetTokenHash) {
+      throw new PairError(409, '配对设备状态已变化,请重新配对');
+    }
+    const issued = this.db.prepare('UPDATE "PairingRequests" SET "SessionIssuedAt" = ? WHERE "Code" = ? AND "SessionIssuedAt" IS NULL').run(dbNow(), pairingCode);
+    if (issued.changes === 0) {
+      throw new PairError(409, '该配对请求已兑换过会话');
+    }
+    return { role: 'user', userId: r.UserId, deviceId, deviceTokenHash: device.Token };
   }
 
   /** 用户ID改名(全局唯一) */
@@ -398,7 +647,7 @@ export class SyncService {
   deleteUser(userId: string): void {
     const r = this.db.prepare('DELETE FROM "Users" WHERE "Id" = ?').run(userId);
     if (r.changes === 0) throw new PairError(404, '用户不存在');
-    this.db.prepare('UPDATE "Devices" SET "UserId" = NULL WHERE "UserId" = ?').run(userId);
+    this.db.prepare('UPDATE "Devices" SET "UserId" = NULL, "Token" = NULL, "PairedAt" = NULL, "RevokedAt" = ? WHERE "UserId" = ?').run(dbNow(), userId);
   }
 
   /** 用户ID查询(管理端/本组) */
@@ -442,8 +691,11 @@ export class SyncService {
   removeDevice(id: string): boolean {
     const d = this.db.prepare('SELECT * FROM "Devices" WHERE "Id" = ?').get(id) as unknown as DeviceRow | null;
     if (!d) return false;
-    this.db.prepare('DELETE FROM "Devices" WHERE "Id" = ?').run(id);
+    const now = dbNow();
+    this.db.prepare('UPDATE "Devices" SET "Token" = NULL, "UserId" = NULL, "PairedAt" = NULL, "RevokedAt" = ? WHERE "Id" = ?').run(now, id);
+    this.db.prepare('UPDATE "PairingRequests" SET "Status" = \'rejected\', "ConfirmedAt" = ? WHERE ("GeneratorId" = ? OR "TargetDeviceId" = ?) AND "Status" IN (\'open\',\'pending\')').run(now, id, id);
     this.addActivity('delete', d.Name, '移除了设备', dbNow(), id);
+    this.hub.disconnectDevice(id);
     this.hub.broadcastDevicesChanged();
     return true;
   }

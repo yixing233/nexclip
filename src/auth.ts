@@ -9,6 +9,18 @@ export function extractToken(req: IncomingMessage): string {
   return u.searchParams.get('access_token') ?? '';
 }
 
+/** 设备 REST 凭证:设备 ID 与令牌分开传输,避免与网页会话 Bearer 混淆。 */
+export function extractDeviceId(req: IncomingMessage): string {
+  const value = req.headers['x-device-id'];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+export function extractDeviceToken(req: IncomingMessage): string {
+  const value = req.headers['x-device-token'];
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  return '';
+}
+
 /** 路由鉴权类别:
  *  open  = 免认证(设备同步、配对流程、hub、登录/登出、健康检查)
  *  user  = 需会话(用户网页或管理台)
@@ -24,13 +36,11 @@ export function routeClass(method: string, p: string): 'open' | 'user' | 'admin'
     (p === '/api/clipboard/history' && method === 'DELETE') ||
     (/^\/api\/users\/[^/]+$/.test(p) && method === 'DELETE')
   ) return 'admin';
-  // 用户/管理会话皆可(控制器内再按归属校验:自己的用户ID/组内设备/组内条目)
+  // 用户/管理会话专属(控制器内再按归属校验:自己的用户ID/组内条目)
   if (
     p === '/api/me' ||
     p === '/api/activities' ||
     /^\/api\/users\//.test(p) ||
-    (/^\/api\/devices\//.test(p) && (method === 'PUT' || method === 'DELETE')) ||
-    (p === '/api/pairing-requests' && method === 'GET') ||
     (/^\/api\/clipboard\/\d+$/.test(p) && method === 'DELETE')
   ) return 'user';
   return 'open';

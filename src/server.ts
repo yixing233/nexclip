@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { loadConfig } from './config.js';
 import { openDb } from './db.js';
 import { LatencyTracker } from './latency.js';
-import { routeClass, checkSession } from './auth.js';
+import { routeClass, checkSession, extractToken, extractDeviceId, extractDeviceToken } from './auth.js';
 import { SessionStore } from './sessions.js';
 import { RateLimiter } from './rate.js';
 import { SignalRHub } from './signalr.js';
@@ -19,7 +19,7 @@ const rate = new RateLimiter();
 const svc = new SyncService(db, cfg, hub);
 const latency = new LatencyTracker();
 
-hub.onConnected = (deviceId, deviceName, platform, version) => svc.registerHubDevice(deviceId, deviceName, platform, version);
+hub.onConnected = (deviceId, deviceName, platform, version, ip) => svc.registerHubDevice(deviceId, deviceName, platform, version, ip);
 
 // 心跳:45s 刷新在线设备 LastSeenAt(与 .NET HubHeartbeatService 一致)
 const heartbeatTimer = setInterval(() => {
@@ -34,7 +34,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 
   // CORS(与 .NET 一致:放开)
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept');
+  res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept, X-Device-Id, X-Device-Token');
   res.setHeader('Access-Control-Allow-Methods', 'GET, PUT, POST, DELETE, OPTIONS');
   if (req.method === 'OPTIONS') {
     res.statusCode = 204;
@@ -44,28 +44,52 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 
   // 鉴权:角色矩阵(open 免认证;user 需任意会话;admin 需管理台会话)
   const cls = routeClass(req.method ?? 'GET', p);
-  let actor: ReturnType<typeof checkSession> = null;
+  let actor: ReturnType<typeof checkSession> = checkSession(req, sessions);
+  let invalidDeviceSession = false;
+  if (actor?.role === 'user') {
+    const device = actor.deviceId ? svc.getDevice(actor.deviceId) : null;
+    const validDeviceSession = !!device &&
+      !device.RevokedAt &&
+      !!device.UserId &&
+      device.UserId === actor.userId &&
+      !!device.Token &&
+      device.Token === actor.deviceTokenHash;
+    if (!validDeviceSession) {
+      invalidDeviceSession = true;
+      const sessionToken = extractToken(req);
+      if (sessionToken) sessions.revoke(sessionToken);
+      actor = null;
+    }
+  }
   if (cls !== 'open') {
-    actor = checkSession(req, sessions);
     if (!actor || (cls === 'admin' && actor.role !== 'admin')) {
-      res.statusCode = 401;
+      res.statusCode = invalidDeviceSession ? 410 : 401;
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
-      res.end(JSON.stringify({ error: 'unauthorized' }));
+      res.end(JSON.stringify({ error: invalidDeviceSession
+        ? '网页会话关联的设备已被移除或重新配对,请重新登录'
+        : 'unauthorized' }));
       return;
     }
   }
 
   // negotiate(必须走统一鉴权:query access_token 也接受)
   if (p === '/hubs/clipboard/negotiate') {
-    // 用户网页会话:标记为"剪贴板静默"(全站推送对其是噪音),设备/管理台连接不受影响
-    const sessionActor = checkSession(req, sessions);
-    const r = hub.negotiate(url, { mutedClipboard: sessionActor?.role === 'user' });
+    const hubDeviceId = url.searchParams.get('deviceId') ?? '';
+    const hubDeviceToken = url.searchParams.get('deviceToken') ?? '';
+    const hubDevice = hubDeviceId && hubDeviceToken ? svc.authenticateDevice(hubDeviceId, hubDeviceToken) : null;
+    if (!actor && !hubDevice) {
+      sendJson(res, 401, { error: hubDeviceId ? '设备凭证无效或已失效,请重新配对' : 'unauthorized' });
+      return;
+    }
+    // 网页会话与设备连接均接收实时剪贴板推送与设备变更
+    const boundDeviceId = hubDevice?.Id ?? actor?.deviceId ?? null;
+    const r = hub.negotiate(url, { mutedClipboard: false, deviceId: boundDeviceId });
     sendJson(res, r.status, r.body);
     return;
   }
 
   // API / 旧协议
-  const ctx: Ctx = { cfg, svc, sessions, rate, latency: latency as unknown as Ctx['latency'], url, req, res, actor };
+  const ctx: Ctx = { cfg, svc, sessions, rate, latency: latency as unknown as Ctx['latency'], url, req, res, actor, invalidDeviceSession };
   const handled = await handleApi(ctx).catch((e) => {
     if (e.message === 'body-too-large') {
       res.statusCode = 413;
@@ -95,12 +119,29 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   }
 });
 
-hub.attach(server);
+hub.attach(server, (url, req) => {
+  const deviceId = url.searchParams.get('deviceId') || extractDeviceId(req);
+  const deviceToken = url.searchParams.get('deviceToken') || extractDeviceToken(req);
+  if (deviceId && deviceToken && svc.authenticateDevice(deviceId, deviceToken)) {
+    return { deviceId, mutedClipboard: false };
+  }
+  const sessionToken = extractToken(req);
+  const session = sessionToken ? sessions.validate(sessionToken) : null;
+  if (session?.role === 'user') {
+    const device = session.deviceId ? svc.getDevice(session.deviceId) : null;
+    if (!device || device.RevokedAt || device.UserId !== session.userId || !device.Token || device.Token !== session.deviceTokenHash) {
+      if (sessionToken) sessions.revoke(sessionToken);
+      return null;
+    }
+  }
+  if (session) return { deviceId: session.deviceId ?? null, mutedClipboard: session.role === 'user' };
+  return null;
+});
 
 server.listen(cfg.port, () => {
-  console.log('[SyncClipboard Node Server] 端口 ' + cfg.port + ', 鉴权: 管理台账密 + 设备令牌(配对)');
-  console.log('[SyncClipboard Node Server] 数据库: ' + cfg.databasePath);
-  console.log('[SyncClipboard Node Server] 静态托管: ' + (cfg.webDist && existsSync(cfg.webDist) ? cfg.webDist : '(未找到 web/dist)'));
+  console.log('[NexClip Node Server] 端口 ' + cfg.port + ', 鉴权: 管理台账密 + 设备令牌(配对)');
+  console.log('[NexClip Node Server] 数据库: ' + cfg.databasePath);
+  console.log('[NexClip Node Server] 静态托管: ' + (cfg.webDist && existsSync(cfg.webDist) ? cfg.webDist : '(未找到 web/dist)'));
 });
 
 // 优雅退出
