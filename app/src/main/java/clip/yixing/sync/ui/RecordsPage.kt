@@ -78,6 +78,7 @@ import clip.yixing.sync.formatTime
 import clip.yixing.sync.service.CapturedClip
 import clip.yixing.sync.service.ClipboardMonitorService
 import clip.yixing.sync.showAppSnack
+import clip.yixing.sync.util.ImageLoader
 import clip.yixing.sync.util.SyncSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -172,6 +173,7 @@ internal fun RecordsPage(
 
     // 详情/编辑弹层状态
     var activeDetailClip by remember { mutableStateOf<CapturedClip?>(null) }
+    var previewImageClip by remember { mutableStateOf<CapturedClip?>(null) }
     var isEditingInSheet by remember { mutableStateOf(false) }
     val editFieldState = remember { TextFieldState("") }
 
@@ -215,8 +217,8 @@ internal fun RecordsPage(
         }
     }
 
-    LaunchedEffect(activeDetailClip, isMultiSelectMode, showClearDialog, showDatePickerDialog) {
-        onOverlayActiveChanged(activeDetailClip != null || isMultiSelectMode || showClearDialog || showDatePickerDialog)
+    LaunchedEffect(activeDetailClip, previewImageClip, isMultiSelectMode, showClearDialog, showDatePickerDialog) {
+        onOverlayActiveChanged(activeDetailClip != null || previewImageClip != null || isMultiSelectMode || showClearDialog || showDatePickerDialog)
     }
 
     // 统计日期时间基准
@@ -514,14 +516,29 @@ internal fun RecordsPage(
                             onToggleFavorite = {
                                 ClipboardMonitorService.toggleFavorite(context, clip)
                             },
+                            onPreviewImage = {
+                                previewImageClip = clip
+                            },
                             onCopy = {
-                                copyToClipboard(context, clip.text)
                                 scope.launch {
-                                    snackbarHostState.showAppSnack("已复制", SnackType.Success)
+                                    if (clip.isImage) {
+                                        val ok = ImageLoader.copyImageToClipboard(context, clip.imageRef, clip.text)
+                                        snackbarHostState.showAppSnack(if (ok) "已复制图片到剪贴板" else "复制失败", if (ok) SnackType.Success else SnackType.Error)
+                                    } else {
+                                        copyToClipboard(context, clip.text)
+                                        snackbarHostState.showAppSnack("已复制文本", SnackType.Success)
+                                    }
                                 }
                             },
                             onShare = {
-                                shareText(context, clip.text)
+                                scope.launch {
+                                    if (clip.isImage) {
+                                        val ok = ImageLoader.shareImage(context, clip.imageRef, clip.text)
+                                        if (!ok) snackbarHostState.showAppSnack("分享失败", SnackType.Error)
+                                    } else {
+                                        shareText(context, clip.text)
+                                    }
+                                }
                             },
                             onDelete = {
                                 val index = captured.indexOf(clip)
@@ -959,20 +976,59 @@ internal fun RecordsPage(
                         }
                     }
                 } else {
-                    // 查看模式: 完整文本区域 (支持超出范围垂直滑动)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 60.dp, max = 380.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(MiuixTheme.colorScheme.surfaceContainer)
-                            .verticalScroll(rememberScrollState())
-                            .padding(12.dp)
-                    ) {
-                        Text(
-                            text = clip.text,
-                            style = MiuixTheme.textStyles.body1
+                    // 查看模式: 图片或完整文本区域
+                    if (clip.isImage) {
+                        ClipImageThumbnail(
+                            imageRef = clip.imageRef,
+                            rawText = clip.text,
+                            maxHeight = 280.dp,
+                            onClick = { previewImageClip = clip }
                         )
+                        Spacer(Modifier.height(10.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = { previewImageClip = clip },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("查看大图")
+                            }
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        val ok = ImageLoader.saveToGallery(context, clip.imageRef, clip.text)
+                                        snackbarHostState.showAppSnack(
+                                            if (ok) "已保存到相册" else "保存失败",
+                                            if (ok) SnackType.Success else SnackType.Error
+                                        )
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                                    contentColor = MiuixTheme.colorScheme.primary
+                                ),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("保存相册")
+                            }
+                        }
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 60.dp, max = 380.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MiuixTheme.colorScheme.surfaceContainer)
+                                .verticalScroll(rememberScrollState())
+                                .padding(12.dp)
+                        ) {
+                            Text(
+                                text = clip.text,
+                                style = MiuixTheme.textStyles.body1
+                            )
+                        }
                     }
 
                     // 智能动作按钮组 (识别到链接/电话/邮箱)
@@ -1010,6 +1066,14 @@ internal fun RecordsPage(
             }
         }
     }
+
+    // 全屏沉浸式大图预览
+    FullscreenImagePreviewDialog(
+        show = previewImageClip != null,
+        imageRef = previewImageClip?.imageRef,
+        rawText = previewImageClip?.text,
+        onDismissRequest = { previewImageClip = null }
+    )
 }
 
 /** 单条记录卡片组件 */
@@ -1023,6 +1087,7 @@ private fun RecordCard(
     onCardClick: () -> Unit,
     onLongClick: () -> Unit,
     onToggleFavorite: () -> Unit,
+    onPreviewImage: () -> Unit,
     onCopy: () -> Unit,
     onShare: () -> Unit,
     onDelete: () -> Unit
@@ -1095,12 +1160,20 @@ private fun RecordCard(
         }
 
         Spacer(Modifier.height(6.dp))
-        Text(
-            text = clip.text,
-            maxLines = 4,
-            overflow = TextOverflow.Ellipsis,
-            style = MiuixTheme.textStyles.body1
-        )
+        if (clip.isImage) {
+            ClipImageThumbnail(
+                imageRef = clip.imageRef,
+                rawText = clip.text,
+                onClick = onPreviewImage
+            )
+        } else {
+            Text(
+                text = clip.text,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+                style = MiuixTheme.textStyles.body1
+            )
+        }
 
         // 智能动作识别胶囊
         if (smartActions.urls.isNotEmpty() || smartActions.phones.isNotEmpty()) {
@@ -1381,6 +1454,7 @@ internal fun SearchPage(
 
     val searchState = remember { TextFieldState(query) }
     val focusRequester = remember { FocusRequester() }
+    var searchPreviewImageClip by remember { mutableStateOf<CapturedClip?>(null) }
     LaunchedEffect(searchState.text) {
         onQueryChange(searchState.text.toString())
     }
@@ -1553,23 +1627,42 @@ internal fun SearchPage(
                                     isSelected = false,
                                     onToggleSelect = {},
                                     onCardClick = {
-                                        copyToClipboard(context, clip.text)
-                                        scope.launch {
-                                            snackbarHostState.showAppSnack("已复制", SnackType.Success)
+                                        if (clip.isImage) {
+                                            searchPreviewImageClip = clip
+                                        } else {
+                                            copyToClipboard(context, clip.text)
+                                            scope.launch {
+                                                snackbarHostState.showAppSnack("已复制", SnackType.Success)
+                                            }
                                         }
                                     },
                                     onLongClick = {},
                                     onToggleFavorite = {
                                         ClipboardMonitorService.toggleFavorite(context, clip)
                                     },
+                                    onPreviewImage = {
+                                        searchPreviewImageClip = clip
+                                    },
                                     onCopy = {
-                                        copyToClipboard(context, clip.text)
                                         scope.launch {
-                                            snackbarHostState.showAppSnack("已复制", SnackType.Success)
+                                            if (clip.isImage) {
+                                                val ok = ImageLoader.copyImageToClipboard(context, clip.imageRef, clip.text)
+                                                snackbarHostState.showAppSnack(if (ok) "已复制图片" else "复制失败", if (ok) SnackType.Success else SnackType.Error)
+                                            } else {
+                                                copyToClipboard(context, clip.text)
+                                                snackbarHostState.showAppSnack("已复制", SnackType.Success)
+                                            }
                                         }
                                     },
                                     onShare = {
-                                        shareText(context, clip.text)
+                                        scope.launch {
+                                            if (clip.isImage) {
+                                                val ok = ImageLoader.shareImage(context, clip.imageRef, clip.text)
+                                                if (!ok) snackbarHostState.showAppSnack("分享失败", SnackType.Error)
+                                            } else {
+                                                shareText(context, clip.text)
+                                            }
+                                        }
                                     },
                                     onDelete = {
                                         val index = captured.indexOf(clip)
@@ -1593,6 +1686,14 @@ internal fun SearchPage(
                 }
             }
         }
+
+        // 搜索模式下的大图全屏预览
+        FullscreenImagePreviewDialog(
+            show = searchPreviewImageClip != null,
+            imageRef = searchPreviewImageClip?.imageRef,
+            rawText = searchPreviewImageClip?.text,
+            onDismissRequest = { searchPreviewImageClip = null }
+        )
     }
 }
 

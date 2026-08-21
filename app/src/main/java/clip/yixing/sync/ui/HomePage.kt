@@ -56,9 +56,11 @@ import clip.yixing.sync.StatusRow
 import clip.yixing.sync.data.SyncApi
 import clip.yixing.sync.formatTime
 import clip.yixing.sync.hook.ModuleStatusStore
+import clip.yixing.sync.service.CapturedClip
 import clip.yixing.sync.service.ClipboardMonitorService
 import clip.yixing.sync.showAppSnack
 import clip.yixing.sync.util.ClipboardTest
+import clip.yixing.sync.util.ImageLoader
 import clip.yixing.sync.util.SyncSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -98,10 +100,12 @@ internal fun HomePage(
     val serverConnectionState by ClipboardMonitorService.serverConnectionState.collectAsState()
     val captured by ClipboardMonitorService.captured.collectAsState()
 
+    val currentClip = captured.firstOrNull()
     val currentText = remember(captured) {
-        captured.firstOrNull()?.text ?: ClipboardTest.readClipboard(context) ?: ""
+        currentClip?.text ?: ClipboardTest.readClipboard(context) ?: ""
     }
 
+    var previewImageClip by remember { mutableStateOf<CapturedClip?>(null) }
     var isManualPushing by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -176,12 +180,17 @@ internal fun HomePage(
             SectionBlock(
                 title = "当前剪贴板",
                 trailing = {
-                    if (currentText.isNotBlank()) {
+                    if (currentClip?.isImage == true || currentText.isNotBlank()) {
                         IconButton(
                             onClick = {
-                                copyToClipboard(context, currentText)
                                 scope.launch {
-                                    snackbarHostState?.showAppSnack("已复制到剪贴板", SnackType.Success)
+                                    if (currentClip?.isImage == true) {
+                                        val ok = ImageLoader.copyImageToClipboard(context, currentClip.imageRef, currentClip.text)
+                                        snackbarHostState?.showAppSnack(if (ok) "已复制图片到剪贴板" else "复制失败", if (ok) SnackType.Success else SnackType.Error)
+                                    } else {
+                                        copyToClipboard(context, currentText)
+                                        snackbarHostState?.showAppSnack("已复制到剪贴板", SnackType.Success)
+                                    }
                                 }
                             }
                         ) {
@@ -208,20 +217,29 @@ internal fun HomePage(
                     }
                 },
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MiuixTheme.colorScheme.surfaceContainer.copy(alpha = 0.5f))
-                        .padding(10.dp)
-                ) {
-                    Text(
-                        text = if (currentText.isNotBlank()) currentText else "(剪贴板为空)",
-                        color = if (currentText.isNotBlank()) MiuixTheme.colorScheme.onSurface
-                        else MiuixTheme.colorScheme.onBackgroundVariant,
-                        maxLines = 5,
-                        overflow = TextOverflow.Ellipsis
+                if (currentClip?.isImage == true) {
+                    ClipImageThumbnail(
+                        imageRef = currentClip.imageRef,
+                        rawText = currentClip.text,
+                        maxHeight = 180.dp,
+                        onClick = { previewImageClip = currentClip }
                     )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MiuixTheme.colorScheme.surfaceContainer.copy(alpha = 0.5f))
+                            .padding(10.dp)
+                    ) {
+                        Text(
+                            text = if (currentText.isNotBlank()) currentText else "(剪贴板为空)",
+                            color = if (currentText.isNotBlank()) MiuixTheme.colorScheme.onSurface
+                            else MiuixTheme.colorScheme.onBackgroundVariant,
+                            maxLines = 5,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
                 Spacer(Modifier.height(10.dp))
                 Row(
@@ -230,7 +248,7 @@ internal fun HomePage(
                 ) {
                     Button(
                         onClick = {
-                            if (currentText.isBlank()) {
+                            if (currentClip?.isImage != true && currentText.isBlank()) {
                                 scope.launch {
                                     snackbarHostState?.showAppSnack("当前剪贴板为空，无法推送", SnackType.Info)
                                 }
@@ -248,11 +266,20 @@ internal fun HomePage(
                                 try {
                                     val api = SyncApi(url, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
                                     withContext(Dispatchers.IO) {
-                                        api.putText(
-                                            text = currentText,
-                                            deviceId = SyncSettings.ensureDeviceId(context),
-                                            deviceName = SyncSettings.deviceName(context)
-                                        )
+                                        if (currentClip?.isImage == true) {
+                                            val bytes = ImageLoader.getImageBytes(context, currentClip.imageRef, currentClip.text)
+                                            if (bytes != null) {
+                                                api.uploadImage(bytes, SyncSettings.ensureDeviceId(context), SyncSettings.deviceName(context))
+                                            } else {
+                                                throw Exception("图片数据无法读取")
+                                            }
+                                        } else {
+                                            api.putText(
+                                                text = currentText,
+                                                deviceId = SyncSettings.ensureDeviceId(context),
+                                                deviceName = SyncSettings.deviceName(context)
+                                            )
+                                        }
                                     }
                                     snackbarHostState?.showAppSnack("已推送至所有设备", SnackType.Success)
                                 } catch (e: Exception) {
@@ -262,7 +289,7 @@ internal fun HomePage(
                                 }
                             }
                         },
-                        enabled = !isManualPushing && currentText.isNotBlank(),
+                        enabled = !isManualPushing && (currentClip?.isImage == true || currentText.isNotBlank()),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(imageVector = MiuixIcons.Normal.UploadCloud, contentDescription = "立即推送")
@@ -277,12 +304,18 @@ internal fun HomePage(
         item {
             RecentRecordsCard(
                 records = captured.take(3),
-                onCopy = { text ->
-                    copyToClipboard(context, text)
+                onCopy = { clip ->
                     scope.launch {
-                        snackbarHostState?.showAppSnack("已复制该条记录", SnackType.Success)
+                        if (clip.isImage) {
+                            val ok = ImageLoader.copyImageToClipboard(context, clip.imageRef, clip.text)
+                            snackbarHostState?.showAppSnack(if (ok) "已复制图片" else "复制失败", if (ok) SnackType.Success else SnackType.Error)
+                        } else {
+                            copyToClipboard(context, clip.text)
+                            snackbarHostState?.showAppSnack("已复制该条记录", SnackType.Success)
+                        }
                     }
                 },
+                onPreviewImage = { clip -> previewImageClip = clip },
                 onViewAll = onNavigateToRecords
             )
         }
@@ -291,6 +324,14 @@ internal fun HomePage(
             Spacer(Modifier.height(bottomInnerPadding))
         }
     }
+
+    // 全屏沉浸式图片预览
+    FullscreenImagePreviewDialog(
+        show = previewImageClip != null,
+        imageRef = previewImageClip?.imageRef,
+        rawText = previewImageClip?.text,
+        onDismissRequest = { previewImageClip = null }
+    )
 }
 
 /** 同步状态与设备概览看板 */
@@ -388,7 +429,8 @@ private fun SyncOverviewCard(
 @Composable
 private fun RecentRecordsCard(
     records: List<clip.yixing.sync.service.CapturedClip>,
-    onCopy: (String) -> Unit,
+    onCopy: (clip.yixing.sync.service.CapturedClip) -> Unit,
+    onPreviewImage: (clip.yixing.sync.service.CapturedClip) -> Unit,
     onViewAll: () -> Unit
 ) {
     SectionBlock(
@@ -430,13 +472,32 @@ private fun RecentRecordsCard(
                     Column(
                         modifier = Modifier
                             .weight(1f)
-                            .clickable { onCopy(clip.text) }
+                            .clickable {
+                                if (clip.isImage) onPreviewImage(clip) else onCopy(clip)
+                            }
                     ) {
-                        Text(
-                            text = clip.text,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        if (clip.isImage) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "[图片]",
+                                    color = MiuixTheme.colorScheme.primary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = "点击预览",
+                                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = clip.text,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                         Spacer(Modifier.height(2.dp))
                         Text(
                             text = formatTime(clip.time),
@@ -444,7 +505,7 @@ private fun RecentRecordsCard(
                             fontSize = 11.sp
                         )
                     }
-                    IconButton(onClick = { onCopy(clip.text) }) {
+                    IconButton(onClick = { onCopy(clip) }) {
                         Icon(
                             imageVector = MiuixIcons.Normal.Copy,
                             contentDescription = "复制",
