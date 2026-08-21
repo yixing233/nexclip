@@ -69,6 +69,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import clip.yixing.sync.SnackType
 import clip.yixing.sync.StatusRow
+import clip.yixing.sync.data.ApiException
 import clip.yixing.sync.data.DeviceInfo
 import clip.yixing.sync.showAppSnack
 import clip.yixing.sync.data.PairingCode
@@ -197,7 +198,8 @@ internal fun SettingsPage(
     // ① 设备列表基础加载
     LaunchedEffect(devicesReload) {
         val serverUrl = SyncSettings.serverUrl(context)
-        if (serverUrl.isBlank()) {
+        if (serverUrl.isBlank() || !SyncSettings.isPaired(context) || SyncSettings.deviceToken(context).isBlank()) {
+            devices = emptyList()
             devicesLoading = false
             return@LaunchedEffect
         }
@@ -208,6 +210,13 @@ internal fun SettingsPage(
             devices = withContext(Dispatchers.IO) { api.getDevices() }
         } catch (e: Exception) {
             devicesError = e.message ?: "加载失败"
+            if (e is ApiException && (e.statusCode == 401 || e.statusCode == 403 || e.statusCode == 410)) {
+                SyncSettings.clearPairing(context)
+                devices = emptyList()
+                if (ClipboardMonitorService.isRunning.value) {
+                    ClipboardMonitorService.stop(context)
+                }
+            }
             if (devicesManual || devices.isEmpty()) {
                 snackbarHostState.showAppSnack(devicesError ?: "设备列表加载失败", SnackType.Error)
             }
@@ -229,12 +238,17 @@ internal fun SettingsPage(
                 if (!codeActive && !postActive) break
 
                 val serverUrl = SyncSettings.serverUrl(context)
-                if (serverUrl.isNotBlank()) {
+                if (serverUrl.isNotBlank() && SyncSettings.isPaired(context) && SyncSettings.deviceToken(context).isNotBlank()) {
                     try {
                         val api = SyncApi(serverUrl, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
                         val list = withContext(Dispatchers.IO) { api.getDevices() }
                         devices = list
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        if (e is ApiException && (e.statusCode == 401 || e.statusCode == 403 || e.statusCode == 410)) {
+                            SyncSettings.clearPairing(context)
+                            devices = emptyList()
+                            break
+                        }
                     }
                 }
             }
@@ -251,12 +265,17 @@ internal fun SettingsPage(
                 if (codeActive || postActive) continue
 
                 val serverUrl = SyncSettings.serverUrl(context)
-                if (serverUrl.isNotBlank()) {
+                if (serverUrl.isNotBlank() && SyncSettings.isPaired(context) && SyncSettings.deviceToken(context).isNotBlank()) {
                     try {
                         val api = SyncApi(serverUrl, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
                         val list = withContext(Dispatchers.IO) { api.getDevices() }
                         devices = list
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        if (e is ApiException && (e.statusCode == 401 || e.statusCode == 403 || e.statusCode == 410)) {
+                            SyncSettings.clearPairing(context)
+                            devices = emptyList()
+                            break
+                        }
                     }
                 }
             }
@@ -756,27 +775,36 @@ internal fun SettingsPage(
                         SectionBlock(
                             title = "设备列表",
                             trailing = {
-                                Text(
-                                    text = if (devicesLoading && devices.isEmpty()) "加载中…"
-                                    else "${devices.count { it.online }} / ${devices.size} 在线",
-                                    fontSize = 13.sp,
-                                    color = MiuixTheme.colorScheme.onBackgroundVariant
-                                )
-                                Spacer(Modifier.width(6.dp))
-                                IconButton(onClick = { devicesManual = true; devicesReload++ }) {
-                                    Icon(
-                                        imageVector = LucideIcons.RefreshCw,
-                                        contentDescription = "刷新",
-                                        tint = MiuixTheme.colorScheme.onBackgroundVariant,
-                                        modifier = Modifier.size(16.dp)
+                                if (SyncSettings.isPaired(context) && SyncSettings.deviceToken(context).isNotBlank()) {
+                                    Text(
+                                        text = if (devicesLoading && devices.isEmpty()) "加载中…"
+                                        else "${devices.count { it.online }} / ${devices.size} 在线",
+                                        fontSize = 13.sp,
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant
                                     )
+                                    Spacer(Modifier.width(6.dp))
+                                    IconButton(onClick = { devicesManual = true; devicesReload++ }) {
+                                        Icon(
+                                            imageVector = LucideIcons.RefreshCw,
+                                            contentDescription = "刷新",
+                                            tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 }
                             },
                         ) {
-                            if (devices.isEmpty() && !devicesLoading && devicesError == null) {
+                            if (!SyncSettings.isPaired(context) || SyncSettings.deviceToken(context).isBlank()) {
                                 Spacer(Modifier.height(8.dp))
                                 Text(
-                                    text = "暂无设备。开启首页「持续监听剪贴板」后,本机将自动登记。",
+                                    text = "当前未加入任何设备组。请点击上方「生成配对码」或「输入配对码」接入。",
+                                    fontSize = 13.sp,
+                                    color = MiuixTheme.colorScheme.onBackgroundVariant
+                                )
+                            } else if (devices.isEmpty() && !devicesLoading && devicesError == null) {
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    text = "设备组中暂无其他设备。",
                                     fontSize = 13.sp,
                                     color = MiuixTheme.colorScheme.onBackgroundVariant
                                 )
