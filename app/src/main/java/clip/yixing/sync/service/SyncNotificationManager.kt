@@ -114,7 +114,7 @@ object SyncNotificationManager {
         val connStatus = if (isServerConnected) "已连接服务器 · 监听中" else "未连接服务器 · 本地监听中"
         return NotificationCompat.Builder(context, CHANNEL_MONITOR)
             .setSmallIcon(R.drawable.ic_notification_nc)
-            .setContentTitle("剪贴板同步已开启")
+            .setContentTitle("NexClip 监听中")
             .setContentText(connStatus)
             .setContentIntent(openAppPi)
             .setOngoing(true)
@@ -133,7 +133,7 @@ object SyncNotificationManager {
         openAppPi: PendingIntent
     ): Notification {
         val preview = latestClip?.text?.replace("\n", " ")?.take(100) ?: "等待剪贴板变化 · 实时同步中"
-        val title = if (latestClip != null) "剪贴板已记录 (${latestClip.text.length} 字符)" else "剪贴板实时同步中"
+        val title = if (latestClip != null) "剪贴板已记录 (${latestClip.text.length} 字符)" else "NexClip 实时同步中"
         val subText = if (isServerConnected) "云端同步在线" else "本地监听中"
 
         val builder = NotificationCompat.Builder(context, CHANNEL_LIVE)
@@ -155,7 +155,7 @@ object SyncNotificationManager {
             putBoolean("android.requestPromotedOngoing", true)
             putBoolean("android.isLiveActivity", true)
             putBoolean("android.ongoingActivity", true)
-            putString("android.substName", "剪贴板同步")
+            putString("android.substName", "NexClip")
             putBoolean("androidx.core.app.extra.COMPAT_TEMPLATE", true)
             putString("android.shortCriticalText", if (latestClip != null) "${latestClip.text.length}字" else "同步中")
         }
@@ -184,7 +184,7 @@ object SyncNotificationManager {
         openAppPi: PendingIntent
     ): Notification {
         val preview = latestClip?.text?.replace("\n", " ")?.take(80) ?: "剪贴板实时监听中"
-        val title = if (latestClip != null) "剪贴板最新记录" else "剪贴板同步"
+        val title = if (latestClip != null) "剪贴板最新记录" else "NexClip"
         val status = if (isServerConnected) "已连接" else "监听中"
 
         val builder = NotificationCompat.Builder(context, CHANNEL_ISLAND)
@@ -207,7 +207,7 @@ object SyncNotificationManager {
 
         // 1. 使用 hyperisland_kit 构建基础 Extras
         try {
-            val island = HyperIslandNotification.Companion.Builder(context, CHANNEL_ISLAND, "剪贴板同步")
+            val island = HyperIslandNotification.Companion.Builder(context, CHANNEL_ISLAND, "NexClip")
             island.setSmallIsland(preview.take(14))
             island.setHintInfo(title, preview.take(50))
             island.setIslandFirstFloat(false)
@@ -226,7 +226,7 @@ object SyncNotificationManager {
 
         // 2. 兜底写入标准 HyperOS 焦点通知 JSON 协议
         val islandJson = buildHyperOsIslandJson(
-            title = "剪贴板同步",
+            title = "NexClip",
             summaryTitle = "剪贴板",
             summaryContent = preview,
             focusSubTitle = if (isServerConnected) "云端已连接 · 实时同步" else "本地监听中",
@@ -250,6 +250,9 @@ object SyncNotificationManager {
         sourceDevice: String?,
         isPush: Boolean
     ) {
+        if (!SyncSettings.notificationEnabled(context)) {
+            return
+        }
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -309,7 +312,7 @@ object SyncNotificationManager {
                     putBoolean("android.requestPromotedOngoing", true)
                     putBoolean("android.isLiveActivity", true)
                     putBoolean("android.ongoingActivity", true)
-                    putString("android.substName", "剪贴板同步")
+                    putString("android.substName", "NexClip")
                     putBoolean("androidx.core.app.extra.COMPAT_TEMPLATE", true)
                     putString("android.shortCriticalText", "${clip.text.length}字")
                 }
@@ -338,7 +341,7 @@ object SyncNotificationManager {
 
                 // 1. 使用 hyperisland_kit 构建
                 try {
-                    val island = HyperIslandNotification.Companion.Builder(context, CHANNEL_ISLAND, "剪贴板同步")
+                    val island = HyperIslandNotification.Companion.Builder(context, CHANNEL_ISLAND, "NexClip")
                     island.setSmallIsland(preview.take(14))
                     island.setHintInfo(title, preview.take(50))
                     island.setIslandFirstFloat(true) // 触发顶部小岛胶囊浮出动画

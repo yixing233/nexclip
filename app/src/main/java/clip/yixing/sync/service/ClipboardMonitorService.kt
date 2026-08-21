@@ -119,12 +119,12 @@ class ClipboardMonitorService : Service() {
             val text = entry.text
             val imgRef = entry.imageRef
             if (!imgRef.isNullOrBlank()) {
-                addCaptured(ctx, "[图片]", imgRef)
+                addCaptured(ctx, "[图片]", imgRef, sourceDevice = entry.deviceName ?: "其他设备")
                 notifyPush(entry.deviceName ?: "其他设备", "[图片]")
             } else if (!text.isNullOrBlank()) {
                 val hash = sha256(text)
                 lastUploadHash = hash
-                addCaptured(ctx, text)
+                addCaptured(ctx, text, null, sourceDevice = entry.deviceName ?: "其他设备")
                 isApplyingRemote = true
                 try {
                     clipboard.setPrimaryClip(ClipData.newPlainText("SyncClipboard", text))
@@ -356,14 +356,13 @@ class ClipboardMonitorService : Service() {
             }
         }
 
-        /** 新增一条记录(最新在前,持久化,防连续重复添加) */
-        fun addCaptured(context: Context, text: String, imageRef: String? = null) {
+        fun addCaptured(context: Context, text: String, imageRef: String? = null, sourceDevice: String? = null) {
             val first = captured.value.firstOrNull()
             if (first != null) {
                 if (!imageRef.isNullOrBlank() && first.imageRef == imageRef) return
                 if (imageRef.isNullOrBlank() && first.imageRef.isNullOrBlank() && first.text == text) return
             }
-            val list = listOf(CapturedClip(text = text, time = System.currentTimeMillis(), imageRef = imageRef)) + captured.value
+            val list = listOf(CapturedClip(text = text, time = System.currentTimeMillis(), imageRef = imageRef, sourceDevice = sourceDevice)) + captured.value
             persist(context, list)
             captured.value = list
         }
@@ -392,6 +391,12 @@ class ClipboardMonitorService : Service() {
             captured.value = list
         }
 
+        fun deleteClip(context: Context, clip: CapturedClip) {
+            val list = captured.value.filterNot { it == clip || it.id == clip.id }
+            persist(context, list)
+            captured.value = list
+        }
+
         fun deleteClips(context: Context, targetClips: Collection<CapturedClip>) {
             val ids = targetClips.map { it.id }.toSet()
             val list = captured.value.filterNot { it.id in ids }
@@ -406,6 +411,8 @@ class ClipboardMonitorService : Service() {
             captured.value = list
         }
 
+        fun clear(context: Context) = clearAll(context, true)
+
         /** 恢复整份记录(撤销清空) */
         fun replaceAll(context: Context, list: List<CapturedClip>) {
             persist(context, list)
@@ -419,30 +426,31 @@ class ClipboardMonitorService : Service() {
                 cm.setPrimaryClip(ClipData.newPlainText("SyncClipboard", clip.text))
             }
             val list = captured.value.toMutableList()
-            if (index in list.indices) list.removeAt(index)
-            list.add(0, clip)
+            val safeIndex = index.coerceIn(0, list.size)
+            list.add(safeIndex, clip)
             persist(context, list)
             captured.value = list
         }
 
         /** 导出为备份 JSON 字符串 */
         fun exportBackup(context: Context): String {
-            val list = captured.value
-            val arr = JSONArray()
-            list.forEach { c ->
-                arr.put(
-                    JSONObject().apply {
-                        put("t", c.text)
-                        put("m", c.time)
-                        put("fav", c.isFavorite)
-                        if (c.imageRef != null) put("img", c.imageRef)
-                    }
-                )
-            }
+            val clips = captured.value
             val root = JSONObject().apply {
                 put("version", 1)
-                put("timestamp", System.currentTimeMillis())
-                put("count", list.size)
+                put("exportedAt", System.currentTimeMillis())
+                put("count", clips.size)
+                val arr = JSONArray()
+                clips.forEach { c ->
+                    arr.put(
+                        JSONObject().apply {
+                            put("t", c.text)
+                            put("m", c.time)
+                            put("fav", c.isFavorite)
+                            if (c.imageRef != null) put("img", c.imageRef)
+                            if (c.sourceDevice != null) put("src", c.sourceDevice)
+                        }
+                    )
+                }
                 put("clips", arr)
             }
             return root.toString(2)
@@ -462,7 +470,8 @@ class ClipboardMonitorService : Service() {
                             text = text,
                             time = o.optLong("m", System.currentTimeMillis()),
                             isFavorite = o.optBoolean("fav", false),
-                            imageRef = if (o.isNull("img")) null else o.optString("img")
+                            imageRef = if (o.isNull("img")) null else o.optString("img"),
+                            sourceDevice = if (o.isNull("src")) null else o.optString("src")
                         )
                     )
                 }
@@ -490,7 +499,8 @@ class ClipboardMonitorService : Service() {
                             text = o.optString("t"),
                             time = o.optLong("m"),
                             isFavorite = o.optBoolean("fav", false),
-                            imageRef = if (o.isNull("img")) null else o.optString("img")
+                            imageRef = if (o.isNull("img")) null else o.optString("img"),
+                            sourceDevice = if (o.isNull("src")) null else o.optString("src")
                         )
                     )
                 }
@@ -513,6 +523,7 @@ class ClipboardMonitorService : Service() {
                         put("m", c.time)
                         put("fav", c.isFavorite)
                         if (c.imageRef != null) put("img", c.imageRef)
+                        if (c.sourceDevice != null) put("src", c.sourceDevice)
                     }
                 )
             }

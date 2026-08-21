@@ -92,6 +92,7 @@ internal fun HomePage(
     onNavigateToRecords: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
     onOpenQrScanner: () -> Unit = {},
+    onOpenManualPush: () -> Unit = {},
     onOverlayActiveChanged: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -292,11 +293,28 @@ internal fun HomePage(
                             }
                         },
                         enabled = !isManualPushing && (currentClip?.isImage == true || currentText.isNotBlank()),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Icon(imageVector = MiuixIcons.Normal.UploadCloud, contentDescription = "立即推送")
+                        Icon(imageVector = LucideIcons.Upload, contentDescription = "立即推送")
                         Spacer(Modifier.width(6.dp))
-                        Text(if (isManualPushing) "推送中…" else "立即推送当前剪贴板")
+                        Text(if (isManualPushing) "推送中…" else "快捷推送")
+                    }
+
+                    Button(
+                        onClick = onOpenManualPush,
+                        colors = ButtonDefaults.buttonColors(
+                            color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                            contentColor = MiuixTheme.colorScheme.primary
+                        ),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = LucideIcons.MessageSquare,
+                            contentDescription = "跨设备互传",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text("跨设备互传")
                     }
                 }
             }

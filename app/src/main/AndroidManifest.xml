@@ -20,6 +20,7 @@
         android:description="@string/module_description"
         android:supportsRtl="true"
         android:theme="@style/Theme.Miuix"
+        android:enableOnBackInvokedCallback="true"
         android:usesCleartextTraffic="true">
         <!-- Xposed / LSPosed 模块元数据 -->
         <meta-data

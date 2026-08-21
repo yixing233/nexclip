@@ -10,17 +10,28 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import androidx.activity.BackEventCompat
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import kotlinx.coroutines.CancellationException
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,6 +58,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -75,6 +87,7 @@ import clip.yixing.sync.showAppSnack
 import clip.yixing.sync.data.PairingCode
 import clip.yixing.sync.data.SyncApi
 import clip.yixing.sync.service.ClipboardMonitorService
+import clip.yixing.sync.ui.LucideIcons
 import clip.yixing.sync.util.NotificationStyle
 import clip.yixing.sync.util.SyncSettings
 import kotlinx.coroutines.isActive
@@ -117,7 +130,8 @@ enum class SettingsSubPage(val title: String, val subtitle: String) {
     Sync("同步设置", "服务器配置、设备配对、在线设备列表"),
     Filter("过滤规则", "内容过滤黑名单、敏感内容保护"),
     Data("数据管理", "备份导出与导入、应用缓存清理"),
-    Permission("权限管理", "通知权限、电池优化白名单、自启动")
+    Permission("权限管理", "通知权限、电池优化白名单、自启动"),
+    About("关于", "版本信息、项目仓库与开源致谢")
 }
 
 @Composable
@@ -135,11 +149,28 @@ internal fun SettingsPage(
 
     // 当前所处二级子页面（null 为一级设置主页）
     var currentSubPage by remember { mutableStateOf<SettingsSubPage?>(null) }
+    var displayedSubPage by remember { mutableStateOf<SettingsSubPage?>(null) }
+    val subPageAnimProgress = remember { Animatable(1f) } // 0f: 完全展开展示, 1f: 退出到屏幕右侧
 
-    // 系统返回手势与按键支持
-    BackHandler(enabled = currentSubPage != null) {
-        currentSubPage = null
+    fun openSubPage(page: SettingsSubPage) {
+        displayedSubPage = page
+        currentSubPage = page
+        scope.launch {
+            subPageAnimProgress.snapTo(1f)
+            subPageAnimProgress.animateTo(0f, animationSpec = tween(280, easing = FastOutSlowInEasing))
+        }
     }
+
+    fun closeSubPage() {
+        scope.launch {
+            subPageAnimProgress.animateTo(1f, animationSpec = tween(240, easing = FastOutSlowInEasing))
+            currentSubPage = null
+            displayedSubPage = null
+        }
+    }
+
+    var predictiveBackEnabled by remember { mutableStateOf(SyncSettings.predictiveBackEnabled(context)) }
+    var notificationEnabled by remember { mutableStateOf(SyncSettings.notificationEnabled(context)) }
 
     // ---- 1. 基础设置与设备状态 ----
     var deviceName by remember { mutableStateOf(SyncSettings.deviceName(context)) }
@@ -171,6 +202,56 @@ internal fun SettingsPage(
     var generatedCode by remember { mutableStateOf<PairingCode?>(null) }
     var showCodeSheet by remember { mutableStateOf(false) }
     var deleteTargetDevice by remember { mutableStateOf<DeviceInfo?>(null) }
+
+    // 是否有任何弹窗、Bottom Sheet 或选择器处于打开状态
+    val isAnyOverlayOpen = showNotificationStyleDialog ||
+        showNameDialog ||
+        showResetIdDialog ||
+        showPairDialog ||
+        showCodeSheet ||
+        deleteTargetDevice != null
+
+    // 1. 弹层开启时优先拦截返回键/手势，仅关闭当前弹窗
+    PredictiveBackHandler(enabled = isAnyOverlayOpen) { progress ->
+        try {
+            progress.collect { }
+        } finally {
+            if (showNotificationStyleDialog) {
+                showNotificationStyleDialog = false
+            } else if (showNameDialog) {
+                showNameDialog = false
+            } else if (showResetIdDialog) {
+                showResetIdDialog = false
+            } else if (showPairDialog) {
+                showPairDialog = false
+            } else if (showCodeSheet) {
+                showCodeSheet = false
+            } else if (deleteTargetDevice != null) {
+                deleteTargetDevice = null
+            }
+        }
+    }
+
+    // 2. 预测返回手势监听（无缝连贯跟手，二级页面退出）
+    PredictiveBackHandler(enabled = currentSubPage != null && !isAnyOverlayOpen) { progress ->
+        if (!predictiveBackEnabled) {
+            closeSubPage()
+            return@PredictiveBackHandler
+        }
+        try {
+            progress.collect { event ->
+                val p = FastOutSlowInEasing.transform(event.progress)
+                subPageAnimProgress.snapTo(p)
+            }
+            // 手势正常完成（松手）：从当前手势位移继续平滑滑动退出
+            subPageAnimProgress.animateTo(1f, animationSpec = tween(200, easing = LinearOutSlowInEasing))
+            currentSubPage = null
+            displayedSubPage = null
+        } catch (e: CancellationException) {
+            // 用户取消手势（滑回边缘）：从当前位置平滑弹回复原
+            subPageAnimProgress.animateTo(0f, animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
+        }
+    }
 
     var devices by remember { mutableStateOf<List<DeviceInfo>>(emptyList()) }
     var devicesLoading by remember { mutableStateOf(true) }
@@ -366,131 +447,135 @@ internal fun SettingsPage(
         )
     }
 
-    // 弹层开启时通知底栏收起避让
-    LaunchedEffect(currentSubPage, showCodeSheet, showPairDialog, showNameDialog, showResetIdDialog) {
-        onOverlayActiveChanged(currentSubPage != null || showCodeSheet || showPairDialog || showNameDialog || showResetIdDialog)
+    // 弹层或二级页面开启时通知底栏收起避让
+    LaunchedEffect(currentSubPage, isAnyOverlayOpen) {
+        onOverlayActiveChanged(currentSubPage != null || isAnyOverlayOpen)
     }
 
-    // 二级页面平滑横向切换动画
-    AnimatedContent(
-        targetState = currentSubPage,
-        transitionSpec = {
-            if (targetState != null) {
-                (slideInHorizontally { it } + fadeIn()).togetherWith(slideOutHorizontally { -it / 3 } + fadeOut())
-            } else {
-                (slideInHorizontally { -it / 3 } + fadeIn()).togetherWith(slideOutHorizontally { it } + fadeOut())
-            }
-        },
-        label = "SettingsSubPageAnimation"
-    ) { subPage ->
-        when (subPage) {
-            null -> {
-                // ---- 一级设置主页 ----
-                PageShell(
-                    title = "设置",
-                    bottomInnerPadding = bottomInnerPadding
-                ) { scrollBehavior, topPadding ->
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .overScrollVertical()
-                            .nestedScroll(scrollBehavior.nestedScrollConnection),
-                        contentPadding = PaddingValues(
-                            start = 16.dp,
-                            end = 16.dp,
-                            top = topPadding + 8.dp,
-                            bottom = 8.dp
-                        ),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        // 5 大二级设置入口卡片（无分隔线）
-                        item {
-                            SectionBlock(title = "设置分类", insideMargin = PaddingValues()) {
-                                SettingsNavRow(
-                                    title = "基础设置",
-                                    summary = "设备名称、开机自启、悬浮底栏、记录上限",
-                                    onClick = { currentSubPage = SettingsSubPage.Basic }
-                                )
-                                SettingsNavRow(
-                                    title = "同步设置",
-                                    summary = "服务器配置、设备配对、在线设备列表",
-                                    onClick = { currentSubPage = SettingsSubPage.Sync }
-                                )
-                                SettingsNavRow(
-                                    title = "过滤规则",
-                                    summary = "内容过滤黑名单、敏感内容保护",
-                                    onClick = { currentSubPage = SettingsSubPage.Filter }
-                                )
-                                SettingsNavRow(
-                                    title = "数据管理",
-                                    summary = "备份导出与导入、应用缓存清理",
-                                    onClick = { currentSubPage = SettingsSubPage.Data }
-                                )
-                                SettingsNavRow(
-                                    title = "权限管理",
-                                    summary = "通知权限、电池优化白名单、自启动",
-                                    onClick = { currentSubPage = SettingsSubPage.Permission }
-                                )
-                            }
+    Box(modifier = Modifier.fillMaxSize()) {
+        // ---- 1. 底层：一级设置主页 ----
+        val baseProgress = subPageAnimProgress.value // 0f: 二级页打开时底层下沉, 1f: 二级页关闭时底层复原
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    if (displayedSubPage != null) {
+                        translationX = -(1f - baseProgress) * size.width * 0.15f
+                        val s = 0.94f + 0.06f * baseProgress
+                        scaleX = s
+                        scaleY = s
+                        alpha = 0.82f + 0.18f * baseProgress
+                    }
+                }
+        ) {
+            PageShell(
+                title = "设置",
+                bottomInnerPadding = bottomInnerPadding
+            ) { scrollBehavior, topPadding ->
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .overScrollVertical()
+                        .nestedScroll(scrollBehavior.nestedScrollConnection),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = topPadding + 8.dp,
+                        bottom = 8.dp
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // 5 大二级设置入口卡片（无分隔线）
+                    item {
+                        SectionBlock(title = "设置分类", insideMargin = PaddingValues()) {
+                            SettingsNavRow(
+                                title = "基础设置",
+                                summary = "设备名称、开机自启、悬浮底栏、记录上限",
+                                onClick = { openSubPage(SettingsSubPage.Basic) }
+                            )
+                            SettingsNavRow(
+                                title = "同步设置",
+                                summary = "服务器配置、设备配对、在线设备列表",
+                                onClick = { openSubPage(SettingsSubPage.Sync) }
+                            )
+                            SettingsNavRow(
+                                title = "过滤规则",
+                                summary = "内容过滤黑名单、敏感内容保护",
+                                onClick = { openSubPage(SettingsSubPage.Filter) }
+                            )
+                            SettingsNavRow(
+                                title = "数据管理",
+                                summary = "备份导出与导入、应用缓存清理",
+                                onClick = { openSubPage(SettingsSubPage.Data) }
+                            )
+                            SettingsNavRow(
+                                title = "权限管理",
+                                summary = "通知权限、电池优化白名单、自启动",
+                                onClick = { openSubPage(SettingsSubPage.Permission) }
+                            )
                         }
+                    }
 
-                        // 关于
-                        item {
-                            SectionBlock(title = "关于") {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    val icon = remember { appIconBitmap(context) }
-                                    Image(
-                                        bitmap = icon,
-                                        contentDescription = "剪贴板同步图标",
-                                        modifier = Modifier
-                                            .size(56.dp)
-                                            .clip(RoundedCornerShape(14.dp))
-                                    )
-                                    Spacer(Modifier.height(8.dp))
-                                    Text(
-                                        text = "剪贴板同步",
-                                        fontSize = 17.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Spacer(Modifier.height(2.dp))
-                                    Text(
-                                        text = "版本 " + appVersion(context),
-                                        fontSize = 13.sp,
-                                        color = MiuixTheme.colorScheme.onBackgroundVariant
-                                    )
-                                }
-                                Spacer(Modifier.height(10.dp))
-                                StatusRow(label = "包名", value = context.packageName ?: "-")
-                                Spacer(Modifier.height(6.dp))
-                                StatusRow(label = "构建技术", value = "Miuix · LSPosed")
-                            }
+                    // 关于（独立二级页面入口）
+                    item {
+                        SectionBlock(title = "关于", insideMargin = PaddingValues()) {
+                            SettingsNavRow(
+                                title = "关于 NexClip",
+                                summary = "版本 v${appVersion(context)} · 开源仓库与项目致谢",
+                                onClick = { openSubPage(SettingsSubPage.About) }
+                            )
                         }
+                    }
 
-                        item {
-                            Spacer(Modifier.height(bottomInnerPadding))
-                        }
+                    item {
+                        Spacer(Modifier.height(bottomInnerPadding))
                     }
                 }
             }
 
-            SettingsSubPage.Basic -> {
-                // ---- 二级页面 1: 基础设置 ----
-                PageShell(
-                    title = "基础设置",
-                    bottomInnerPadding = bottomInnerPadding,
-                    navigationIcon = {
-                        IconButton(onClick = { currentSubPage = null }) {
-                            Icon(
-                                imageVector = MiuixIcons.Normal.Back,
-                                contentDescription = "返回"
-                            )
-                        }
+            // 黑色半透明遮罩层（视差下沉感）
+            if (displayedSubPage != null && (1f - baseProgress) > 0.001f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = (1f - baseProgress) * 0.2f))
+                )
+            }
+        }
+
+        // ---- 2. 顶层：当前激活的二级子页面 ----
+        displayedSubPage?.let { subPage ->
+            val p = subPageAnimProgress.value // 0f (显示) -> 1f (退出到右侧)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        translationX = p * size.width
+                        val s = 1f - p * 0.05f
+                        scaleX = s
+                        scaleY = s
+                        transformOrigin = TransformOrigin(0f, 0.5f)
+                        clip = true
+                        shape = RoundedCornerShape((p * 24).dp)
+                        shadowElevation = (1f - p) * 24f
                     }
-                ) { scrollBehavior, topPadding ->
-                    LazyColumn(
+            ) {
+                when (subPage) {
+                    SettingsSubPage.Basic -> {
+                        // ---- 二级页面 1: 基础设置 ----
+                        PageShell(
+                            title = "基础设置",
+                            bottomInnerPadding = bottomInnerPadding,
+                            navigationIcon = {
+                                IconButton(onClick = { closeSubPage() }) {
+                                    Icon(
+                                        imageVector = MiuixIcons.Normal.Back,
+                                        contentDescription = "返回"
+                                    )
+                                }
+                            }
+                        ) { scrollBehavior, topPadding ->
+                            LazyColumn(
                         modifier = Modifier
                             .fillMaxSize()
                             .overScrollVertical()
@@ -577,7 +662,22 @@ internal fun SettingsPage(
                     }
 
                     item {
-                        SectionBlock(title = "行为设置", insideMargin = PaddingValues()) {
+                        SectionBlock(title = "界面与交互", insideMargin = PaddingValues()) {
+                            SwitchPreference(
+                                checked = predictiveBackEnabled,
+                                onCheckedChange = { checked ->
+                                    predictiveBackEnabled = checked
+                                    SyncSettings.setPredictiveBackEnabled(context, checked)
+                                },
+                                title = "预测返回手势",
+                                summary = "边缘侧滑返回时支持实时跟手视差与缩放预览"
+                            )
+                            SwitchPreference(
+                                checked = floatingBarEnabled,
+                                onCheckedChange = onFloatingBarChange,
+                                title = "悬浮底栏",
+                                summary = "使用液态玻璃悬浮导航栏"
+                            )
                             SwitchPreference(
                                 checked = bootStart,
                                 onCheckedChange = { checked ->
@@ -589,38 +689,49 @@ internal fun SettingsPage(
                                 title = "开机自启",
                                 summary = "开机后自动恢复剪贴板监听"
                             )
+                        }
+                    }
+
+                    item {
+                        SectionBlock(title = "通知与记录", insideMargin = PaddingValues()) {
                             SwitchPreference(
-                                checked = floatingBarEnabled,
-                                onCheckedChange = onFloatingBarChange,
-                                title = "悬浮底栏",
-                                summary = "使用液态玻璃悬浮导航栏"
+                                checked = notificationEnabled,
+                                onCheckedChange = { checked ->
+                                    notificationEnabled = checked
+                                    SyncSettings.setNotificationEnabled(context, checked)
+                                    ClipboardMonitorService.updateNotification(context)
+                                },
+                                title = "同步与捕获通知",
+                                summary = "在收到新同步内容或本地复制时展示系统通知"
                             )
-                            // 通知展示样式 (普通通知 / 实时通知 / HyperOS 超级岛)
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { showNotificationStyleDialog = true }
-                                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "通知展示样式",
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Spacer(Modifier.height(2.dp))
-                                    Text(
-                                        text = notificationStyle.label + " · " + notificationStyle.summary,
-                                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                                        fontSize = 13.sp
+                            if (notificationEnabled) {
+                                // 通知展示样式 (普通通知 / 实时通知 / HyperOS 超级岛)
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { showNotificationStyleDialog = true }
+                                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "通知展示样式",
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Spacer(Modifier.height(2.dp))
+                                        Text(
+                                            text = notificationStyle.label + " · " + notificationStyle.summary,
+                                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                                            fontSize = 13.sp
+                                        )
+                                    }
+                                    Icon(
+                                        imageVector = MiuixIcons.Normal.ChevronForward,
+                                        contentDescription = "选择样式",
+                                        tint = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.45f)
                                     )
                                 }
-                                Icon(
-                                    imageVector = MiuixIcons.Normal.ChevronForward,
-                                    contentDescription = "选择样式",
-                                    tint = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.45f)
-                                )
                             }
                             OverlayDropdownPreference(
                                 items = historyLabels,
@@ -646,7 +757,7 @@ internal fun SettingsPage(
                     title = "同步设置",
                     bottomInnerPadding = bottomInnerPadding,
                     navigationIcon = {
-                        IconButton(onClick = { currentSubPage = null }) {
+                        IconButton(onClick = { closeSubPage() }) {
                             Icon(
                                 imageVector = MiuixIcons.Normal.Back,
                                 contentDescription = "返回"
@@ -881,7 +992,7 @@ internal fun SettingsPage(
                     title = "过滤规则",
                     bottomInnerPadding = bottomInnerPadding,
                     navigationIcon = {
-                        IconButton(onClick = { currentSubPage = null }) {
+                        IconButton(onClick = { closeSubPage() }) {
                             Icon(
                                 imageVector = MiuixIcons.Normal.Back,
                                 contentDescription = "返回"
@@ -1027,7 +1138,7 @@ internal fun SettingsPage(
                     title = "数据管理",
                     bottomInnerPadding = bottomInnerPadding,
                     navigationIcon = {
-                        IconButton(onClick = { currentSubPage = null }) {
+                        IconButton(onClick = { closeSubPage() }) {
                             Icon(
                                 imageVector = MiuixIcons.Normal.Back,
                                 contentDescription = "返回"
@@ -1074,7 +1185,7 @@ internal fun SettingsPage(
                                     )
                                 }
                                 Icon(
-                                    imageVector = MiuixIcons.Normal.UploadCloud,
+                                    imageVector = LucideIcons.Upload,
                                     contentDescription = "导出",
                                     tint = MiuixTheme.colorScheme.primary
                                 )
@@ -1103,7 +1214,7 @@ internal fun SettingsPage(
                                     )
                                 }
                                 Icon(
-                                    imageVector = MiuixIcons.Normal.Copy,
+                                    imageVector = LucideIcons.Download,
                                     contentDescription = "导入",
                                     tint = MiuixTheme.colorScheme.primary
                                 )
@@ -1157,7 +1268,7 @@ internal fun SettingsPage(
                     title = "权限管理",
                     bottomInnerPadding = bottomInnerPadding,
                     navigationIcon = {
-                        IconButton(onClick = { currentSubPage = null }) {
+                        IconButton(onClick = { closeSubPage() }) {
                             Icon(
                                 imageVector = MiuixIcons.Normal.Back,
                                 contentDescription = "返回"
@@ -1294,8 +1405,8 @@ internal fun SettingsPage(
                     item {
                         SectionBlock(title = "LSPosed 模块配置说明") {
                             Text(
-                                text = "1. 打开 LSPosed 管理器并勾选「剪贴板同步」\n" +
-                                    "2. 作用域必须包含「系统框架」和「剪贴板同步」应用本身\n" +
+                                text = "1. 打开 LSPosed 管理器并勾选「NexClip」\n" +
+                                    "2. 作用域必须包含「系统框架」和「NexClip」应用本身\n" +
                                     "3. 完成配置后重启系统即可生效",
                                 fontSize = 13.sp,
                                 lineHeight = 19.sp,
@@ -1306,7 +1417,134 @@ internal fun SettingsPage(
                 }
             }
         }
+
+        SettingsSubPage.About -> {
+            // ---- 二级页面 6: 关于 ----
+            PageShell(
+                title = "关于",
+                bottomInnerPadding = bottomInnerPadding,
+                navigationIcon = {
+                    IconButton(onClick = { closeSubPage() }) {
+                        Icon(
+                            imageVector = MiuixIcons.Normal.Back,
+                            contentDescription = "返回"
+                        )
+                    }
+                }
+            ) { scrollBehavior, topPadding ->
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .overScrollVertical()
+                        .nestedScroll(scrollBehavior.nestedScrollConnection),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        end = 16.dp,
+                        top = topPadding + 8.dp,
+                        bottom = bottomInnerPadding + 16.dp
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    item {
+                        SectionBlock(title = "应用信息") {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                val icon = remember { appIconBitmap(context) }
+                                Image(
+                                    bitmap = icon,
+                                    contentDescription = "NexClip 图标",
+                                    modifier = Modifier
+                                        .size(64.dp)
+                                        .clip(RoundedCornerShape(16.dp))
+                                )
+                                Spacer(Modifier.height(10.dp))
+                                Text(
+                                    text = "NexClip",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = "轻量高效的跨设备剪贴板同步与管理",
+                                    fontSize = 13.sp,
+                                    color = MiuixTheme.colorScheme.onBackgroundVariant
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = "版本 v" + appVersion(context),
+                                    fontSize = 13.sp,
+                                    color = MiuixTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                            Spacer(Modifier.height(14.dp))
+                            StatusRow(label = "应用包名", value = context.packageName ?: "-")
+                            Spacer(Modifier.height(8.dp))
+                            StatusRow(label = "开源协议", value = "MIT License")
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        val repoUrl = "https://github.com/yixing233/easy-clip"
+                                        runCatching {
+                                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(repoUrl))
+                                            context.startActivity(intent)
+                                        }.onFailure {
+                                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            cm.setPrimaryClip(ClipData.newPlainText("GitHub Repository", repoUrl))
+                                            scope.launch { snackbarHostState.showAppSnack("仓库链接已复制", SnackType.Success) }
+                                        }
+                                    }
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("项目仓库", color = MiuixTheme.colorScheme.onBackgroundVariant, fontSize = 14.sp)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "github.com/yixing233/easy-clip",
+                                        color = MiuixTheme.colorScheme.primary,
+                                        fontSize = 13.sp
+                                    )
+                                    Spacer(Modifier.width(4.dp))
+                                    Icon(
+                                        imageVector = MiuixIcons.Normal.ChevronForward,
+                                        contentDescription = "前往",
+                                        tint = MiuixTheme.colorScheme.primary.copy(alpha = 0.6f),
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        SectionBlock(title = "开源致谢") {
+                            Text(
+                                text = "NexClip 依托并致谢以下优秀开源项目与技术规范：",
+                                fontSize = 13.sp,
+                                color = MiuixTheme.colorScheme.onBackgroundVariant
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            StatusRow(label = "Miuix-KMP", value = "现代优雅的跨平台设计组件库")
+                            Spacer(Modifier.height(8.dp))
+                            StatusRow(label = "LSPosed", value = "Android 系统级剪贴板感知框架")
+                            Spacer(Modifier.height(8.dp))
+                            StatusRow(label = "ML Kit", value = "Google 离线高精度二维码识别套件")
+                            Spacer(Modifier.height(8.dp))
+                            StatusRow(label = "Lucide Icons", value = "清晰规整的矢量图标集")
+                            Spacer(Modifier.height(8.dp))
+                            StatusRow(label = "SyncClipboard", value = "跨设备多端剪贴板同步协议启发")
+                        }
+                    }
+                }
+            }
+        }
     }
+}
 }
 
     // ---- 对话框与弹层 ----
@@ -1753,6 +1991,7 @@ internal fun SettingsPage(
             }
         }
     }
+}
 }
 
 /**

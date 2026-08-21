@@ -17,6 +17,8 @@ object SyncSettings {
     const val KEY_DEVICE_NAME = "device_name"
     const val KEY_BOOT_START_ENABLED = "boot_start_enabled"
     const val KEY_FLOATING_BOTTOM_BAR = "floating_bottom_bar"
+    const val KEY_PREDICTIVE_BACK = "predictive_back"
+    const val KEY_NOTIFICATION_ENABLED = "notification_enabled"
     const val KEY_NOTIFICATION_STYLE = "notification_style"
     const val KEY_MAX_HISTORY = "max_history"
     const val KEY_SEARCH_HISTORY = "search_history"
@@ -117,6 +119,22 @@ object SyncSettings {
         prefs(context).edit().putBoolean(KEY_FLOATING_BOTTOM_BAR, enabled).apply()
     }
 
+    /** 预测返回手势开关,默认开启 */
+    fun predictiveBackEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_PREDICTIVE_BACK, true)
+
+    fun setPredictiveBackEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_PREDICTIVE_BACK, enabled).apply()
+    }
+
+    /** 同步与捕获通知展示开关,默认开启 */
+    fun notificationEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_NOTIFICATION_ENABLED, true)
+
+    fun setNotificationEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_NOTIFICATION_ENABLED, enabled).apply()
+    }
+
     fun maxHistory(context: Context): Int =
         prefs(context).getInt(KEY_MAX_HISTORY, DEFAULT_MAX_HISTORY)
 
@@ -187,14 +205,14 @@ object SyncSettings {
 
 /**
  * 通知展示样式枚举:
- * - STANDARD: 普通通知(标准服务通知与常规提示)
- * - ANDROID_LIVE: 安卓实时通知(高优先级 Live Activity 实时卡片 + 快捷操作按钮)
- * - HYPEROS_ISLAND: HyperOS 超级岛(小米澎湃OS 焦点通知 / 灵动胶囊 / 超级岛交互)
+ * - STANDARD: 普通通知(传统标准通知栏提示，低干扰展示同步状态与内容摘要)
+ * - ANDROID_LIVE: 安卓实时通知(Android 14+ 实时活动 Live Activity，悬浮横幅并提供快捷复制)
+ * - HYPEROS_ISLAND: HyperOS 灵动焦点(适配小米澎湃 OS 超级岛与状态栏灵动胶囊，支持焦点流转)
  */
 enum class NotificationStyle(val key: String, val label: String, val summary: String) {
-    STANDARD("standard", "普通通知", "传统常驻服务通知与标准消息提示"),
-    ANDROID_LIVE("android_live", "安卓实时通知", "高优先级实时活动卡片，展示最新内容预览与快捷操作"),
-    HYPEROS_ISLAND("hyperos_island", "HyperOS 超级岛", "小米澎湃OS 焦点通知与灵动胶囊，支持顶部小岛与大岛交互");
+    STANDARD("standard", "普通通知", "传统标准通知栏提示，低干扰展示同步状态与内容摘要"),
+    ANDROID_LIVE("android_live", "安卓实时通知", "Android 14+ 实时活动（Live Activity），悬浮横幅并提供快捷复制"),
+    HYPEROS_ISLAND("hyperos_island", "HyperOS 灵动焦点", "适配小米澎湃 OS 超级岛与状态栏灵动胶囊，支持焦点流转");
 
     companion object {
         fun fromKey(key: String?): NotificationStyle =

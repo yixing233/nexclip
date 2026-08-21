@@ -6,8 +6,11 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.BackEventCompat
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedVisibility
+import kotlinx.coroutines.CancellationException
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -52,6 +55,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -307,10 +311,28 @@ internal fun RecordsPage(
         )
     }
 
-    // 退出多选模式的返回拦截
-    BackHandler(enabled = isMultiSelectMode) {
-        isMultiSelectMode = false
-        selectedClips = emptySet()
+    var multiSelectBackProgress by remember { mutableFloatStateOf(0f) }
+    var isMultiSelectBackActive by remember { mutableStateOf(false) }
+
+    // 退出多选模式的预测返回拦截
+    PredictiveBackHandler(enabled = isMultiSelectMode) { progress ->
+        if (!SyncSettings.predictiveBackEnabled(context)) {
+            isMultiSelectMode = false
+            selectedClips = emptySet()
+            return@PredictiveBackHandler
+        }
+        try {
+            isMultiSelectBackActive = true
+            progress.collect { event ->
+                multiSelectBackProgress = event.progress
+            }
+            isMultiSelectMode = false
+            selectedClips = emptySet()
+        } catch (e: CancellationException) {
+        } finally {
+            isMultiSelectBackActive = false
+            multiSelectBackProgress = 0f
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -1464,17 +1486,41 @@ internal fun SearchPage(
 
     val isKeyboardVisible = WindowInsets.isImeVisible
     val keyboardController = LocalSoftwareKeyboardController.current
-    BackHandler {
+    var searchBackProgress by remember { mutableFloatStateOf(0f) }
+    var searchBackEdge by remember { mutableIntStateOf(BackEventCompat.EDGE_LEFT) }
+    var isSearchBackActive by remember { mutableStateOf(false) }
+
+    PredictiveBackHandler(enabled = true) { progress ->
         if (isKeyboardVisible) {
             keyboardController?.hide()
-        } else {
+            return@PredictiveBackHandler
+        }
+        if (!SyncSettings.predictiveBackEnabled(context)) {
             onClose()
+            return@PredictiveBackHandler
+        }
+        try {
+            isSearchBackActive = true
+            progress.collect { event ->
+                searchBackProgress = event.progress
+                searchBackEdge = event.swipeEdge
+            }
+            onClose()
+        } catch (e: CancellationException) {
+        } finally {
+            isSearchBackActive = false
+            searchBackProgress = 0f
         }
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .predictiveBackAnimation(
+                progress = searchBackProgress,
+                edge = searchBackEdge,
+                enabled = isSearchBackActive
+            )
             .background(MiuixTheme.colorScheme.surface)
     ) {
         Column(

@@ -48,6 +48,15 @@ object ImageLoader {
         }
     }
 
+    fun saveDroppedImage(context: Context, uri: Uri): String? {
+        return runCatching {
+            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
+            val key = "drop_${System.currentTimeMillis()}_${bytes.size}"
+            saveBytesToDisk(context, key, bytes)
+            key
+        }.getOrNull()
+    }
+
     suspend fun getImageBytes(context: Context, imageRef: String?, rawText: String?): ByteArray? = withContext(Dispatchers.IO) {
         if (!rawText.isNullOrBlank() && rawText.startsWith("data:image/")) {
             val base64Index = rawText.indexOf("base64,")

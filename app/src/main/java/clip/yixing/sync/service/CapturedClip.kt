@@ -6,6 +6,7 @@ data class CapturedClip(
     val time: Long,
     val isFavorite: Boolean = false,
     val imageRef: String? = null,
+    val sourceDevice: String? = null,
     val id: String = "$time-${text.hashCode()}"
 ) {
     val isLink: Boolean get() = text.contains(Regex("https?://\\S+", RegexOption.IGNORE_CASE))

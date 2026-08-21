@@ -1,17 +1,26 @@
 package clip.yixing.sync
 
 import android.os.Bundle
+import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseInOut
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,8 +45,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import kotlinx.coroutines.CancellationException
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -60,10 +71,12 @@ import clip.yixing.sync.service.ClipboardMonitorService
 import clip.yixing.sync.ui.BottomBarIcons
 import clip.yixing.sync.ui.HomePage
 import clip.yixing.sync.ui.LucideIcons
+import clip.yixing.sync.ui.ManualPushPage
 import clip.yixing.sync.ui.RecordsPage
 import clip.yixing.sync.ui.SearchPage
 import clip.yixing.sync.ui.BarBlurSurface
 import clip.yixing.sync.ui.PageShell
+import clip.yixing.sync.ui.predictiveBackAnimation
 import clip.yixing.sync.ui.FloatingBottomBar
 import clip.yixing.sync.ui.FloatingBottomBarItem
 import clip.yixing.sync.ui.SettingsPage
@@ -200,11 +213,84 @@ private fun MainScreen() {
     var floatingBar by remember { mutableStateOf(SyncSettings.floatingBottomBarEnabled(appContext)) }
     var isOverlayActive by remember { mutableStateOf(false) }
     var isScanOpen by remember { mutableStateOf(false) }
+    var displayedScanOpen by remember { mutableStateOf(false) }
+    val scanAnimProgress = remember { Animatable(1f) }
+
+    var isManualPushOpen by remember { mutableStateOf(false) }
+    var displayedManualPushOpen by remember { mutableStateOf(false) }
+    val manualPushAnimProgress = remember { Animatable(1f) }
+
     var enterMultiSelectTrigger by remember { mutableIntStateOf(0) }
     var clearDialogTrigger by remember { mutableIntStateOf(0) }
 
-    BackHandler(enabled = isScanOpen) {
-        isScanOpen = false
+    fun openScanner() {
+        displayedScanOpen = true
+        isScanOpen = true
+        scope.launch {
+            scanAnimProgress.snapTo(1f)
+            scanAnimProgress.animateTo(0f, animationSpec = tween(280, easing = FastOutSlowInEasing))
+        }
+    }
+
+    fun closeScanner() {
+        scope.launch {
+            scanAnimProgress.animateTo(1f, animationSpec = tween(240, easing = FastOutSlowInEasing))
+            isScanOpen = false
+            displayedScanOpen = false
+        }
+    }
+
+    fun openManualPush() {
+        displayedManualPushOpen = true
+        isManualPushOpen = true
+        scope.launch {
+            manualPushAnimProgress.snapTo(1f)
+            manualPushAnimProgress.animateTo(0f, animationSpec = tween(280, easing = FastOutSlowInEasing))
+        }
+    }
+
+    fun closeManualPush() {
+        scope.launch {
+            manualPushAnimProgress.animateTo(1f, animationSpec = tween(240, easing = FastOutSlowInEasing))
+            isManualPushOpen = false
+            displayedManualPushOpen = false
+        }
+    }
+
+    PredictiveBackHandler(enabled = isScanOpen) { progress ->
+        if (!SyncSettings.predictiveBackEnabled(appContext)) {
+            closeScanner()
+            return@PredictiveBackHandler
+        }
+        try {
+            progress.collect { event ->
+                val p = FastOutSlowInEasing.transform(event.progress)
+                scanAnimProgress.snapTo(p)
+            }
+            scanAnimProgress.animateTo(1f, animationSpec = tween(200, easing = LinearOutSlowInEasing))
+            isScanOpen = false
+            displayedScanOpen = false
+        } catch (e: CancellationException) {
+            scanAnimProgress.animateTo(0f, animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
+        }
+    }
+
+    PredictiveBackHandler(enabled = isManualPushOpen) { progress ->
+        if (!SyncSettings.predictiveBackEnabled(appContext)) {
+            closeManualPush()
+            return@PredictiveBackHandler
+        }
+        try {
+            progress.collect { event ->
+                val p = FastOutSlowInEasing.transform(event.progress)
+                manualPushAnimProgress.snapTo(p)
+            }
+            manualPushAnimProgress.animateTo(1f, animationSpec = tween(200, easing = LinearOutSlowInEasing))
+            isManualPushOpen = false
+            displayedManualPushOpen = false
+        } catch (e: CancellationException) {
+            manualPushAnimProgress.animateTo(0f, animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
+        }
     }
 
     // 单个 backdrop:录制外层 content(Pager 整体,含各页大标题顶栏),底栏 blur
@@ -244,7 +330,14 @@ private fun MainScreen() {
                         title = "NexClip",
                         bottomInnerPadding = bottomInnerPadding,
                         actions = {
-                            IconButton(onClick = { isScanOpen = true }) {
+                            IconButton(onClick = { openManualPush() }) {
+                                Icon(
+                                    imageVector = LucideIcons.Send,
+                                    contentDescription = "跨设备互传",
+                                    tint = MiuixTheme.colorScheme.onSurface
+                                )
+                            }
+                            IconButton(onClick = { openScanner() }) {
                                 Icon(
                                     imageVector = LucideIcons.ScanLine,
                                     contentDescription = "扫一扫",
@@ -266,7 +359,8 @@ private fun MainScreen() {
                                 tabIndex = 2
                                 pagerNavigator.animateTo(pagerState, 2)
                             },
-                            onOpenQrScanner = { isScanOpen = true },
+                            onOpenQrScanner = { openScanner() },
+                            onOpenManualPush = { openManualPush() },
                             onOverlayActiveChanged = { isOverlayActive = it }
                         )
                     }
@@ -368,7 +462,7 @@ private fun MainScreen() {
                             SyncSettings.setFloatingBottomBarEnabled(appContext, it)
                         },
                         onOverlayActiveChanged = { isOverlayActive = it },
-                        onOpenQrScanner = { isScanOpen = true }
+                        onOpenQrScanner = { openScanner() }
                     )
                 }
             }
@@ -516,23 +610,59 @@ private fun MainScreen() {
         )
     }
 
-    // 全屏扫码配对页(全屏覆盖,独立返回手势)
-    AnimatedVisibility(
-        visible = isScanOpen,
-        enter = fadeIn(tween(220)) + slideInVertically(initialOffsetY = { it }, animationSpec = tween(220)),
-        exit = fadeOut(tween(200)) + slideOutVertically(targetOffsetY = { it }, animationSpec = tween(200))
-    ) {
-        QrScanPage(
-            snackbarHostState = snackbarHostState,
-            onBack = { isScanOpen = false },
-            onPairSuccess = {
-                isScanOpen = false
-                tabIndex = 0
-                pagerNavigator.animateTo(pagerState, 0)
-            }
-        )
+    // 全屏扫码配对页(全屏覆盖,独立预测返回跟手手势)
+    if (displayedScanOpen) {
+        val p = scanAnimProgress.value
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    translationY = p * size.height * 0.35f
+                    val s = 1f - p * 0.08f
+                    scaleX = s
+                    scaleY = s
+                    alpha = 1f - p * 0.4f
+                    clip = true
+                    shape = RoundedCornerShape((p * 28).dp)
+                    shadowElevation = (1f - p) * 24f
+                }
+        ) {
+            QrScanPage(
+                snackbarHostState = snackbarHostState,
+                onBack = { closeScanner() },
+                onPairSuccess = {
+                    closeScanner()
+                    tabIndex = 0
+                    pagerNavigator.animateTo(pagerState, 0)
+                }
+            )
+        }
     }
+
+    // 全屏跨设备即时互传页(全屏覆盖,独立预测返回跟手手势)
+    if (displayedManualPushOpen) {
+        val p = manualPushAnimProgress.value
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    translationX = p * size.width
+                    val s = 1f - p * 0.05f
+                    scaleX = s
+                    scaleY = s
+                    alpha = 1f - p * 0.3f
+                    clip = true
+                    shape = RoundedCornerShape((p * 24).dp)
+                    shadowElevation = (1f - p) * 24f
+                }
+        ) {
+            ManualPushPage(
+                snackbarHostState = snackbarHostState,
+                onBack = { closeManualPush() }
+            )
+        }
     }
+}
 }
 /** 状态行:左标签右值(模块状态卡片用) */
 @Composable

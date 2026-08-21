@@ -110,7 +110,8 @@ import java.util.concurrent.Executors
 fun QrScanPage(
     snackbarHostState: SnackbarHostState?,
     onBack: () -> Unit,
-    onPairSuccess: () -> Unit
+    onPairSuccess: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -167,7 +168,7 @@ fun QrScanPage(
     }
 
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
