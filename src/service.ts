@@ -441,9 +441,9 @@ export class SyncService {
 
   /**
    * 单向即入配对(方案 1 扫码直连 + 方案 2 纯 6 位数字验证码):
-   * 凭有效 6 位码直接准入并关联设备,无需手动输入用户ID,无需原设备点击二次确认。
+   * 凭有效 6 位码直接准入并关联设备, 无需手动输入用户ID, 无需原设备人工二次确认。
    */
-  pairDirect(
+  pair(
     code: string,
     deviceId: string,
     deviceName: string,
@@ -456,7 +456,7 @@ export class SyncService {
     const normCode = code.trim().toUpperCase();
     const r = this.db.prepare('SELECT * FROM "PairingRequests" WHERE "Code" = ?').get(normCode) as unknown as PairingRequestRow | null;
     if (!r || !['open', 'pending'].includes(r.Status) || r.ExpiresAt < now) {
-      throw new PairError(400, '配对码无效或已过期');
+      throw new PairError(400, '配对验证码无效或已过期');
     }
     if (r.GeneratorId === deviceId) {
       throw new PairError(400, '不能与本机自身配对');
@@ -494,94 +494,6 @@ export class SyncService {
     if (!allowed) throw new PairError(403, '无权作废该配对码');
     const r = this.db.prepare('DELETE FROM "PairingRequests" WHERE "Code" = ? AND ("Status" = \'open\' OR "Status" = \'pending\')').run(code);
     return r.changes > 0;
-  }
-
-  /** 发起配对:校验 配对码 + 用户ID 匹配 → 挂起待确认请求 */
-  pair(pairingCode: string, userId: string, deviceId: string, deviceName: string, ip: string | null = null, platform: string | null = null): { status: string; deviceToken: string } {
-    const now = dbNow();
-    const plat = detectPlatform(platform, null, deviceName);
-    const r = this.db.prepare('SELECT * FROM "PairingRequests" WHERE "Code" = ?').get(pairingCode) as unknown as PairingRequestRow | null;
-    if (!r || !['open', 'pending'].includes(r.Status) || r.ExpiresAt < now) {
-      throw new PairError(400, '配对码无效或已过期');
-    }
-    if (r.UserId !== userId) {
-      throw new PairError(400, '用户ID与配对码不匹配');
-    }
-    if (r.GeneratorId === deviceId) {
-      throw new PairError(400, '不能与本机自身配对');
-    }
-    if (r.Status === 'pending') {
-      throw new PairError(409, r.TargetDeviceId === deviceId
-        ? '该设备已提交配对请求,请等待生成方确认'
-        : '该配对码已有设备等待确认');
-    }
-    const issued = this.issueDeviceToken();
-    const existing = this.db.prepare('SELECT * FROM "Devices" WHERE "Id" = ?').get(deviceId) as unknown as DeviceRow | null;
-    if (existing?.UserId && existing.UserId !== userId) {
-      throw new PairError(409, '设备已绑定其他用户组,不能重复配对');
-    }
-    if (existing?.UserId === userId) {
-      this.db.prepare('UPDATE "Devices" SET "Token" = ?, "Platform" = ?, "PairedAt" = ?, "RevokedAt" = NULL, "LastSeenAt" = ? WHERE "Id" = ?')
-        .run(issued.hash, plat, now, now, deviceId);
-      this.db.prepare('UPDATE "PairingRequests" SET "TargetDeviceId" = ?, "TargetDeviceName" = ?, "TargetTokenHash" = ?, "Status" = \'approved\', "ConfirmedAt" = ? WHERE "Code" = ?')
-        .run(deviceId, deviceName || existing.Name, issued.hash, now, pairingCode);
-      return { status: 'approved', deviceToken: issued.token };
-    }
-    this.db.prepare('UPDATE "PairingRequests" SET "TargetDeviceId" = ?, "TargetDeviceName" = ?, "TargetTokenHash" = ?, "Status" = \'pending\' WHERE "Code" = ?')
-      .run(deviceId, deviceName || '未知设备', issued.hash, pairingCode);
-    if (existing) this.touchDevice(deviceId, deviceName || existing.Name, plat, null, ip);
-    this.addAudit('pair_request', '设备 ' + (deviceName || deviceId) + ' 请求配对(用户 ' + userId + ')', ip);
-    this.hub.broadcastDevicesChanged();
-    return { status: 'pending', deviceToken: issued.token };
-  }
-
-  /** 新设备轮询配对结果 */
-  pairStatus(pairingCode: string, deviceId: string): { status: string; userId?: string } {
-    const r = this.db.prepare('SELECT * FROM "PairingRequests" WHERE "Code" = ?').get(pairingCode) as unknown as PairingRequestRow | null;
-    if (!r || r.TargetDeviceId !== deviceId) return { status: 'not-found' };
-    const expired = r.ExpiresAt < dbNow();
-    const status = expired && (r.Status === 'open' || r.Status === 'pending') ? 'expired' : r.Status;
-    return status === 'approved' ? { status, userId: r.UserId } : { status };
-  }
-
-  /** 确认/拒绝:生成方(码+生成方设备ID)、同组用户会话、管理端会话 */
-  confirmPairing(
-    pairingCode: string,
-    action: 'approve' | 'reject',
-    actor: { kind: 'secret'; generatorId: string } | { kind: 'user'; userId: string } | { kind: 'admin' },
-  ): { status: string } {
-    const now = dbNow();
-    const r = this.db.prepare('SELECT * FROM "PairingRequests" WHERE "Code" = ?').get(pairingCode) as unknown as PairingRequestRow | null;
-    if (!r || r.Status !== 'pending' || r.ExpiresAt < now) {
-      throw new PairError(400, '请求不存在、已处理或已过期');
-    }
-    const ok =
-      actor.kind === 'admin' ||
-      (actor.kind === 'user' && actor.userId === r.UserId) ||
-      (actor.kind === 'secret' && actor.generatorId === r.GeneratorId);
-    if (!ok) throw new PairError(403, '无权确认该配对请求');
-    if (action === 'approve') {
-      if (!r.TargetDeviceId || !r.TargetTokenHash) throw new PairError(400, '配对目标设备或凭证不存在');
-      const existing = this.db.prepare('SELECT * FROM "Devices" WHERE "Id" = ?').get(r.TargetDeviceId) as unknown as DeviceRow | null;
-      if (existing?.UserId && existing.UserId !== r.UserId) throw new PairError(409, '配对目标设备已绑定其他用户组');
-      this.db.prepare('UPDATE "PairingRequests" SET "Status" = \'approved\', "ConfirmedAt" = ? WHERE "Code" = ?').run(now, pairingCode);
-      const plat = detectPlatform(existing?.Platform, null, r.TargetDeviceName);
-      if (existing) {
-        this.db.prepare('UPDATE "Devices" SET "UserId" = ?, "Platform" = ?, "Token" = ?, "PairedAt" = ?, "RevokedAt" = NULL, "LastSeenAt" = ? WHERE "Id" = ?')
-          .run(r.UserId, plat, r.TargetTokenHash, now, now, r.TargetDeviceId);
-      } else {
-        this.db.prepare('INSERT INTO "Devices" ("Id","Name","Platform","Ip","Version","LastSeenAt","Token","PairedAt","UserId","RevokedAt") VALUES (?,?,?,NULL,NULL,?,?,?,?,NULL)')
-          .run(r.TargetDeviceId, r.TargetDeviceName || '未知设备', plat, now, r.TargetTokenHash, now, r.UserId);
-      }
-      this.addAudit('pair_approve', '设备 ' + (r.TargetDeviceName || r.TargetDeviceId) + ' 已加入用户 ' + r.UserId, null);
-      this.hub.broadcastDevicesChanged();
-      return { status: action };
-    } else {
-      this.db.prepare('UPDATE "PairingRequests" SET "Status" = \'rejected\', "ConfirmedAt" = ? WHERE "Code" = ?').run(now, pairingCode);
-      this.addAudit('pair_reject', '拒绝设备 ' + (r.TargetDeviceName || r.TargetDeviceId) + ' 加入用户 ' + r.UserId, null);
-    }
-    this.hub.broadcastDevicesChanged();
-    return { status: action };
   }
 
   /** 待确认请求列表(管理端:全部;用户会话:本组;生成方:凭 码+设备ID) */

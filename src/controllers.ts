@@ -362,24 +362,25 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     return true;
   }
 
-  // 单向即入配对(方案 1 扫码直连 + 方案 2 纯 6 位数字验证码):免认证 + IP 限速
-  if (p === '/api/pair/direct' && method === 'POST') {
-    if (!ctx.rate.allow('pair_direct:' + remoteIp(req), 15, 60_000)) {
+  // 单向即入配对(方案 1 扫码直连 + 方案 2 纯 6 位数字验证码): 免认证 + IP 限速
+  if ((p === '/api/pair' || p === '/api/pair/direct') && method === 'POST') {
+    if (!ctx.rate.allow('pair:' + remoteIp(req), 15, 60_000)) {
       sendJson(res, 429, { error: '尝试过于频繁,请稍后再试' });
       return true;
     }
     const body = await readBody(req, 64 * 1024);
     let json: Record<string, unknown>;
     try { json = JSON.parse(body.toString('utf8')); } catch { sendJson(res, 400, { error: '无效的 JSON' }); return true; }
-    const code = typeof json.code === 'string' ? json.code.trim().toUpperCase() : '';
+    // 兼容 code 或 pairingCode 字段名
+    const code = (typeof json.code === 'string' ? json.code : typeof json.pairingCode === 'string' ? json.pairingCode : '').trim().toUpperCase();
     const deviceId = typeof json.deviceId === 'string' ? json.deviceId.trim().slice(0, 64) : '';
     const deviceName = typeof json.deviceName === 'string' ? json.deviceName.trim().slice(0, 128) : '';
     const explicitPlat = typeof json.platform === 'string' ? json.platform.trim().slice(0, 32) : null;
     const platform = detectPlatform(explicitPlat, req.headers['user-agent'], deviceName);
     const version = typeof json.version === 'string' ? json.version.trim().slice(0, 64) : null;
-    if (!code || !deviceId) { sendJson(res, 400, { error: 'code 与 deviceId 不能为空' }); return true; }
+    if (!code || !deviceId) { sendJson(res, 400, { error: '配对码与设备ID不能为空' }); return true; }
     try {
-      const r = svc.pairDirect(code, deviceId, deviceName, remoteIp(req), platform, version);
+      const r = svc.pair(code, deviceId, deviceName, remoteIp(req), platform, version);
       const sessionToken = ctx.sessions.create({
         role: 'user',
         userId: r.userId,
@@ -400,7 +401,7 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     return true;
   }
 
-  // 作废未完成配对码(open/pending 状态):免认证
+  // 作废未完成配对码(open 状态): 免认证/设备/用户认证
   const mPairRevoke = /^\/api\/pairing-codes\/([^/]+)$/.exec(p);
   if (mPairRevoke && method === 'DELETE') {
     let actor: { kind: 'admin' } | { kind: 'user'; userId: string } | { kind: 'device'; deviceId: string } | null = null;
@@ -412,115 +413,6 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
       const ok = svc.revokePairingRequest(decodeURIComponent(mPairRevoke[1]).trim().toUpperCase(), actor);
       if (!ok) { sendApiError(res, 404, '配对码不存在、已处理或已过期'); return true; }
       sendNoContent(res);
-    } catch (e) {
-      if (e instanceof PairError) { sendJson(res, e.status, { error: e.message }); return true; }
-      throw e;
-    }
-    return true;
-  }
-
-  // 发起配对:校验 配对码 + 用户ID → 挂起待确认;IP 限速防枚举
-  if (p === '/api/pair' && method === 'POST') {
-    if (!ctx.rate.allow('pair:' + remoteIp(req), 10, 60_000)) {
-      sendJson(res, 429, { error: '尝试过于频繁,请稍后再试' });
-      return true;
-    }
-    const body = await readBody(req, 64 * 1024);
-    let json: Record<string, unknown>;
-    try { json = JSON.parse(body.toString('utf8')); } catch { sendJson(res, 400, { error: '无效的 JSON' }); return true; }
-    const pairingCode = typeof json.pairingCode === 'string' ? json.pairingCode.trim().toUpperCase() : '';
-    const userId = typeof json.userId === 'string' ? json.userId.trim() : '';
-    const deviceId = typeof json.deviceId === 'string' ? json.deviceId.trim().slice(0, 64) : '';
-    const deviceName = typeof json.deviceName === 'string' ? json.deviceName.trim().slice(0, 128) : '';
-    const explicitPlat = typeof json.platform === 'string' ? json.platform.trim().slice(0, 32) : null;
-    const platform = detectPlatform(explicitPlat, req.headers['user-agent'], deviceName);
-    if (!pairingCode || !userId || !deviceId) { sendJson(res, 400, { error: 'pairingCode、userId、deviceId 不能为空' }); return true; }
-    try {
-      const r = svc.pair(pairingCode, userId, deviceId, deviceName, remoteIp(req), platform);
-      sendJson(res, 200, r);
-    } catch (e) {
-      if (e instanceof PairError) { sendJson(res, e.status, { error: e.message }); return true; }
-      throw e;
-    }
-    return true;
-  }
-
-  // 新设备轮询配对结果:免认证(凭 码+自身deviceId)
-  if (p === '/api/pair/status' && method === 'GET') {
-    const pairingCode = (url.searchParams.get('code') ?? '').trim().toUpperCase();
-    const deviceId = url.searchParams.get('deviceId') ?? '';
-    if (!pairingCode || !deviceId) { sendJson(res, 400, { error: 'code 与 deviceId 不能为空' }); return true; }
-    sendJson(res, 200, svc.pairStatus(pairingCode, deviceId));
-    return true;
-  }
-
-  // 配对确认/拒绝:管理端会话 | 同组用户会话 | 生成方(码+生成方设备ID)
-  if (p === '/api/pairing-requests/confirm' && method === 'POST') {
-    const body = await readBody(req, 64 * 1024);
-    let json: Record<string, unknown>;
-    try { json = JSON.parse(body.toString('utf8')); } catch { sendJson(res, 400, { error: '无效的 JSON' }); return true; }
-    const pairingCode = typeof json.code === 'string' ? json.code.trim().toUpperCase() : '';
-    const action = json.action === 'reject' ? 'reject' : json.action === 'approve' ? 'approve' : null;
-    if (!pairingCode || !action) { sendJson(res, 400, { error: 'code 与 action 不能为空' }); return true; }
-    let actor:
-      | { kind: 'admin' }
-      | { kind: 'user'; userId: string }
-      | { kind: 'secret'; generatorId: string } = { kind: 'secret', generatorId: '' };
-    if (ctx.actor?.role === 'admin') actor = { kind: 'admin' };
-    else if (ctx.actor?.role === 'user' && ctx.actor.userId) actor = { kind: 'user', userId: ctx.actor.userId };
-    else {
-      const generatorId = typeof json.generatorId === 'string' ? json.generatorId.trim().slice(0, 64) : '';
-      if (!generatorId || !deviceActor || deviceActor.Id !== generatorId) {
-        if (ctx.invalidDeviceSession) sendApiError(res, 410, '网页会话关联的设备已被移除或重新配对,请重新登录');
-        else if (svc.deviceCredentialStatus(requestDeviceId, requestDeviceToken) === 'revoked') sendApiError(res, 410, '设备已被移除,请重新配对');
-        else sendJson(res, 403, { error: '请使用生成配对码的设备凭证确认请求' });
-        return true;
-      }
-      actor = { kind: 'secret', generatorId };
-    }
-    try {
-      const r = svc.confirmPairing(pairingCode, action, actor);
-      svc.addAudit(action === 'approve' ? 'pair_approve' : 'pair_reject', '配对码 ' + pairingCode, remoteIp(req));
-      sendJson(res, 200, r);
-    } catch (e) {
-      if (e instanceof PairError) { sendJson(res, e.status, { error: e.message }); return true; }
-      throw e;
-    }
-    return true;
-  }
-
-  // 待确认请求列表:管理端全部 / 用户会话本组 / 生成方(码+生成方设备ID)
-  if (p === '/api/pairing-requests' && method === 'GET') {
-    let scope: { kind: 'admin' } | { kind: 'user'; userId: string } | { kind: 'secret'; generatorId: string; code: string };
-    if (ctx.actor?.role === 'admin') scope = { kind: 'admin' };
-    else if (ctx.actor?.role === 'user' && ctx.actor.userId) scope = { kind: 'user', userId: ctx.actor.userId };
-    else {
-      const code = (url.searchParams.get('code') ?? '').trim().toUpperCase();
-      const generatorId = url.searchParams.get('generatorId') ?? '';
-      if (!code || !generatorId || !deviceActor || deviceActor.Id !== generatorId) {
-        if (ctx.invalidDeviceSession) sendApiError(res, 410, '网页会话关联的设备已被移除或重新配对,请重新登录');
-        else if (svc.deviceCredentialStatus(requestDeviceId, requestDeviceToken) === 'revoked') sendApiError(res, 410, '设备已被移除,请重新配对');
-        else sendJson(res, 403, { error: '请使用生成配对码的设备凭证查看请求' });
-        return true;
-      }
-      scope = { kind: 'secret', generatorId, code };
-    }
-    sendJson(res, 200, svc.listPairingRequests(scope));
-    return true;
-  }
-
-  // 配对确认后换取用户网页会话
-  if (p === '/api/session/pair' && method === 'POST') {
-    const body = await readBody(req, 64 * 1024);
-    let json: Record<string, unknown>;
-    try { json = JSON.parse(body.toString('utf8')); } catch { sendJson(res, 400, { error: '无效的 JSON' }); return true; }
-    const pairingCode = typeof json.code === 'string' ? json.code.trim().toUpperCase() : '';
-    const deviceId = typeof json.deviceId === 'string' ? json.deviceId.trim().slice(0, 64) : '';
-    if (!pairingCode || !deviceId) { sendJson(res, 400, { error: 'code 与 deviceId 不能为空' }); return true; }
-    try {
-      const payload = svc.sessionForPair(pairingCode, deviceId);
-      const token = ctx.sessions.create(payload, cfg.sessionTtlHours);
-      sendJson(res, 200, { token, role: 'user', userId: payload.userId, expiresAt: new Date(Date.now() + cfg.sessionTtlHours * 3600_000).toISOString() });
     } catch (e) {
       if (e instanceof PairError) { sendJson(res, e.status, { error: e.message }); return true; }
       throw e;

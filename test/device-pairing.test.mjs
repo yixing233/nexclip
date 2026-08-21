@@ -72,7 +72,7 @@ try {
 
   const first = await api('/api/pairing-codes', json({ deviceId: 'device-a', deviceName: 'A' }));
   assert.equal(first.res.status, 200, JSON.stringify(first.body));
-  assert.match(first.body.code, /^[A-Z0-9]{8}$/);
+  assert.match(first.body.code, /^[0-9]{6}$/);
   assert.ok(first.body.userId);
   assert.ok(first.body.deviceToken);
 
@@ -91,36 +91,19 @@ try {
   });
   assert.equal(revokeLegacyCode.res.status, 204, JSON.stringify(revokeLegacyCode.body));
 
-  const secondRequest = await api('/api/pair', json({
-    pairingCode: first.body.code,
-    userId: first.body.userId,
+  // 单向 6 位验证码即入配对
+  const secondPair = await api('/api/pair', json({
+    code: first.body.code,
     deviceId: 'device-b',
     deviceName: 'B',
   }));
-  assert.equal(secondRequest.res.status, 200, JSON.stringify(secondRequest.body));
-  assert.equal(secondRequest.body.status, 'pending');
-  const oldToken = secondRequest.body.deviceToken;
+  assert.equal(secondPair.res.status, 200, JSON.stringify(secondPair.body));
+  assert.equal(secondPair.body.status, 'approved');
+  assert.equal(secondPair.body.userId, first.body.userId);
+  const oldToken = secondPair.body.deviceToken;
   assert.ok(oldToken);
-
-  const approve = await api('/api/pairing-requests/confirm', {
-    ...json({ code: first.body.code, action: 'approve', generatorId: 'device-a' }),
-    headers: deviceHeaders('device-a', first.body.deviceToken),
-  });
-  assert.equal(approve.res.status, 200, JSON.stringify(approve.body));
-
-  const status = await api(`/api/pair/status?code=${encodeURIComponent(first.body.code)}&deviceId=device-b`);
-  assert.equal(status.res.status, 200);
-  assert.equal(status.body.status, 'approved');
-
-  const webSession = await api('/api/session/pair', {
-    ...json({ code: first.body.code, deviceId: 'device-b' }),
-  });
-  assert.equal(webSession.res.status, 200, JSON.stringify(webSession.body));
-  assert.ok(webSession.body.token);
-  const duplicateSession = await api('/api/session/pair', {
-    ...json({ code: first.body.code, deviceId: 'device-b' }),
-  });
-  assert.equal(duplicateSession.res.status, 409, JSON.stringify(duplicateSession.body));
+  const webSessionToken = secondPair.body.token;
+  assert.ok(webSessionToken);
 
   const push = await api('/api/clipboard', {
     method: 'PUT',
@@ -148,8 +131,8 @@ try {
   });
   assert.equal(remove.res.status, 204, JSON.stringify(remove.body));
 
-  const staleWebSession = await api('/api/devices', {
-    headers: { Authorization: 'Bearer ' + webSession.body.token },
+  const staleWebSession = await api('/api/me', {
+    headers: { Authorization: 'Bearer ' + webSessionToken },
   });
   assert.equal(staleWebSession.res.status, 410, JSON.stringify(staleWebSession.body));
 
@@ -179,21 +162,14 @@ try {
   assert.equal(secondCode.res.status, 200, JSON.stringify(secondCode.body));
 
   const rePair = await api('/api/pair', json({
-    pairingCode: secondCode.body.code,
-    userId: secondCode.body.userId,
+    code: secondCode.body.code,
     deviceId: 'device-b',
     deviceName: 'B re-paired',
   }));
   assert.equal(rePair.res.status, 200, JSON.stringify(rePair.body));
-  assert.equal(rePair.body.status, 'pending');
+  assert.equal(rePair.body.status, 'approved');
   const newToken = rePair.body.deviceToken;
   assert.ok(newToken && newToken !== oldToken);
-
-  const approveAgain = await api('/api/pairing-requests/confirm', {
-    ...json({ code: secondCode.body.code, action: 'approve', generatorId: 'device-a' }),
-    headers: deviceHeaders('device-a', first.body.deviceToken),
-  });
-  assert.equal(approveAgain.res.status, 200, JSON.stringify(approveAgain.body));
 
   const oldTokenAgain = await api('/api/clipboard', {
     method: 'PUT',
