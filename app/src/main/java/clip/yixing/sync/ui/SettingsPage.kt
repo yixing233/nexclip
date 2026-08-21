@@ -1279,8 +1279,8 @@ internal fun SettingsPage(
         }
     }
 
-    // 生成的配对码用底部弹层查看
-    OverlayBottomSheet(
+    // 生成的配对码用对话框展示(关闭后立即失效)
+    OverlayDialog(
         show = showCodeSheet,
         title = "设备配对验证码",
         onDismissRequest = {
@@ -1301,8 +1301,7 @@ internal fun SettingsPage(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .windowInsetsPadding(WindowInsets.navigationBars)
-                    .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // 1. 6 位数字卡片
@@ -1317,7 +1316,7 @@ internal fun SettingsPage(
                 ) {
                     Column {
                         Text(
-                            text = "6 位配对验证码",
+                            text = "6 位数字验证码",
                             fontSize = 12.sp,
                             color = MiuixTheme.colorScheme.onBackgroundVariant
                         )
@@ -1340,11 +1339,31 @@ internal fun SettingsPage(
 
                 Spacer(Modifier.height(14.dp))
                 Text(
-                    text = "在另一台设备上输入上述 6 位数字验证码即可直接加入。\n关闭弹层后验证码立即失效。",
+                    text = "在另一台设备上输入上述 6 位数字验证码即可直接连接。\n关闭对话框后验证码立即失效。",
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                     fontSize = 12.sp,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
+
+                Spacer(Modifier.height(16.dp))
+                Button(
+                    onClick = {
+                        showCodeSheet = false
+                        val revokeCode = generatedCode?.code
+                        generatedCode = null
+                        if (revokeCode != null) {
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    runCatching { SyncApi(SyncSettings.serverUrl(context), SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context)).revokePairingCode(revokeCode) }
+                                }
+                                devicesReload++
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("完成并关闭")
+                }
             }
         }
     }
