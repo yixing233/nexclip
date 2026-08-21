@@ -1,52 +1,48 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Card, Form, Input, Button, message, Typography, theme, Spin, Tag } from 'antd'
-import { Cloud, User, Lock, Link2 } from 'lucide-react'
-import { login as apiLogin, pairDevice, pairStatus, createPairSession, setSession } from '../api'
+import { User, Lock, ArrowRight } from 'lucide-react'
+import { login as apiLogin, pairDirect, setSession, getDefaultDeviceName } from '../api'
 
-const { Title } = Typography
+const { Title, Text } = Typography
 
-/** mode: 'user' = /index/login(配对码);'admin' = /pro/login(账密) */
+/** mode: 'user' = /index/login(6位码/扫码直连); 'admin' = /pro/login(账密) */
 export default function LoginPage({ mode, onLogin }: { mode: 'user' | 'admin'; onLogin: () => void }) {
   const { token } = theme.useToken()
   const [loading, setLoading] = useState(false)
+  const [autoPairing, setAutoPairing] = useState(false)
 
   const [pairCode, setPairCode] = useState('')
-  const [pairUid, setPairUid] = useState('')
-  const [pairName, setPairName] = useState('Web 浏览器')
-  const [pairState, setPairState] = useState<'idle' | 'waiting' | 'approved' | 'rejected' | 'expired'>('idle')
-  const pollRef = useRef<number | null>(null)
+  const [pairName, setPairName] = useState(getDefaultDeviceName())
 
-  const stopPoll = () => {
-    if (pollRef.current !== null) { clearInterval(pollRef.current); pollRef.current = null }
-  }
-  useEffect(() => stopPoll, [])
+  // 1. 扫码直连捕获: 检测 URL 中是否存在 pairCode 参数
+  useEffect(() => {
+    if (mode !== 'user') return
+    const urlParams = new URLSearchParams(window.location.search)
+    const codeFromUrl = urlParams.get('pairCode')
+    if (codeFromUrl && codeFromUrl.trim().length === 6) {
+      setAutoPairing(true)
+      setPairCode(codeFromUrl.trim())
+      doDirectPair(codeFromUrl.trim())
+    }
+  }, [mode])
 
-  const doPair = async () => {
-    const code = pairCode.trim().toUpperCase()
-    const uid = pairUid.trim()
-    if (!code || !uid) { message.warning('请输入配对码与用户ID'); return }
+  // 2. 6 位数字单向即入配对 (方案 1 扫码直连 + 方案 2 纯 6 位验证码)
+  const doDirectPair = async (codeToUse?: string) => {
+    const code = (codeToUse || pairCode).trim()
+    if (!code || code.length < 6) {
+      message.warning('请输入 6 位配对验证码')
+      return
+    }
     setLoading(true)
     try {
-      await pairDevice(code, uid, pairName.trim() || 'Web 浏览器')
-      setPairState('waiting')
-      pollRef.current = window.setInterval(async () => {
-        try {
-          const st = await pairStatus(code)
-          if (st.status === 'approved') {
-            stopPoll()
-            setPairState('approved')
-            const sess = await createPairSession(code)
-            setSession(sess.token, 'user', sess.userId)
-            message.success('配对成功')
-            onLogin()
-          } else if (st.status === 'rejected') {
-            stopPoll(); setPairState('rejected')
-          } else if (st.status === 'expired') {
-            stopPoll(); setPairState('expired')
-          }
-        } catch { /* 轮询失败重试 */ }
-      }, 3000)
+      const res = await pairDirect(code, pairName.trim() || getDefaultDeviceName())
+      setSession(res.token, 'user', res.userId)
+      message.success('配对成功！已加入同步组')
+      // 清除 URL 中的 pairCode 参数，保持地址干净
+      window.history.replaceState({}, '', window.location.pathname)
+      onLogin()
     } catch (e) {
+      setAutoPairing(false)
       message.error((e as Error).message)
     } finally {
       setLoading(false)
@@ -57,73 +53,162 @@ export default function LoginPage({ mode, onLogin }: { mode: 'user' | 'admin'; o
     setLoading(true)
     try {
       const ok = await apiLogin(values.username.trim(), values.password)
-      if (ok) { message.success('登录成功'); onLogin() }
-      else message.error('用户名或密码错误')
-    } finally { setLoading(false) }
+      if (ok) {
+        message.success('登录成功')
+        onLogin()
+      } else {
+        message.error('用户名或密码错误')
+      }
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
-    <div id="clipsync-login-page" className="clipsync-login-page" style={{
-      minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: 'linear-gradient(135deg, ' + token.colorPrimaryBg + ' 0%, ' + token.colorBgLayout + ' 100%)',
-    }}>
-      <Card id="clipsync-login-card" className="clipsync-login-card" style={{ width: 400, boxShadow: '0 8px 30px rgba(0,0,0,0.08)', borderRadius: 16 }}>
-        <div style={{ textAlign: 'center', marginBottom: 22 }}>
-          <Cloud size={44} color="#2563EB" />
-          <Title level={3} style={{ marginTop: 10, marginBottom: 0 }}>ClipSync</Title>
+    <div
+      id="clipsync-login-page"
+      className="clipsync-login-page"
+      style={{
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'linear-gradient(135deg, ' + token.colorPrimaryBg + ' 0%, ' + token.colorBgLayout + ' 100%)',
+        padding: 16,
+      }}
+    >
+      <Card
+        id="clipsync-login-card"
+        className="clipsync-login-card"
+        style={{
+          width: 420,
+          maxWidth: '100%',
+          boxShadow: '0 12px 36px rgba(0,0,0,0.08)',
+          borderRadius: 20,
+          border: '1px solid rgba(0, 0, 0, 0.06)',
+        }}
+      >
+        <div style={{ textAlign: 'center', marginBottom: 24 }}>
+          <img
+            src="/logo.png"
+            alt="NexClip Logo"
+            style={{ width: 60, height: 60, borderRadius: 14, objectFit: 'contain' }}
+          />
+          <Title level={3} style={{ marginTop: 12, marginBottom: 4, fontWeight: 700 }}>
+            NexClip
+          </Title>
+          <Text type="secondary" style={{ fontSize: 13 }}>
+            {mode === 'user' ? '多端剪贴板实时协同' : '系统管理控制台'}
+          </Text>
         </div>
 
         {mode === 'user' ? (
-          pairState === 'waiting' || pairState === 'approved' ? (
-            <div style={{ textAlign: 'center', padding: '26px 0' }}>
+          autoPairing ? (
+            <div style={{ textAlign: 'center', padding: '32px 0' }}>
               <Spin size="large" />
-              {pairState === 'approved' ? null : (
-                <Button type="link" size="small" style={{ marginTop: 12, display: 'block', marginLeft: 'auto', marginRight: 'auto' }} onClick={() => { stopPoll(); setPairState('idle') }}>
-                  取消
-                </Button>
-              )}
-            </div>
-          ) : pairState === 'rejected' || pairState === 'expired' ? (
-            <div style={{ textAlign: 'center', padding: '18px 0' }}>
-              <Tag color={pairState === 'rejected' ? 'red' : 'orange'}>{pairState === 'rejected' ? '配对被拒绝' : '配对码已过期'}</Tag>
-              <div style={{ marginTop: 10 }}>
-                <Button onClick={() => setPairState('idle')}>重新配对</Button>
+              <div style={{ marginTop: 20, fontSize: 15, fontWeight: 600 }}>
+                📱 正在通过扫码直连加入同步组...
               </div>
+              <Text type="secondary" style={{ fontSize: 13, marginTop: 8, display: 'block' }}>
+                验证通过后将自动进入控制台
+              </Text>
             </div>
           ) : (
-            <Form layout="vertical" onFinish={doPair}>
-              <Form.Item label="配对码" required style={{ marginBottom: 14 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                  <Text strong style={{ fontSize: 14 }}>
+                    6 位配对验证码
+                  </Text>
+                  <Tag color="blue" style={{ margin: 0, borderRadius: 6, fontSize: 11 }}>
+                    单向即入 · 5 分钟有效
+                  </Tag>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'center', margin: '8px 0 14px' }}>
+                  <Input
+                    placeholder="例如: 839201"
+                    size="large"
+                    maxLength={6}
+                    value={pairCode}
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/\D/g, '')
+                      setPairCode(val)
+                      if (val.length === 6) doDirectPair(val)
+                    }}
+                    style={{
+                      fontFamily: 'Consolas, monospace',
+                      fontSize: 24,
+                      textAlign: 'center',
+                      letterSpacing: 8,
+                      borderRadius: 12,
+                      height: 52,
+                      fontWeight: 700,
+                    }}
+                  />
+                </div>
+                <div style={{ fontSize: 12, color: '#9CA3AF', textAlign: 'center' }}>
+                  在已连接设备点击「添加设备」，输入屏幕显示的 6 位纯数字即可连接
+                </div>
+              </div>
+
+              <div>
+                <Text type="secondary" style={{ fontSize: 12, marginBottom: 6, display: 'block' }}>
+                  本设备名称 (选填):
+                </Text>
                 <Input
-                  placeholder="配对码" size="large" maxLength={8} value={pairCode}
-                  onChange={e => setPairCode(e.target.value.toUpperCase())}
-                  style={{ fontFamily: 'Consolas, monospace', letterSpacing: 3 }}
+                  placeholder="设备名称"
+                  size="middle"
+                  value={pairName}
+                  onChange={(e) => setPairName(e.target.value)}
+                  maxLength={32}
+                  style={{ borderRadius: 8 }}
                 />
-              </Form.Item>
-              <Form.Item label="用户ID" required style={{ marginBottom: 14 }}>
-                <Input
-                  placeholder="用户ID" size="large" value={pairUid}
-                  onChange={e => setPairUid(e.target.value.trim())}
-                  style={{ fontFamily: 'Consolas, monospace', letterSpacing: 2 }}
-                />
-              </Form.Item>
-              <Form.Item label="设备名称" style={{ marginBottom: 18 }}>
-                <Input placeholder="设备名称" size="large" value={pairName} onChange={e => setPairName(e.target.value)} maxLength={32} />
-              </Form.Item>
-              <Button type="primary" htmlType="submit" block size="large" loading={loading} icon={<Link2 size={16} />}>
-                提交
+              </div>
+
+              <Button
+                type="primary"
+                block
+                size="large"
+                loading={loading}
+                disabled={pairCode.length !== 6}
+                onClick={() => doDirectPair()}
+                icon={<ArrowRight size={16} />}
+                style={{ borderRadius: 10, height: 44, fontWeight: 600, marginTop: 6 }}
+              >
+                立即连接并登录
               </Button>
-            </Form>
+            </div>
           )
         ) : (
           <Form layout="vertical" onFinish={doAdminLogin}>
             <Form.Item name="username" label="用户名" rules={[{ required: true, message: '请输入用户名' }]}>
-              <Input id="clipsync-login-username" prefix={<User size={15} color="#9CA3AF" />} size="large" autoComplete="username" />
+              <Input
+                id="clipsync-login-username"
+                prefix={<User size={15} color="#9CA3AF" />}
+                size="large"
+                autoComplete="username"
+                style={{ borderRadius: 10 }}
+              />
             </Form.Item>
             <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}>
-              <Input.Password id="clipsync-login-password" prefix={<Lock size={15} color="#9CA3AF" />} size="large" autoComplete="current-password" />
+              <Input.Password
+                id="clipsync-login-password"
+                prefix={<Lock size={15} color="#9CA3AF" />}
+                size="large"
+                autoComplete="current-password"
+                style={{ borderRadius: 10 }}
+              />
             </Form.Item>
-            <Button id="clipsync-login-submit" type="primary" htmlType="submit" block size="large" loading={loading}>
-              登录
+            <Button
+              type="primary"
+              htmlType="submit"
+              block
+              size="large"
+              loading={loading}
+              style={{ borderRadius: 10, height: 44, fontWeight: 600, marginTop: 10 }}
+            >
+              登录管理员台
             </Button>
           </Form>
         )}

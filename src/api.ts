@@ -29,6 +29,9 @@ export interface DeviceInfo {
 export interface PairingCode {
   code: string;
   expiresAt: string;
+  userId?: string;
+  deviceToken?: string;
+  qrPayload?: string;
 }
 
 export type ActivityAction = 'push' | 'receive' | 'connect' | 'delete';
@@ -113,22 +116,40 @@ export function setToken(t: string | null) {
   }
 }
 
+async function readResponseSafely<T = unknown>(res: Response): Promise<{ data: T | null; text: string; invalidJson: boolean }> {
+  // Response body is a one-shot stream. Always consume the original response exactly once.
+  const text = await res.text();
+  if (!text.trim()) return { data: null, text: '', invalidJson: false };
+  try {
+    return { data: JSON.parse(text) as T, text, invalidJson: false };
+  } catch {
+    return { data: null, text, invalidJson: true };
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(init?.headers as Record<string, string> | undefined),
-  };
+  const headers: Record<string, string> = { ...(init?.headers as Record<string, string> | undefined) };
+  // FormData must keep the browser-generated multipart boundary. Setting a
+  // JSON content type here makes image uploads unparsable on the server.
+  if (!(init?.body instanceof FormData) && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
   const token = getToken();
   if (token) headers['Authorization'] = 'Bearer ' + token;
   const res = await fetch(path, { ...init, headers });
+  const parsed = await readResponseSafely<Record<string, unknown>>(res);
   if (res.status === 401) {
     setToken(null);
     window.dispatchEvent(new Event('clipsync:unauthorized'));
-    throw new Error('未授权');
   }
-  if (!res.ok) throw new Error('请求失败: ' + res.status + ' ' + res.statusText);
-  if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+  if (!res.ok) {
+    const errMsg = (parsed.data && typeof parsed.data.error === 'string')
+      ? parsed.data.error
+      : parsed.invalidJson
+        ? `服务器返回了无效响应(${res.status})`
+        : `请求失败: ${res.status} ${res.statusText}`;
+    throw new Error(errMsg);
+  }
+  if (res.status === 204 || parsed.data === null) return undefined as T;
+  return parsed.data as T;
 }
 
 // ---------- API 函数 ----------
@@ -141,9 +162,11 @@ export async function login(username: string, password: string): Promise<boolean
       body: JSON.stringify({ username, password }),
     });
     if (res.status === 401) return false;
-    if (!res.ok) throw new Error('登录失败(' + res.status + ')');
-    const j = (await res.json()) as { token: string; role?: 'admin' | 'user'; username?: string };
-    setSession(j.token, j.role ?? 'admin', undefined, j.username);
+    const parsed = await readResponseSafely<{ token: string; role?: 'admin' | 'user'; username?: string; error?: string }>(res);
+    if (!res.ok || !parsed.data?.token) {
+      throw new Error(parsed.data?.error || `登录失败(${res.status})`);
+    }
+    setSession(parsed.data.token, parsed.data.role ?? 'admin', undefined, parsed.data.username);
     return true;
   } catch (e) {
     console.error('login error', e);
@@ -197,11 +220,12 @@ export function pushText(text: string, deviceId: string, deviceName: string): Pr
   });
 }
 
-export function pushImage(file: File, deviceId: string, deviceName: string): Promise<ClipboardEntry> {
+export function pushImage(file: File | Blob, deviceId: string, deviceName: string): Promise<ClipboardEntry> {
   const form = new FormData();
-  form.append('file', file);
+  form.append('file', file, file instanceof File ? file.name : 'clipboard.png');
   form.append('deviceId', deviceId);
-  form.append('deviceName', deviceName);
+  form.append('deviceName', deviceName || getDefaultDeviceName());
+  form.append('platform', getBrowserPlatform());
   return request<ClipboardEntry>('/api/clipboard/image', { method: 'POST', body: form });
 }
 
@@ -224,7 +248,7 @@ export function removeDevice(id: string): Promise<void> {
 export function createPairingCode(): Promise<PairingCode & { userId: string }> {
   return request<PairingCode & { userId: string }>('/api/pairing-codes', {
     method: 'POST',
-    body: JSON.stringify({ deviceId: deviceId(), deviceName: 'Web 管理页' }),
+    body: JSON.stringify({ deviceId: deviceId(), deviceName: getDefaultDeviceName(), platform: getBrowserPlatform() }),
   });
 }
 
@@ -233,19 +257,47 @@ export async function pairDevice(pairingCode: string, userId: string, deviceName
   const res = await fetch('/api/pair', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pairingCode, userId, deviceId: deviceId(), deviceName }),
+    body: JSON.stringify({
+      pairingCode,
+      userId,
+      deviceId: deviceId(),
+      deviceName: deviceName || getDefaultDeviceName(),
+      platform: getBrowserPlatform(),
+    }),
   });
-  let err = '';
-  try { err = (await res.json()).error ?? '' } catch { /* ignore */ }
-  if (!res.ok) throw new Error(err || '配对失败(' + res.status + ')');
-  return res.json();
+  const parsed = await readResponseSafely<{ status?: string; error?: string; deviceToken?: string }>(res);
+  if (!res.ok) throw new Error(parsed.data?.error || `配对失败(${res.status})`);
+  return (parsed.data || { status: 'unknown' }) as { status: string; deviceToken?: string };
+}
+
+/** 单向即入配对(方案 1 扫码直连 + 方案 2 纯 6 位数字验证码):凭码直接登录并接入用户组 */
+export async function pairDirect(
+  code: string,
+  deviceName?: string
+): Promise<{ status: string; userId: string; token: string; deviceToken: string }> {
+  const res = await fetch('/api/pair/direct', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      code: code.trim(),
+      deviceId: deviceId(),
+      deviceName: deviceName || getDefaultDeviceName(),
+      platform: getBrowserPlatform(),
+    }),
+  });
+  const parsed = await readResponseSafely<{ status?: string; userId?: string; token?: string; deviceToken?: string; error?: string }>(res);
+  if (!res.ok || !parsed.data?.token) {
+    throw new Error(parsed.data?.error || `配对失败(${res.status})`);
+  }
+  return parsed.data as { status: string; userId: string; token: string; deviceToken: string };
 }
 
 /** 轮询配对结果(免认证):pending / approved / rejected / expired */
 export async function pairStatus(pairingCode: string): Promise<{ status: string; userId?: string }> {
   const res = await fetch('/api/pair/status?code=' + encodeURIComponent(pairingCode) + '&deviceId=' + encodeURIComponent(deviceId()));
-  if (!res.ok) throw new Error('状态查询失败(' + res.status + ')');
-  return res.json();
+  const parsed = await readResponseSafely<{ status?: string; userId?: string; error?: string }>(res);
+  if (!res.ok) throw new Error(parsed.data?.error || `状态查询失败(${res.status})`);
+  return (parsed.data || { status: 'not-found' }) as { status: string; userId?: string };
 }
 
 /** 配对确认后换取用户网页会话 */
@@ -255,10 +307,11 @@ export async function createPairSession(pairingCode: string): Promise<{ token: s
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ code: pairingCode, deviceId: deviceId() }),
   });
-  let err = '';
-  try { err = (await res.json()).error ?? '' } catch { /* ignore */ }
-  if (!res.ok) throw new Error(err || '会话建立失败(' + res.status + ')');
-  return res.json();
+  const parsed = await readResponseSafely<{ token?: string; role?: 'user'; userId?: string; error?: string }>(res);
+  if (!res.ok || !parsed.data?.token) {
+    throw new Error(parsed.data?.error || `会话建立失败(${res.status})`);
+  }
+  return parsed.data as { token: string; role: 'user'; userId: string };
 }
 
 /** 作废未使用的配对码 */
@@ -307,13 +360,25 @@ export function getAudit(limit = 50): Promise<Array<{ id: number; action: string
   return request('/api/admin/audit?limit=' + limit);
 }
 
-/** 管理台运行设置:历史上限(服务端持久化,修改立即生效) */
-export function getAdminSettings(): Promise<{ maxHistoryCount: number }> {
-  return request('/api/admin/settings');
+/** 管理台运行设置:历史上限 + 存储位置(服务端持久化,修改立即生效) */
+export interface AdminSettings {
+  maxHistoryCount: number
+  imageStoragePath: string
+  databasePath: string
 }
 
-export function putAdminSettings(maxHistoryCount: number): Promise<{ maxHistoryCount: number }> {
-  return request('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ maxHistoryCount }) });
+export function getAdminSettings(): Promise<AdminSettings> {
+  return request<AdminSettings>('/api/admin/settings');
+}
+
+export function putAdminSettings(partial: { maxHistoryCount?: number; imageStoragePath?: string }): Promise<AdminSettings & { storageApplied?: { path: string; moved: number } }> {
+  return request('/api/admin/settings', { method: 'PUT', body: JSON.stringify(partial) });
+}
+
+/** 管理端:浏览服务端目录(仅子目录,用于选择存储位置) */
+export function browseStorageDir(path?: string): Promise<{ path: string; parent: string | null; exists: boolean; dirs: string[] }> {
+  const q = path ? '?path=' + encodeURIComponent(path) : '';
+  return request('/api/admin/storage/browse' + q);
 }
 
 export function getActivities(limit = 20, userId?: string | null): Promise<ActivityLog[]> {
@@ -339,6 +404,38 @@ export function sendToDevices(text: string, deviceIds: string[]): Promise<Clipbo
 export function imageUrl(ref: string | null | undefined): string {
   if (!ref) return '';
   return '/api/images/' + ref;
+}
+
+/** 智能检测当前浏览器所在平台 (精细区分电脑端与手机端) */
+export function getBrowserPlatform(): string {
+  if (typeof navigator === 'undefined') return 'Web (Browser)';
+  const ua = navigator.userAgent.toLowerCase();
+  if (ua.includes('android')) return 'Web (Android)';
+  if (ua.includes('iphone') || ua.includes('ipod')) return 'Web (iOS)';
+  if (ua.includes('ipad')) return 'Web (iPadOS)';
+  if (ua.includes('windows nt') || ua.includes('windows')) return 'Web (Windows)';
+  if (ua.includes('macintosh') || ua.includes('mac os')) return 'Web (macOS)';
+  if (ua.includes('linux')) return 'Web (Linux)';
+  return 'Web (Browser)';
+}
+
+/** 智能生成默认设备名称 */
+export function getDefaultDeviceName(): string {
+  if (typeof navigator === 'undefined') return 'Web 控制台';
+  const ua = navigator.userAgent.toLowerCase();
+  let browser = 'Web 浏览器';
+  if (ua.includes('edg/')) browser = 'Edge';
+  else if (ua.includes('chrome/')) browser = 'Chrome';
+  else if (ua.includes('safari/') && !ua.includes('chrome')) browser = 'Safari';
+  else if (ua.includes('firefox/')) browser = 'Firefox';
+
+  if (ua.includes('android')) return `${browser} (Android 手机)`;
+  if (ua.includes('iphone')) return `${browser} (iPhone)`;
+  if (ua.includes('ipad')) return `${browser} (iPad)`;
+  if (ua.includes('windows')) return `${browser} (Windows)`;
+  if (ua.includes('macintosh') || ua.includes('mac os')) return `${browser} (Mac)`;
+  if (ua.includes('linux')) return `${browser} (Linux)`;
+  return `${browser} 端`;
 }
 
 /** 本端设备标识(localStorage 持久化) */

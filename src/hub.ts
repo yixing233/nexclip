@@ -1,5 +1,5 @@
 import * as signalR from '@microsoft/signalr'
-import { getToken, deviceId } from './api'
+import { getToken, deviceId, getBrowserPlatform, getDefaultDeviceName } from './api'
 
 export interface HubEvents {
   onClipboardUpdated: (entry: unknown) => void
@@ -12,8 +12,15 @@ let connection: signalR.HubConnection | null = null
 
 export function connectHub(events: HubEvents): void {
   if (connection) return
+  const hubUrl =
+    '/hubs/clipboard?deviceId=' +
+    encodeURIComponent(deviceId()) +
+    '&platform=' +
+    encodeURIComponent(getBrowserPlatform()) +
+    '&deviceName=' +
+    encodeURIComponent(getDefaultDeviceName())
   connection = new signalR.HubConnectionBuilder()
-    .withUrl('/hubs/clipboard?deviceId=' + encodeURIComponent(deviceId()), {
+    .withUrl(hubUrl, {
       accessTokenFactory: () => getToken() ?? '',
       skipNegotiation: false,
     })

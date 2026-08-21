@@ -15,6 +15,7 @@ import SyncRecordsPage from './pages/SyncRecordsPage'
 import SettingsPage from './pages/SettingsPage'
 import UsersPage from './pages/UsersPage'
 import UserPage from './pages/UserPage'
+import LandingPage from './pages/LandingPage'
 import { connectHub, disconnectHub } from './hub'
 import { getThemeMode, logout as apiLogout, deviceId, getRole, getMe, getHealth } from './api'
 import { addIncoming } from './chatStore'
@@ -158,8 +159,8 @@ function AdminConsole({
         style={{ borderRight: '1px solid ' + c.border, position: 'relative' }}
       >
         <div id="clipsync-sidebar-logo" className="clipsync-sidebar-logo" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '18px 20px' }}>
-          <Cloud size={26} color="#2563EB" />
-          <span style={{ fontSize: 18, fontWeight: 700, color: c.text }}>ClipSync</span>
+          <img src="/logo.png" alt="NexClip Logo" style={{ width: 28, height: 28, borderRadius: 6, objectFit: 'contain' }} />
+          <span style={{ fontSize: 18, fontWeight: 700, color: c.text }}>NexClip</span>
         </div>
         <Menu
           id="clipsync-sidebar-menu"
@@ -365,13 +366,20 @@ export default function App() {
     >
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<Navigate to="/index" replace />} />
+          {/* 产品官网首页 */}
+          <Route path="/" element={
+            <LandingPage
+              isDark={isDark}
+              onToggleTheme={() => setThemeModeState(isDark ? 'light' : 'dark')}
+              c={c}
+            />
+          } />
           {/* 用户端:/index(已登录=用户页;未登录跳 /index/login) */}
           <Route path="/index" element={
             !authed ? (
               <Navigate to="/index/login" replace />
             ) : role === 'user' ? (
-              <div style={{ minHeight: '100vh', background: '#F3F4F6', padding: 24 }}>
+              <div style={{ minHeight: '100vh', background: isDark ? '#0D1117' : '#F3F4F6', padding: 24 }}>
                 <UserPage refreshTick={refreshTick} onLogout={logout} />
               </div>
             ) : (
@@ -420,7 +428,7 @@ export default function App() {
               <Navigate to="/pro/overview" replace />
             )
           } />
-          <Route path="*" element={<Navigate to="/index" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
     </ConfigProvider>
