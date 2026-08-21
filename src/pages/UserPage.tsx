@@ -12,7 +12,7 @@ import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import {
-  getUserId, createPairingCode, revokePairingCode, listPairingRequests, confirmPairingRequest,
+  getUserId, createPairingCode, revokePairingCode,
   getDevices, removeDevice, getUser, renameUser, getActivities, deviceId,
   getHistory, deleteEntry, clearHistory, pushText, pushImage, getCurrentClipboard,
   imageUrl, type DeviceInfo, type ActivityLog, type ClipboardEntry,
@@ -21,15 +21,6 @@ import {
 dayjs.extend(relativeTime)
 const { Text, Title, Paragraph } = Typography
 const { TextArea } = Input
-
-interface PendingReq {
-  code: string
-  userId: string
-  deviceId: string | null
-  deviceName: string | null
-  status: string
-  createdAt: string
-}
 
 export default function UserPage({ refreshTick, onLogout }: { refreshTick: number; onLogout: () => void }) {
   const uid = getUserId() ?? ''
@@ -41,7 +32,6 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
   const [nameInput, setNameInput] = useState('')
   const [devices, setDevices] = useState<DeviceInfo[]>([])
   const [activities, setActivities] = useState<ActivityLog[]>([])
-  const [requests, setRequests] = useState<PendingReq[]>([])
 
   // 配对码 (方案 1 扫码直连 + 方案 2 纯 6 位数字单向即入)
   const [pairing, setPairing] = useState<{ code: string; expiresAt: number; qrPayload?: string } | null>(null)
@@ -75,7 +65,6 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
         })
         .catch((e) => console.warn('用户信息加载失败:', e))
 
-      listPairingRequests().then((r) => setRequests(r || [])).catch(() => {})
       getActivities(15).then((a) => setActivities(a || [])).catch(() => {})
     }
 
@@ -183,16 +172,7 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
     }
   }
 
-  // 确认或拒绝配对
-  const confirm = async (code: string, action: 'approve' | 'reject') => {
-    try {
-      await confirmPairingRequest(code, action)
-      message.success(action === 'approve' ? '已确认，设备加入本组' : '已拒绝配对')
-      loadAll()
-    } catch (e) {
-      message.error((e as Error).message)
-    }
-  }
+
 
   // 移除设备
   const removeDev = async (id: string, name: string) => {
@@ -989,71 +969,6 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
       {/* ==================== 3. 【设置与设备】板块 (Settings & Devices) ==================== */}
       {activeTab === 'settings' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {/* 待确认请求横幅 (仅在有待确认请求时高亮显示) */}
-          {requests.length > 0 && (
-            <Card
-              style={{
-                borderRadius: 16,
-                border: '1px solid #93C5FD',
-                background: 'rgba(239, 246, 255, 0.75)',
-              }}
-              styles={{ body: { padding: '16px 20px' } }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-                <Space size={10}>
-                  <Badge status="processing" color="#2563EB" />
-                  <span style={{ fontWeight: 600, fontSize: 14, color: '#1E40AF' }}>
-                    有 {requests.length} 台新设备正在请求接入你的设备组：
-                  </span>
-                </Space>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
-                {requests.map((r) => (
-                  <div
-                    key={r.code}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 12,
-                      padding: '10px 14px',
-                      background: '#FFFFFF',
-                      borderRadius: 10,
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
-                    }}
-                  >
-                    <Space size={10}>
-                      <Smartphone size={18} color="#2563EB" />
-                      <div>
-                        <div style={{ fontWeight: 600, fontSize: 13 }}>{r.deviceName ?? '未知新设备'}</div>
-                        <div style={{ fontSize: 11, color: '#9CA3AF' }}>
-                          设备ID: {r.deviceId ?? ''} · 请求于 {dayjs(r.createdAt).fromNow()}
-                        </div>
-                      </div>
-                    </Space>
-                    <Space>
-                      <Button
-                        size="small"
-                        type="primary"
-                        icon={<Check size={14} />}
-                        onClick={() => confirm(r.code, 'approve')}
-                      >
-                        允许接入
-                      </Button>
-                      <Button
-                        size="small"
-                        danger
-                        icon={<X size={14} />}
-                        onClick={() => confirm(r.code, 'reject')}
-                      >
-                        拒绝
-                      </Button>
-                    </Space>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          )}
 
           {/* 用户身份与快捷配对操作卡片 */}
           <Card style={{ borderRadius: 16 }} styles={{ body: { padding: '20px' } }}>

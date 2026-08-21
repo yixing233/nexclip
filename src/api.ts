@@ -244,38 +244,20 @@ export function removeDevice(id: string): Promise<void> {
   return request('/api/devices/' + encodeURIComponent(id), { method: 'DELETE' });
 }
 
-/** 生成一次性配对码(免认证;携带本端设备信息;未绑定设备自动创建用户ID,返回 userId) */
-export function createPairingCode(): Promise<PairingCode & { userId: string }> {
-  return request<PairingCode & { userId: string }>('/api/pairing-codes', {
+/** 生成 6 位纯数字配对码与扫码直连 URL */
+export function createPairingCode(): Promise<PairingCode & { userId: string; qrPayload?: string }> {
+  return request<PairingCode & { userId: string; qrPayload?: string }>('/api/pairing-codes', {
     method: 'POST',
     body: JSON.stringify({ deviceId: deviceId(), deviceName: getDefaultDeviceName(), platform: getBrowserPlatform() }),
   });
 }
 
-/** 发起配对(免认证):配对码 + 用户ID → 挂起待确认;返回 { status: 'pending' } */
-export async function pairDevice(pairingCode: string, userId: string, deviceName: string): Promise<{ status: string }> {
-  const res = await fetch('/api/pair', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      pairingCode,
-      userId,
-      deviceId: deviceId(),
-      deviceName: deviceName || getDefaultDeviceName(),
-      platform: getBrowserPlatform(),
-    }),
-  });
-  const parsed = await readResponseSafely<{ status?: string; error?: string; deviceToken?: string }>(res);
-  if (!res.ok) throw new Error(parsed.data?.error || `配对失败(${res.status})`);
-  return (parsed.data || { status: 'unknown' }) as { status: string; deviceToken?: string };
-}
-
-/** 单向即入配对(方案 1 扫码直连 + 方案 2 纯 6 位数字验证码):凭码直接登录并接入用户组 */
+/** 单向即入配对(方案 1 扫码直连 + 方案 2 纯 6 位数字验证码): 凭码直接准入并登录 */
 export async function pairDirect(
   code: string,
   deviceName?: string
 ): Promise<{ status: string; userId: string; token: string; deviceToken: string }> {
-  const res = await fetch('/api/pair/direct', {
+  const res = await fetch('/api/pair', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -292,44 +274,12 @@ export async function pairDirect(
   return parsed.data as { status: string; userId: string; token: string; deviceToken: string };
 }
 
-/** 轮询配对结果(免认证):pending / approved / rejected / expired */
-export async function pairStatus(pairingCode: string): Promise<{ status: string; userId?: string }> {
-  const res = await fetch('/api/pair/status?code=' + encodeURIComponent(pairingCode) + '&deviceId=' + encodeURIComponent(deviceId()));
-  const parsed = await readResponseSafely<{ status?: string; userId?: string; error?: string }>(res);
-  if (!res.ok) throw new Error(parsed.data?.error || `状态查询失败(${res.status})`);
-  return (parsed.data || { status: 'not-found' }) as { status: string; userId?: string };
-}
-
-/** 配对确认后换取用户网页会话 */
-export async function createPairSession(pairingCode: string): Promise<{ token: string; role: 'user'; userId: string }> {
-  const res = await fetch('/api/session/pair', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code: pairingCode, deviceId: deviceId() }),
-  });
-  const parsed = await readResponseSafely<{ token?: string; role?: 'user'; userId?: string; error?: string }>(res);
-  if (!res.ok || !parsed.data?.token) {
-    throw new Error(parsed.data?.error || `会话建立失败(${res.status})`);
-  }
-  return parsed.data as { token: string; role: 'user'; userId: string };
-}
+/** 别名 */
+export const pair = pairDirect;
 
 /** 作废未使用的配对码 */
 export function revokePairingCode(code: string): Promise<void> {
   return request('/api/pairing-codes/' + encodeURIComponent(code), { method: 'DELETE' });
-}
-
-/** 待确认配对请求列表(会话) */
-export function listPairingRequests(): Promise<Array<{ code: string; userId: string; deviceId: string | null; deviceName: string | null; status: string; createdAt: string }>> {
-  return request('/api/pairing-requests');
-}
-
-/** 确认/拒绝配对请求(生成方会话) */
-export function confirmPairingRequest(code: string, action: 'approve' | 'reject'): Promise<void> {
-  return request('/api/pairing-requests/confirm', {
-    method: 'POST',
-    body: JSON.stringify({ code, action }),
-  });
 }
 
 /** 用户信息(本组或管理端) */
