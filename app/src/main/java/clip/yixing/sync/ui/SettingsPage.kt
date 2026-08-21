@@ -1230,16 +1230,16 @@ internal fun SettingsPage(
 
     // ---- 对话框与弹层 ----
 
-    // 配对对话框 (6 位纯数字验证码单向即入)
+    // 配对对话框 (6 位纯数字配对码单向即入)
     OverlayDialog(
         show = showPairDialog,
         title = "加入设备组",
-        summary = "输入其他设备屏幕上显示的 6 位配对验证码即可直接接入",
+        summary = "输入其他设备屏幕上显示的 6 位配对码即可直接接入",
         onDismissRequest = { showPairDialog = false }
     ) {
         TextField(
             state = dialogCodeState,
-            label = "6 位数字验证码",
+            label = "6 位数字配对码",
             useLabelAsPlaceholder = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             modifier = Modifier.fillMaxWidth()
@@ -1267,7 +1267,7 @@ internal fun SettingsPage(
                         return@Button
                     }
                     if (code.isEmpty()) {
-                        scope.launch { snackbarHostState.showAppSnack("请输入 6 位配对验证码", SnackType.Info) }
+                        scope.launch { snackbarHostState.showAppSnack("请输入 6 位配对码", SnackType.Info) }
                         return@Button
                     }
                     pairing = true
@@ -1294,7 +1294,7 @@ internal fun SettingsPage(
                                 ClipboardMonitorService.start(context)
                             }
                         } else {
-                            val errMsg = directRes.exceptionOrNull()?.message ?: "配对验证失败，请检查验证码"
+                            val errMsg = directRes.exceptionOrNull()?.message ?: "配对失败，请检查配对码"
                             snackbarHostState.showAppSnack(errMsg, SnackType.Error)
                         }
                     }
@@ -1310,7 +1310,7 @@ internal fun SettingsPage(
     // 生成的配对码用对话框展示(关闭后立即失效)
     OverlayDialog(
         show = showCodeSheet,
-        title = "设备配对验证码",
+        title = "设备配对码",
         onDismissRequest = {
             showCodeSheet = false
             val revokeCode = generatedCode?.code
@@ -1344,7 +1344,7 @@ internal fun SettingsPage(
                 ) {
                     Column {
                         Text(
-                            text = "6 位数字验证码",
+                            text = "6 位数字配对码",
                             fontSize = 12.sp,
                             color = MiuixTheme.colorScheme.onBackgroundVariant
                         )
@@ -1358,16 +1358,16 @@ internal fun SettingsPage(
                     Button(
                         onClick = {
                             copyPairingCode(context, code.code)
-                            scope.launch { snackbarHostState.showAppSnack("验证码已复制", SnackType.Success) }
+                            scope.launch { snackbarHostState.showAppSnack("配对码已复制", SnackType.Success) }
                         }
                     ) {
-                        Text("复制验证码")
+                        Text("复制配对码")
                     }
                 }
 
                 Spacer(Modifier.height(14.dp))
                 Text(
-                    text = "在另一台设备上输入上述 6 位数字验证码即可直接连接。\n关闭对话框后验证码立即失效。",
+                    text = "在另一台设备上输入上述 6 位数字配对码即可直接连接。\n关闭对话框后配对码立即失效。",
                     color = MiuixTheme.colorScheme.onBackgroundVariant,
                     fontSize = 12.sp,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center
