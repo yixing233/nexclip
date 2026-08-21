@@ -68,6 +68,12 @@ public partial class HistoryItemViewModel : ObservableObject
 
     public bool IsImage => Item.Type == "Image";
 
+    /// <summary>条目是否为 http/https 链接。</summary>
+    public bool IsLink => Services.UrlUtil.IsUrl(Item.Text);
+
+    /// <summary>链接条目的展示文本(整段文本即链接时直接显示)。</summary>
+    public string LinkText => Item.Text?.Trim().Length > 90 ? Item.Text.Trim()[..90] + "…" : (Item.Text ?? "");
+
     // ---- x:Bind 辅助(hover 线框 / 选中态样式) ----
     // 边框厚度恒定 1px:只换颜色不换尺寸,避免 hover 时卡片"动一下"
     public Brush BorderBrushFor(bool selected, bool hovered) =>
@@ -90,6 +96,14 @@ public partial class HistoryItemViewModel : ObservableObject
     public ImageSource StarSource => Starred ? Services.Lucide.StarActive : Services.Lucide.Star;
 
     partial void OnStarredChanged(bool value) => OnPropertyChanged(nameof(StarSource));
+
+    /// <summary>编辑文本后同步更新卡片内容。</summary>
+    public void ApplyText(string text)
+    {
+        Item.Text = text;
+        OnPropertyChanged(nameof(PreviewText));
+        OnPropertyChanged(nameof(MetaText));
+    }
 
     private static BitmapImage? BuildThumbnail(string? path)
     {

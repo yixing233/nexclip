@@ -15,8 +15,10 @@ public sealed class SyncEngine : IDisposable
     private readonly DispatcherQueue _dispatcher;
     private ClipboardMonitor? _monitor;
     private PushClient? _push;
-    private string _lastUploadedHash = "";
+    // 上传与本地捕获解耦:网络重试不能阻塞剪贴板监听,否则连续复制会被监听器丢弃。
+    private readonly SemaphoreSlim _uploadGate = new(1, 1);
     private ConnState _state = ConnState.NotConfigured;
+    private int _credentialRecoveryInProgress;
 
     /// <summary>本地历史(SQLite)。</summary>
     public HistoryStore History { get; }
@@ -51,6 +53,16 @@ public sealed class SyncEngine : IDisposable
         _push = new PushClient();
         _push.EntryReceived += entry => _dispatcher.TryEnqueue(() => _ = HandlePushAsync(entry));
         _push.StateChanged += s => _dispatcher.TryEnqueue(() => HandlePushState(s));
+        _push.ErrorOccurred += ex => _dispatcher.TryEnqueue(() =>
+        {
+            if (IsDeviceAuthFailure(ex))
+            {
+                _ = RecoverLegacyCredentialOrInvalidateAsync(ex);
+                return;
+            }
+            ConnectionChanged?.Invoke(_state,
+                $"连接失败：{ServerApi.DescribeException(ex, "无法连接到同步服务。")} 自动重连中…");
+        });
         _ = ConnectAsync();
     }
 
@@ -70,11 +82,122 @@ public sealed class SyncEngine : IDisposable
         }
         if (_push is null) return;
 
+        // 旧版客户端只有 IsPaired，没有设备令牌。服务端为旧数据库中的已登记设备
+        // 提供一次性领取路径；领取后立即作废临时配对码，再按新协议连接。
+        if (string.IsNullOrWhiteSpace(s.AuthToken))
+        {
+            SetState(ConnState.Connecting, "正在升级设备凭证…");
+            try
+            {
+                var migration = await _svc.Api.CreatePairingCodeAsync(
+                    s.ServerUrl, s.DeviceId, s.DeviceName, "");
+                if (migration is null || string.IsNullOrWhiteSpace(migration.DeviceToken))
+                {
+                    s.IsPaired = false;
+                    s.Save();
+                    SetState(ConnState.NotConfigured, "旧设备凭证无法自动升级，请重新配对");
+                    return;
+                }
+
+                s.AuthToken = migration.DeviceToken;
+                s.Save();
+                if (!string.IsNullOrWhiteSpace(migration.Code))
+                {
+                    await _svc.Api.RevokePairingCodeAsync(
+                        s.ServerUrl, migration.Code, s.DeviceId, s.AuthToken);
+                }
+                Log.Info("旧设备凭证已自动升级");
+            }
+            catch (ApiException ex) when (ex.StatusCode is
+                System.Net.HttpStatusCode.Unauthorized or
+                System.Net.HttpStatusCode.Forbidden or
+                System.Net.HttpStatusCode.NotFound or
+                System.Net.HttpStatusCode.Conflict or
+                System.Net.HttpStatusCode.Gone)
+            {
+                s.IsPaired = false;
+                s.AuthToken = "";
+                s.Save();
+                SetState(ConnState.NotConfigured, "旧设备状态已失效，请重新配对");
+                return;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"旧设备凭证自动升级失败:{ex.Message}");
+                SetState(ConnState.Offline, "设备凭证升级失败，稍后重试");
+                return;
+            }
+        }
+
         SetState(ConnState.Connecting, "");
-        // 携带设备信息连接:服务端据此登记/更新设备列表(在线状态、名称、平台);同步接口免认证
-        await _push.ConnectAsync(s.ServerUrl, s.DeviceId, s.DeviceName, SystemInfo.Platform, SystemInfo.Version);
+        // 携带设备信息与设备凭证连接;服务端仅允许已配对设备建立推送通道。
+        await _push.ConnectAsync(s.ServerUrl, s.DeviceId, s.DeviceName, SystemInfo.Platform, SystemInfo.Version, s.AuthToken);
         // ConnectAsync 内部会触发 connected/disconnected 状态回调
         await PullCurrentAsync();
+    }
+
+    /// <summary>
+    /// 兼容更早版本保存在 AuthToken 中的共享令牌：新服务端返回 401 时，尝试按设备 ID
+    /// 领取一次设备令牌。若服务端已有新令牌或设备已撤销，迁移会失败并要求重新配对。
+    /// </summary>
+    private async Task RecoverLegacyCredentialOrInvalidateAsync(Exception authError)
+    {
+        if (Interlocked.Exchange(ref _credentialRecoveryInProgress, 1) != 0) return;
+        try
+        {
+            var s = _svc.Settings;
+            if (ShouldAttemptLegacyMigration(authError) && s.IsPaired && !string.IsNullOrWhiteSpace(s.ServerUrl))
+            {
+                try
+                {
+                    var migration = await _svc.Api.CreatePairingCodeAsync(
+                        s.ServerUrl, s.DeviceId, s.DeviceName, "");
+                    if (migration is not null && !string.IsNullOrWhiteSpace(migration.DeviceToken))
+                    {
+                        s.AuthToken = migration.DeviceToken;
+                        s.Save();
+                        if (!string.IsNullOrWhiteSpace(migration.Code))
+                        {
+                            await _svc.Api.RevokePairingCodeAsync(
+                                s.ServerUrl, migration.Code, s.DeviceId, s.AuthToken);
+                        }
+                        Log.Info("旧共享凭证已迁移为设备凭证");
+                        await ConnectAsync();
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"旧共享凭证迁移失败:{ex.Message}");
+                }
+            }
+
+            s.IsPaired = false;
+            s.AuthToken = "";
+            s.Save();
+            await (_push?.DisconnectAsync() ?? Task.CompletedTask);
+            SetState(ConnState.NotConfigured, "设备凭证已失效，请重新配对");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _credentialRecoveryInProgress, 0);
+        }
+    }
+
+    private static bool ShouldAttemptLegacyMigration(Exception ex)
+    {
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+        {
+            if (current is ApiException { StatusCode: System.Net.HttpStatusCode.Unauthorized }) return true;
+            var message = current.Message;
+            if (message.Contains("4001", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("Device removed", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("设备已被移除", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("410", StringComparison.OrdinalIgnoreCase)) return false;
+            if (message.Contains("401", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
     }
 
     private void HandlePushState(string state)
@@ -89,7 +212,14 @@ public sealed class SyncEngine : IDisposable
                 SetState(ConnState.Reconnecting, "");
                 break;
             case "disconnected":
-                SetState(ConnState.Offline, "连接已断开,自动重连中…");
+                if (!_svc.Settings.IsPaired || string.IsNullOrWhiteSpace(_svc.Settings.AuthToken))
+                {
+                    SetState(ConnState.NotConfigured, "设备凭证已失效，请重新配对");
+                }
+                else
+                {
+                    SetState(ConnState.Offline, "连接已断开,自动重连中…");
+                }
                 break;
         }
     }
@@ -100,79 +230,144 @@ public sealed class SyncEngine : IDisposable
         ConnectionChanged?.Invoke(state, message);
     }
 
-    /// <summary>上传管线:监听捕获 → 去重 → 上传 → 更新 UI。</summary>
+    /// <summary>剪贴板捕获管线:先落本地历史,再异步上传,避免网络异常导致复制内容丢失。</summary>
     private async Task OnCapturedAsync(ClipboardMonitor.CapturedClip clip, CancellationToken ct)
     {
         var s = _svc.Settings;
-        if (clip.Hash == _lastUploadedHash) return;
         if (!s.MonitorEnabled) return;
-        if (string.IsNullOrWhiteSpace(s.ServerUrl) || !s.IsPaired) return; // 未配置/未配对不上传
+        if (clip.Text is null && clip.ImagePng is null) return;
 
+        try
+        {
+            var local = await SaveLocalCaptureAsync(clip, s);
+
+            // 复制直达提示属于本地捕获反馈,不应依赖服务端是否在线。
+            if (clip.Text is not null && s.CopyDirectEnabled && Services.UrlUtil.IsUrl(clip.Text))
+            {
+                var linkUrl = clip.Text.Trim();
+                _dispatcher.TryEnqueue(() => App.ShowLinkToast(linkUrl));
+            }
+
+            // 先刷新本地历史,即使服务端离线也能立即看到刚复制的内容。
+            _dispatcher.TryEnqueue(() => EntryUpdated?.Invoke(local.Entry, local.ImagePath, false));
+
+            // 未配置/未配对时只保留本地历史;配置恢复后由后续复制触发上传。
+            if (string.IsNullOrWhiteSpace(s.ServerUrl) || !s.IsPaired) return;
+
+            // 不等待网络重试,否则 ClipboardMonitor 会一直处于 _capturing 状态。
+            _ = UploadCapturedAsync(clip, s);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"本地保存剪贴板失败:{ex.Message}", ex);
+        }
+    }
+
+    private readonly record struct LocalCapture(ClipboardEntry Entry, string? ImagePath);
+
+    private async Task<LocalCapture> SaveLocalCaptureAsync(ClipboardMonitor.CapturedClip clip, SettingsStore s)
+    {
+        var now = DateTime.UtcNow;
+        var existing = History.FindByHash(clip.Hash);
+        if (existing is not null)
+        {
+            History.TouchByHash(clip.Hash, null, s.DeviceId, s.DeviceName, now);
+            existing = History.FindByHash(clip.Hash) ?? existing;
+            return new LocalCapture(ToClipboardEntry(existing), existing.ImagePath);
+        }
+
+        string? imagePath = null;
+        if (clip.ImagePng is { Length: > 0 })
+        {
+            // 本地条目尚未有服务端 id,使用负 ticks 生成不会冲突的缓存文件名。
+            imagePath = await ImageCodec.SavePngAsync(clip.ImagePng, -Math.Abs(now.Ticks));
+        }
+
+        var item = new Models.HistoryItem
+        {
+            Type = clip.ImagePng is { Length: > 0 } ? "Image" : "Text",
+            Text = clip.Text,
+            ImagePath = imagePath,
+            DeviceId = s.DeviceId,
+            DeviceName = s.DeviceName,
+            CreatedAt = now,
+            Origin = 0,
+            ContentHash = clip.Hash,
+        };
+        History.Insert(item);
+        var saved = History.FindByHash(clip.Hash) ?? item;
+        return new LocalCapture(ToClipboardEntry(saved), saved.ImagePath);
+    }
+
+    private static ClipboardEntry ToClipboardEntry(Models.HistoryItem item) => new()
+    {
+        Id = item.ServerId ?? 0,
+        Type = item.Type,
+        Text = item.Text,
+        ImageRef = item.ImageRef,
+        DeviceId = item.DeviceId,
+        DeviceName = item.DeviceName,
+        CreatedAt = item.CreatedAt,
+    };
+
+    private async Task UploadCapturedAsync(ClipboardMonitor.CapturedClip clip, SettingsStore s)
+    {
+        await _uploadGate.WaitAsync();
         SetTransfer(true, TransferKind.Upload);
         try
         {
             if (clip.Text is not null)
             {
-                var entry = await UploadTextWithRetryAsync(s, clip.Text, ct);
+                var entry = await UploadTextWithRetryAsync(s, clip.Text, CancellationToken.None);
                 if (entry is not null)
                 {
-                    _lastUploadedHash = clip.Hash;
-                    History.Insert(new Models.HistoryItem
-                    {
-                        ServerId = entry.Id,
-                        Type = "Text",
-                        Text = clip.Text,
-                        DeviceId = s.DeviceId,
-                        DeviceName = s.DeviceName,
-                        CreatedAt = entry.CreatedAt != default ? entry.CreatedAt : DateTime.UtcNow,
-                        Origin = 0,
-                    });
+                    var createdAt = entry.CreatedAt != default ? entry.CreatedAt : DateTime.UtcNow;
+                    History.TouchByHash(clip.Hash, entry.Id, s.DeviceId, s.DeviceName, createdAt);
                     _dispatcher.TryEnqueue(() => EntryUpdated?.Invoke(entry, null, false));
                 }
             }
-            else if (clip.ImagePng is not null)
+            else if (clip.ImagePng is { Length: > 0 })
             {
                 if (clip.ImagePng.LongLength > ImageCodec.MaxImageBytes)
                 {
                     _dispatcher.TryEnqueue(() =>
                     {
-                        ConnectionChanged?.Invoke(_state, "图片超过 10MB,已跳过上传");
+                        ConnectionChanged?.Invoke(_state, "图片超过 10MB,已保存在本地但跳过上传");
                         SyncError?.Invoke();
                     });
                     return;
                 }
-                var entry = await UploadImageWithRetryAsync(s, clip.ImagePng, ct);
+                var entry = await UploadImageWithRetryAsync(s, clip.ImagePng, CancellationToken.None);
                 if (entry is not null)
                 {
-                    _lastUploadedHash = clip.Hash;
-                    var path = await ImageCodec.SavePngAsync(clip.ImagePng, entry.Id);
-                    History.Insert(new Models.HistoryItem
-                    {
-                        ServerId = entry.Id,
-                        Type = "Image",
-                        ImagePath = path,
-                        ImageRef = entry.ImageRef,
-                        DeviceId = s.DeviceId,
-                        DeviceName = s.DeviceName,
-                        CreatedAt = entry.CreatedAt != default ? entry.CreatedAt : DateTime.UtcNow,
-                        Origin = 0,
-                    });
-                    _dispatcher.TryEnqueue(() => EntryUpdated?.Invoke(entry, path, false));
+                    var createdAt = entry.CreatedAt != default ? entry.CreatedAt : DateTime.UtcNow;
+                    History.TouchByHash(clip.Hash, entry.Id, s.DeviceId, s.DeviceName, createdAt);
+                    var local = History.FindByHash(clip.Hash);
+                    _dispatcher.TryEnqueue(() => EntryUpdated?.Invoke(entry, local?.ImagePath, false));
                 }
             }
         }
         catch (Exception ex)
         {
             Log.Error($"上传失败:{ex.Message}");
+            if (IsDeviceAuthFailure(ex))
+            {
+                s.IsPaired = false;
+                s.AuthToken = "";
+                s.Save();
+                _ = _push?.DisconnectAsync();
+            }
             _dispatcher.TryEnqueue(() =>
             {
-                ConnectionChanged?.Invoke(_state, $"上传失败:{ex.Message}");
+                var reason = ServerApi.DescribeException(ex, "请检查服务器配置后重试。");
+                ConnectionChanged?.Invoke(_state, $"上传失败(内容已保存在本地)：{reason}");
                 SyncError?.Invoke();
             });
         }
         finally
         {
             SetTransfer(false, TransferKind.Upload);
+            _uploadGate.Release();
         }
     }
 
@@ -182,7 +377,7 @@ public sealed class SyncEngine : IDisposable
         {
             try
             {
-                return await _svc.Api.PutTextAsync(s.ServerUrl, "", text, s.DeviceId, s.DeviceName, SystemInfo.Platform, SystemInfo.Version, ct);
+                return await _svc.Api.PutTextAsync(s.ServerUrl, s.AuthToken, text, s.DeviceId, s.DeviceName, SystemInfo.Platform, SystemInfo.Version, ct);
             }
             catch (Exception ex) when (attempt < 3 && ex is not ApiException { StatusCode: System.Net.HttpStatusCode.Unauthorized })
             {
@@ -198,7 +393,7 @@ public sealed class SyncEngine : IDisposable
         {
             try
             {
-                return await _svc.Api.UploadImageAsync(s.ServerUrl, "", png, s.DeviceId, s.DeviceName, SystemInfo.Platform, SystemInfo.Version, ct);
+                return await _svc.Api.UploadImageAsync(s.ServerUrl, s.AuthToken, png, s.DeviceId, s.DeviceName, SystemInfo.Platform, SystemInfo.Version, ct);
             }
             catch (Exception ex) when (attempt < 3 && ex is not ApiException { StatusCode: System.Net.HttpStatusCode.Unauthorized })
             {
@@ -220,15 +415,17 @@ public sealed class SyncEngine : IDisposable
         }
 
         string? imagePath = null;
+        byte[]? imageBytes = null;
         if (entry.Type == "Image" && !string.IsNullOrEmpty(entry.ImageRef))
         {
             SetTransfer(true, TransferKind.Download);
             try
             {
-                var bytes = await _svc.Api.DownloadImageAsync(s.ServerUrl, "", entry.ImageRef!);
+                var bytes = await _svc.Api.DownloadImageAsync(s.ServerUrl, s.DeviceId, s.AuthToken, entry.ImageRef!);
                 if (bytes is not null)
                 {
                     imagePath = await ImageCodec.SavePngAsync(bytes, entry.Id);
+                    imageBytes = bytes;
                 }
             }
             catch (Exception ex)
@@ -240,6 +437,13 @@ public sealed class SyncEngine : IDisposable
                 SetTransfer(false, TransferKind.Download);
             }
         }
+
+        // 内容哈希:远端文本/图片字节,供本地重复内容去重置顶使用
+        var contentHash = entry.Type == "Text" && entry.Text is not null
+            ? ClipboardMonitor.HashText(entry.Text)
+            : imageBytes is not null
+                ? ClipboardMonitor.HashBytes(imageBytes)
+                : null;
 
         // 写入本地历史(远端条目)
         History.Insert(new Models.HistoryItem
@@ -253,6 +457,7 @@ public sealed class SyncEngine : IDisposable
             DeviceName = entry.DeviceName,
             CreatedAt = entry.CreatedAt != default ? entry.CreatedAt : DateTime.UtcNow,
             Origin = 1,
+            ContentHash = contentHash,
         });
 
         if (s.AutoPaste)
@@ -286,12 +491,20 @@ public sealed class SyncEngine : IDisposable
         if (string.IsNullOrWhiteSpace(s.ServerUrl) || !s.IsPaired) return;
         try
         {
-            var entry = await _svc.Api.GetCurrentAsync(s.ServerUrl, "");
+            var entry = await _svc.Api.GetCurrentAsync(s.ServerUrl, s.DeviceId, s.AuthToken);
             _dispatcher.TryEnqueue(() => EntryUpdated?.Invoke(entry!, null, false));
         }
         catch (Exception ex)
         {
             Log.Error($"拉取当前剪贴板失败:{ex.Message}");
+            if (IsDeviceAuthFailure(ex))
+            {
+                s.IsPaired = false;
+                s.AuthToken = "";
+                s.Save();
+                _ = _push?.DisconnectAsync();
+                SetState(ConnState.NotConfigured, "设备凭证已失效，请重新配对");
+            }
         }
     }
 
@@ -329,7 +542,7 @@ public sealed class SyncEngine : IDisposable
                 {
                     if (string.IsNullOrEmpty(item.ImageRef)) return;
                     var s = _svc.Settings;
-                    var bytes = await _svc.Api.DownloadImageAsync(s.ServerUrl, "", item.ImageRef);
+                    var bytes = await _svc.Api.DownloadImageAsync(s.ServerUrl, s.DeviceId, s.AuthToken, item.ImageRef);
                     if (bytes is null) return;
                     path = await ImageCodec.SavePngAsync(bytes, item.ServerId ?? item.Id);
                 }
@@ -346,7 +559,22 @@ public sealed class SyncEngine : IDisposable
     public void Dispose()
     {
         _monitor?.Stop();
+        _uploadGate.Dispose();
         History.Dispose();
         _ = _push?.DisposeAsync();
     }
+
+    private static bool IsDeviceAuthFailure(Exception ex) => ex is ApiException api &&
+        (api.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
+         api.StatusCode == System.Net.HttpStatusCode.Forbidden ||
+         api.StatusCode == (System.Net.HttpStatusCode)410) ||
+        ex.Message.Contains("4001", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("Device removed", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("设备已被移除", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("401", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("403", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("410", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("Forbidden", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("设备凭证", StringComparison.OrdinalIgnoreCase);
 }

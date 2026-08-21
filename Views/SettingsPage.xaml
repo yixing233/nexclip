@@ -5,246 +5,1067 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:converters="using:SyncClipboard.Desktop.Converters"
     xmlns:models="using:SyncClipboard.Desktop.Models"
+    xmlns:services="using:SyncClipboard.Desktop.Services"
+    xmlns:vm="using:SyncClipboard.Desktop.ViewModels"
     x:Name="SettingsRoot">
     <Page.Resources>
         <converters:BoolToBrushConverter x:Key="BoolToBrush" />
+        <converters:BooleanToVisibilityConverter x:Key="BoolToVis" />
+        <converters:InverseBooleanToVisibilityConverter x:Key="InverseBoolToVis" />
+        <converters:PercentConverter x:Key="Percent" />
     </Page.Resources>
-    <ScrollViewer>
-        <StackPanel Padding="28,20,28,28" Spacing="16">
+    <NavigationView
+        x:Name="NavView"
+        PaneDisplayMode="Auto"
+        IsPaneOpen="True"
+        IsPaneToggleButtonVisible="False"
+        OpenPaneLength="200"
+        CompactPaneLength="48"
+        CompactModeThresholdWidth="480"
+        IsBackButtonVisible="Collapsed"
+        IsSettingsVisible="False"
+        SelectionChanged="NavView_SelectionChanged">
+        <NavigationView.MenuItems>
+            <NavigationViewItem Content="同步" Tag="server">
+                <NavigationViewItem.Icon><ImageIcon Source="{x:Bind services:Lucide.Server}" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Content="通用" Tag="general">
+                <NavigationViewItem.Icon><ImageIcon Source="{x:Bind services:Lucide.Settings}" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Content="剪贴板" Tag="clipboard">
+                <NavigationViewItem.Icon><ImageIcon Source="{x:Bind services:Lucide.Clipboard}" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Content="快捷键" Tag="hotkey">
+                <NavigationViewItem.Icon><ImageIcon Source="{x:Bind services:Lucide.Keyboard}" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+            <NavigationViewItem Content="数据管理" Tag="data">
+                <NavigationViewItem.Icon><ImageIcon Source="{x:Bind services:Lucide.Database}" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+        </NavigationView.MenuItems>
+        <NavigationView.FooterMenuItems>
+            <NavigationViewItem Content="关于" Tag="about">
+                <NavigationViewItem.Icon><ImageIcon Source="{x:Bind services:Lucide.Info}" /></NavigationViewItem.Icon>
+            </NavigationViewItem>
+        </NavigationView.FooterMenuItems>
 
-            <!-- ========== 服务端连接 ========== -->
-            <Border
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8"
-                Padding="20">
-                <StackPanel Spacing="12">
-                    <TextBlock Text="服务端连接" Style="{ThemeResource SubtitleTextBlockStyle}" />
+        <!-- ========== 内容区 ========== -->
+        <Grid>
+            <ScrollViewer
+                x:Name="ContentScroller"
+                HorizontalScrollBarVisibility="Hidden"
+                HorizontalScrollMode="Disabled">
+                <StackPanel Padding="28,24,28,32" Spacing="20">
 
-                    <TextBlock Text="服务器地址" Style="{ThemeResource BodyStrongTextBlockStyle}" />
-                    <TextBox
-                        PlaceholderText="http://127.0.0.1:5033"
-                        Text="{Binding ServerUrl, Mode=TwoWay}" />
-
-                    <!-- 设备配对:生成配对码给新设备 + 输入配对码接入 -->
-                    <TextBlock Text="设备配对" Style="{ThemeResource BodyStrongTextBlockStyle}" Margin="0,8,0,0" />
-
-                    <!-- ① 生成配对码(给另一台设备,弹对话框显示码) -->
-                    <StackPanel Spacing="4">
-                        <TextBlock Text="新设备接入:生成配对码,在另一台设备上输入" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        <Button
-                            Content="生成配对码"
-                            Command="{Binding GeneratePairingCodeCommand}"
-                            HorizontalAlignment="Left" />
-                        <TextBlock Text="{Binding CodeExpiryText}" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                    </StackPanel>
-
-                    <!-- ② 输入配对码(本机接入) -->
-                    <Grid ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBox
-                            PlaceholderText="输入另一台设备生成的配对码"
-                            Text="{Binding PairingCode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                        <Button
-                            Grid.Column="1"
-                            Content="配对"
-                            Command="{Binding PairDeviceCommand}"
-                            Style="{StaticResource AccentButtonStyle}" />
-                    </Grid>
-                    <TextBlock Text="{Binding PairResult}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
-
-                    <TextBlock Text="设备名称" Style="{ThemeResource BodyStrongTextBlockStyle}" />
-                    <TextBox
-                        PlaceholderText="默认使用计算机名"
-                        Text="{Binding DeviceName, Mode=TwoWay}" />
-
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button Content="测试连接" Command="{Binding TestConnectionCommand}" />
-                        <ProgressRing IsActive="{Binding IsTesting}" Width="16" Height="16" />
-                    </StackPanel>
-                    <TextBlock Text="{Binding TestResult}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
-
-                    <Button Content="保存设置" Command="{Binding SaveServerConfigCommand}" Style="{StaticResource AccentButtonStyle}" HorizontalAlignment="Left" />
-                </StackPanel>
-            </Border>
-
-            <!-- ========== 设备列表 ========== -->
-            <Border
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8"
-                Padding="20">
-                <StackPanel Spacing="12">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="设备列表" Style="{ThemeResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-                            <TextBlock Text="{Binding DeviceStatus}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
-                            <Button Content="刷新" Command="{Binding RefreshDevicesCommand}" />
+                    <!-- ====== 同步:服务端连接 + 设备列表 ====== -->
+                    <StackPanel x:Name="GroupServer" Spacing="20">
+                        <StackPanel Spacing="4" Margin="4,0,0,0">
+                            <TextBlock Text="服务器连接" Style="{ThemeResource SubtitleTextBlockStyle}" />
                         </StackPanel>
-                    </Grid>
-
-                    <ItemsControl ItemsSource="{Binding Devices}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="models:DeviceInfo">
-                                <Grid Margin="0,4" ColumnSpacing="10">
+                        <Border
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="20">
+                            <StackPanel Spacing="14">
+                                <TextBlock Text="服务器地址" Style="{ThemeResource BodyStrongTextBlockStyle}" />
+                                <Grid ColumnSpacing="8">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <!-- 在线状态点 -->
-                                    <Ellipse Width="8" Height="8" VerticalAlignment="Center"
-                                        Fill="{x:Bind Online, Mode=OneWay, Converter={StaticResource BoolToBrush}}" />
-                                    <!-- 设备信息 -->
-                                    <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
-                                        <StackPanel Orientation="Horizontal" Spacing="8">
-                                            <TextBlock Text="{x:Bind Name}" Style="{ThemeResource BodyStrongTextBlockStyle}" />
-                                            <TextBlock Text="{x:Bind Id}" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                    <TextBox
+                                        PlaceholderText="http://127.0.0.1:5033"
+                                        Text="{Binding ServerUrl, Mode=TwoWay}"
+                                        VerticalAlignment="Center" />
+                                    <Button
+                                        Grid.Column="1"
+                                        Command="{Binding TestConnectionCommand}"
+                                        Padding="14,6"
+                                        VerticalAlignment="Center">
+                                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                            <ProgressRing
+                                                IsActive="{Binding IsTesting}"
+                                                Width="14"
+                                                Height="14"
+                                                Visibility="{Binding IsTesting, Converter={StaticResource BoolToVis}}" />
+                                            <Image
+                                                Source="{x:Bind services:Lucide.RefreshCw}"
+                                                Width="14"
+                                                Height="14"
+                                                Visibility="{Binding IsTesting, Converter={StaticResource InverseBoolToVis}}" />
+                                            <TextBlock Text="测试连接" VerticalAlignment="Center" />
                                         </StackPanel>
-                                        <TextBlock Text="{x:Bind Subtitle}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                        <TextBlock Text="{x:Bind LastSeenText}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                    </StackPanel>
+                                    </Button>
                                 </Grid>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    <TextBlock
-                        Text="设备移除/重命名请在网页端(账密登录)操作"
-                        FontSize="12"
-                        Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                </StackPanel>
-            </Border>
 
-            <!-- ========== 行为 ========== -->
-            <Border
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8"
-                Padding="20">
-                <StackPanel Spacing="8">
-                    <TextBlock Text="行为" Style="{ThemeResource SubtitleTextBlockStyle}" Margin="0,0,0,8" />
-                    <ToggleSwitch Header="开机自启动(静默运行)" OnContent="" OffContent="" IsOn="{Binding BootStartEnabled, Mode=TwoWay}" />
-                    <ToggleSwitch Header="启动时最小化到托盘" OnContent="" OffContent="" IsOn="{Binding StartMinimized, Mode=TwoWay}" />
-                    <ToggleSwitch Header="关闭窗口时最小化到托盘" OnContent="" OffContent="" IsOn="{Binding CloseToTray, Mode=TwoWay}" />
-                    <ToggleSwitch Header="监听剪贴板(同步开关)" OnContent="" OffContent="" IsOn="{Binding MonitorEnabled, Mode=TwoWay}" />
-                    <ToggleSwitch Header="接收推送自动写入剪贴板" OnContent="" OffContent="" IsOn="{Binding AutoPaste, Mode=TwoWay}" />
-                    <ToggleSwitch Header="新内容通知" OnContent="" OffContent="" IsOn="{Binding NotifyEnabled, Mode=TwoWay}" />
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Spacing="2" VerticalAlignment="Center">
-                            <TextBlock Text="剪贴板热键(呼出剪贴板窗口)" />
-                            <TextBlock Text="点击输入框后直接按下组合键" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                            <TextBox x:Name="HotKeyBox" Width="150" IsReadOnly="True"
-                                PlaceholderText="点击后按组合键"
-                                Text="{Binding Hotkey, Mode=OneWay}"
-                                PreviewKeyDown="HotKeyBox_PreviewKeyDown" HorizontalAlignment="Right" />
-                            <Button Content="重置" Command="{Binding ResetHotkeyCommand}" ToolTipService.ToolTip="恢复默认 Alt+V" />
-                        </StackPanel>
-                    </Grid>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Spacing="2" VerticalAlignment="Center">
-                            <TextBlock Text="设置热键(打开设置窗口)" />
-                            <TextBlock Text="点击输入框后直接按下组合键" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                            <TextBox x:Name="HotKeySettingsBox" Width="150" IsReadOnly="True"
-                                PlaceholderText="点击后按组合键"
-                                Text="{Binding HotkeySettings, Mode=OneWay}"
-                                PreviewKeyDown="HotKeySettingsBox_PreviewKeyDown" HorizontalAlignment="Right" />
-                            <Button Content="重置" Command="{Binding ResetHotkeySettingsCommand}" ToolTipService.ToolTip="恢复默认 Alt+X" />
-                        </StackPanel>
-                    </Grid>
-                </StackPanel>
-            </Border>
+                                <Border
+                                    Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="14,12">
+                                    <Grid ColumnSpacing="16">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Spacing="3">
+                                            <TextBlock Text="本机状态" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <Ellipse
+                                                    Width="8"
+                                                    Height="8"
+                                                    VerticalAlignment="Center"
+                                                    Fill="{Binding IsPaired, Converter={StaticResource BoolToBrush}}" />
+                                                <TextBlock Text="{Binding PairingStatusText}" FontWeight="SemiBold" />
+                                            </StackPanel>
+                                            <TextBlock
+                                                Text="{Binding PairingStatusHint}"
+                                                FontSize="11"
+                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1" Spacing="3" HorizontalAlignment="Right">
+                                            <TextBlock Text="本机 ID" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" HorizontalAlignment="Right" />
+                                            <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right">
+                                                <TextBlock
+                                                    Text="{Binding DeviceIdText}"
+                                                    FontFamily="Consolas"
+                                                    FontSize="11"
+                                                    MaxWidth="140"
+                                                    TextTrimming="CharacterEllipsis"
+                                                    ToolTipService.ToolTip="{Binding DeviceIdText}"
+                                                    VerticalAlignment="Center" />
+                                                <Button
+                                                    Padding="4,2"
+                                                    Background="Transparent"
+                                                    BorderThickness="0"
+                                                    Command="{Binding CopyDeviceIdCommand}"
+                                                    ToolTipService.ToolTip="复制本机 ID">
+                                                    <Image Source="{x:Bind services:Lucide.Copy}" Width="13" Height="13" />
+                                                </Button>
+                                                <Button
+                                                    Padding="4,2"
+                                                    Background="Transparent"
+                                                    BorderThickness="0"
+                                                    Click="RegenerateDeviceId_Click"
+                                                    ToolTipService.ToolTip="重新生成本机 ID">
+                                                    <Image Source="{x:Bind services:Lucide.RefreshCw}" Width="13" Height="13" />
+                                                </Button>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
 
-            <!-- ========== 历史 ========== -->
-            <Border
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8"
-                Padding="20">
-                <StackPanel Spacing="12">
-                    <TextBlock Text="历史" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Spacing="4">
-                            <TextBlock Text="本地历史上限" Style="{ThemeResource BodyStrongTextBlockStyle}" />
-                            <ComboBox
-                                Width="200"
-                                HorizontalAlignment="Left"
-                                ItemsSource="{Binding MaxHistoryOptions}"
-                                SelectedIndex="{Binding MaxHistoryIndex, Mode=TwoWay}" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Spacing="4" HorizontalAlignment="Right" VerticalAlignment="Bottom">
-                            <Button Content="清空历史" Command="{Binding ClearHistoryCommand}" />
-                            <TextBlock Text="同时删除本地图片缓存" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" HorizontalAlignment="Center" />
-                        </StackPanel>
-                    </Grid>
-                </StackPanel>
-            </Border>
+                            </StackPanel>
+                        </Border>
 
-            <!-- ========== 外观 ========== -->
-            <Border
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8"
-                Padding="20">
-                <StackPanel Spacing="8">
-                    <TextBlock Text="外观" Style="{ThemeResource SubtitleTextBlockStyle}" Margin="0,0,0,8" />
-                    <RadioButtons Header="界面主题" SelectedIndex="{Binding ThemeModeIndex, Mode=TwoWay}">
-                        <RadioButton Content="浅色" />
-                        <RadioButton Content="深色" />
-                        <RadioButton Content="跟随系统" />
-                    </RadioButtons>
-                </StackPanel>
-            </Border>
+                        <StackPanel Spacing="4" Margin="4,0,0,0">
+                            <TextBlock Text="添加设备" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        </StackPanel>
+                        <Border
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="20">
+                            <StackPanel Spacing="14">
+                                <!-- ① 生成配对码(给另一台设备,弹对话框显示码) -->
+                                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                    <Button
+                                        Content="生成配对码"
+                                        Command="{Binding GeneratePairingCodeCommand}"
+                                        HorizontalAlignment="Left" />
+                                    <ProgressRing IsActive="{Binding IsGeneratingCode}" Width="16" Height="16" VerticalAlignment="Center" />
+                                    <TextBlock Text="在另一台设备上输入此码即可接入" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                                </StackPanel>
 
-            <!-- ========== 关于 ========== -->
-            <Border
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8"
-                Padding="20">
-                <StackPanel Spacing="8">
-                    <TextBlock Text="关于" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <TextBlock Text="SyncClipboard 桌面端" Style="{ThemeResource BodyStrongTextBlockStyle}" />
-                        <Border Background="#2563EB33" CornerRadius="4" Padding="8,2">
-                            <TextBlock Text="{Binding VersionText}" FontSize="12" Foreground="#2563EB" />
+                                <!-- ② 输入配对码与用户 ID (本机接入现有设备组) -->
+                                <TextBlock Text="加入现有设备组" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox
+                                        PlaceholderText="输入用户 ID"
+                                        Text="{Binding PairUserId, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox
+                                        Grid.Column="1"
+                                        PlaceholderText="输入 8 位配对码"
+                                        Text="{Binding PairingCode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <Button
+                                        Grid.Column="2"
+                                        Command="{Binding PairDeviceCommand}"
+                                        Style="{StaticResource AccentButtonStyle}">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <ProgressRing
+                                                IsActive="{Binding IsPairing}"
+                                                Width="14"
+                                                Height="14"
+                                                Visibility="{Binding IsPairing, Converter={StaticResource BoolToVis}}" />
+                                            <TextBlock Text="发起配对" />
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
+
+                                <TextBlock Text="设备名称" Style="{ThemeResource BodyStrongTextBlockStyle}" />
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox
+                                        PlaceholderText="默认使用计算机名"
+                                        Text="{Binding DeviceName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <Button
+                                        Grid.Column="1"
+                                        Content="保存名称"
+                                        Command="{Binding SaveDeviceNameCommand}" />
+                                </Grid>
+
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button Content="测试连接" Command="{Binding TestConnectionCommand}" />
+                                    <ProgressRing IsActive="{Binding IsTesting}" Width="16" Height="16" VerticalAlignment="Center" />
+                                    <Button Content="保存服务器设置" Command="{Binding SaveServerConfigCommand}" Style="{StaticResource AccentButtonStyle}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 设备列表(与同步设置合并) -->
+                        <StackPanel Spacing="4" Margin="4,0,0,0">
+                            <TextBlock Text="已连接设备" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        </StackPanel>
+
+                        <Border
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="20">
+                            <StackPanel Spacing="12">
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock
+                                        Text="{Binding DeviceStatus}"
+                                        FontSize="12"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        VerticalAlignment="Center"
+                                        HorizontalAlignment="Right" />
+                                    <Button
+                                        Grid.Column="1"
+                                        Content="刷新"
+                                        Command="{Binding RefreshDevicesCommand}" />
+                                </Grid>
+
+                                <ProgressBar
+                                    Height="3"
+                                    IsIndeterminate="True"
+                                    Visibility="{Binding IsDevicesLoading, Converter={StaticResource BoolToVis}}" />
+
+                                <Border
+                                    Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                    BorderBrush="#FDBA74"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="14,12"
+                                    Visibility="{Binding HasDeviceLoadError, Converter={StaticResource BoolToVis}}">
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border
+                                            Width="30"
+                                            Height="30"
+                                            Background="#FFF7ED"
+                                            BorderBrush="#FDBA74"
+                                            BorderThickness="1"
+                                            CornerRadius="15"
+                                            VerticalAlignment="Top">
+                                            <Image
+                                                Source="{x:Bind services:Lucide.Info}"
+                                                Width="16"
+                                                Height="16"
+                                                HorizontalAlignment="Center"
+                                                VerticalAlignment="Center"
+                                                AutomationProperties.Name="设备列表加载失败" />
+                                        </Border>
+                                        <StackPanel Grid.Column="1" Spacing="4">
+                                            <TextBlock Text="设备列表暂时不可用" FontWeight="SemiBold" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
+                                            <TextBlock
+                                                Text="{Binding DeviceLoadErrorText}"
+                                                FontSize="12"
+                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                TextWrapping="Wrap" />
+                                            <Button
+                                                Content="重新加载"
+                                                Command="{Binding RefreshDevicesCommand}"
+                                                HorizontalAlignment="Left"
+                                                Padding="10,4"
+                                                Margin="0,4,0,0" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+
+                                <Border
+                                    Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="16,18"
+                                    Visibility="{Binding ShowDeviceEmptyState, Converter={StaticResource BoolToVis}}">
+                                    <StackPanel Spacing="6" HorizontalAlignment="Center">
+                                        <Image Source="{x:Bind services:Lucide.MonitorSmartphone}" Width="28" Height="28" HorizontalAlignment="Center" />
+                                        <TextBlock Text="还没有其他设备" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                                        <TextBlock
+                                            Text="生成配对码邀请设备，或输入其他设备的配对码。"
+                                            FontSize="12"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            TextWrapping="Wrap"
+                                            HorizontalTextAlignment="Center" />
+                                    </StackPanel>
+                                </Border>
+
+                                <ItemsControl
+                                    ItemsSource="{Binding Devices}"
+                                    Visibility="{Binding HasDevices, Converter={StaticResource BoolToVis}}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="models:DeviceInfo">
+                                            <Border
+                                                Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="8"
+                                                Padding="12,10"
+                                                Margin="0,3">
+                                                <Grid ColumnSpacing="10">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <Ellipse Width="9" Height="9" VerticalAlignment="Top" Margin="0,4,0,0"
+                                                        Fill="{x:Bind Online, Mode=OneWay, Converter={StaticResource BoolToBrush}}" />
+                                                    <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                                            <TextBlock
+                                                                Text="{x:Bind Name}"
+                                                                Style="{ThemeResource BodyStrongTextBlockStyle}"
+                                                                Foreground="{x:Bind vm:SettingsViewModel.DeviceNameBrush(Online), Mode=OneWay}" />
+                                                            <Border
+                                                                Visibility="{x:Bind IsCurrent, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                                                                Background="#2563EB"
+                                                                CornerRadius="4"
+                                                                Padding="5,1">
+                                                                <TextBlock Text="本机" FontSize="10" Foreground="#FFFFFF" FontWeight="SemiBold" />
+                                                            </Border>
+                                                            <TextBlock Text="{x:Bind Id}" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" TextTrimming="CharacterEllipsis" />
+                                                        </StackPanel>
+                                                        <TextBlock Text="{x:Bind Subtitle}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap" />
+                                                        <TextBlock
+                                                            Text="{x:Bind LastSeenText}"
+                                                            FontSize="12"
+                                                            Foreground="{x:Bind vm:SettingsViewModel.DeviceStatusBrush(Online), Mode=OneWay}" />
+                                                    </StackPanel>
+                                                    <!-- 非本机展示移除按钮 -->
+                                                    <Button
+                                                        Grid.Column="2"
+                                                        Click="RemoveDevice_Click"
+                                                        Visibility="{x:Bind IsCurrent, Mode=OneWay, Converter={StaticResource InverseBoolToVis}}"
+                                                        Padding="8,5"
+                                                        Background="Transparent"
+                                                        BorderThickness="0"
+                                                        CornerRadius="6"
+                                                        ToolTipService.ToolTip="移除此设备"
+                                                        VerticalAlignment="Center">
+                                                        <Image Source="{x:Bind services:Lucide.Trash}" Width="14" Height="14" />
+                                                    </Button>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
                         </Border>
                     </StackPanel>
-                    <TextBlock
-                        Text="WinUI 3(.NET 9)剪贴板同步客户端 · 对接 SyncClipboard Server(设计文档: syncclipboard-server/CLIENT-DESIGN.md)"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        TextWrapping="Wrap" />
-                </StackPanel>
-            </Border>
 
-        </StackPanel>
-    </ScrollViewer>
+                    <!-- ====== 常规:应用行为 ====== -->
+                    <StackPanel x:Name="GroupGeneral" Visibility="Collapsed" Spacing="20">
+                        <StackPanel Spacing="4" Margin="4,0,0,0">
+                            <TextBlock Text="启动与后台" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        </StackPanel>
+                        <Border
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="20">
+                            <StackPanel Spacing="8">
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="开机自启动(静默运行)" VerticalAlignment="Center" />
+                                    <ToggleSwitch
+                                        Grid.Column="1"
+                                        Width="48"
+                                        MinWidth="0"
+                                        OnContent=""
+                                        OffContent=""
+                                        IsOn="{Binding BootStartEnabled, Mode=TwoWay}"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.Name="开机自启动(静默运行)" />
+                                </Grid>
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="启动时最小化到托盘" VerticalAlignment="Center" />
+                                    <ToggleSwitch
+                                        Grid.Column="1"
+                                        Width="48"
+                                        MinWidth="0"
+                                        OnContent=""
+                                        OffContent=""
+                                        IsOn="{Binding StartMinimized, Mode=TwoWay}"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.Name="启动时最小化到托盘" />
+                                </Grid>
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="关闭窗口时最小化到托盘" VerticalAlignment="Center" />
+                                    <ToggleSwitch
+                                        Grid.Column="1"
+                                        Width="48"
+                                        MinWidth="0"
+                                        OnContent=""
+                                        OffContent=""
+                                        IsOn="{Binding CloseToTray, Mode=TwoWay}"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.Name="关闭窗口时最小化到托盘" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                        <StackPanel Spacing="4" Margin="4,0,0,0">
+                            <TextBlock Text="外观" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        </StackPanel>
+                        <Border
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="20">
+                            <StackPanel Spacing="8">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="界面主题" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <ComboBox
+                                        Grid.Column="1"
+                                        Width="160"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        SelectedIndex="{Binding ThemeModeIndex, Mode=TwoWay}">
+                                        <ComboBoxItem Content="浅色" />
+                                        <ComboBoxItem Content="深色" />
+                                        <ComboBoxItem Content="跟随系统" />
+                                    </ComboBox>
+                                </Grid>
+                                <Grid Margin="0,4,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="窗口背景" />
+                                    </StackPanel>
+                                    <ComboBox
+                                        Grid.Column="1"
+                                        Width="160"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        SelectedIndex="{Binding BackdropIndex, Mode=TwoWay}">
+                                        <ComboBoxItem Content="云母" />
+                                        <ComboBoxItem Content="云母增强" />
+                                        <ComboBoxItem Content="亚克力" />
+                                    </ComboBox>
+                                </Grid>
+                                <Grid Margin="0,4,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="亚克力不透明度" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                        <Slider
+                                            Width="140"
+                                            Minimum="0.5"
+                                            Maximum="1"
+                                            StepFrequency="0.05"
+                                            Value="{Binding BackdropTintOpacity, Mode=TwoWay}" />
+                                        <TextBlock
+                                            Width="44"
+                                            VerticalAlignment="Center"
+                                            FontFamily="Consolas"
+                                            Text="{Binding BackdropTintOpacity, Converter={StaticResource Percent}, Mode=OneWay}" />
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ====== 剪贴板:监听/粘贴/窗口 ====== -->
+                    <StackPanel x:Name="GroupClipboard" Visibility="Collapsed" Spacing="20">
+                        <StackPanel Spacing="4" Margin="4,0,0,0">
+                            <TextBlock Text="剪贴板行为" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        </StackPanel>
+                        <Border
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="20">
+                            <StackPanel Spacing="8">
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="监听剪贴板(同步开关)" VerticalAlignment="Center" />
+                                    <ToggleSwitch
+                                        Grid.Column="1"
+                                        Width="48"
+                                        MinWidth="0"
+                                        OnContent=""
+                                        OffContent=""
+                                        IsOn="{Binding MonitorEnabled, Mode=TwoWay}"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.Name="监听剪贴板(同步开关)" />
+                                </Grid>
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="接收推送自动写入剪贴板" VerticalAlignment="Center" />
+                                    <ToggleSwitch
+                                        Grid.Column="1"
+                                        Width="48"
+                                        MinWidth="0"
+                                        OnContent=""
+                                        OffContent=""
+                                        IsOn="{Binding AutoPaste, Mode=TwoWay}"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.Name="接收推送自动写入剪贴板" />
+                                </Grid>
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="新内容通知" VerticalAlignment="Center" />
+                                    <ToggleSwitch
+                                        Grid.Column="1"
+                                        Width="48"
+                                        MinWidth="0"
+                                        OnContent=""
+                                        OffContent=""
+                                        IsOn="{Binding NotifyEnabled, Mode=TwoWay}"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.Name="新内容通知" />
+                                </Grid>
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="复制直达" VerticalAlignment="Center" />
+                                    <ToggleSwitch
+                                        Grid.Column="1"
+                                        Width="48"
+                                        MinWidth="0"
+                                        OnContent=""
+                                        OffContent=""
+                                        IsOn="{Binding CopyDirectEnabled, Mode=TwoWay}"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.Name="复制直达" />
+                                </Grid>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="剪贴板窗口出现位置" />
+                                        <TextBlock Text="热键/托盘呼出时窗口显示的位置" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <ComboBox
+                                        Grid.Column="1"
+                                        Width="160"
+                                        HorizontalAlignment="Right"
+                                        SelectedIndex="{Binding WindowPositionIndex, Mode=TwoWay}">
+                                        <ComboBoxItem Content="跟随鼠标" />
+                                        <ComboBoxItem Content="屏幕中心" />
+                                    </ComboBox>
+                                </Grid>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="普通应用粘贴键" />
+                                        <TextBlock Text="Chromium/Electron 编辑器自动使用 Ctrl+V" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <ComboBox
+                                        Grid.Column="1"
+                                        Width="160"
+                                        HorizontalAlignment="Right"
+                                        SelectedIndex="{Binding PasteKeyIndex, Mode=TwoWay}">
+                                        <ComboBoxItem Content="Shift+Insert" />
+                                        <ComboBoxItem Content="Ctrl+V" />
+                                    </ComboBox>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ====== 快捷键:呼出热键 + 剪贴板窗口快捷操作说明 ====== -->
+                    <StackPanel x:Name="GroupHotkey" Visibility="Collapsed" Spacing="20">
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Margin="4,0,0,0">
+                            <TextBlock Text="全局快捷键" Style="{ThemeResource SubtitleTextBlockStyle}" VerticalAlignment="Center" />
+                            <Border
+                                Padding="4"
+                                CornerRadius="12"
+                                VerticalAlignment="Center"
+                                ToolTipService.ToolTip="点击输入框后直接按下组合键即可设置快捷键">
+                                <Image
+                                    Source="{x:Bind services:Lucide.Info}"
+                                    Width="14"
+                                    Height="14"
+                                    Stretch="Uniform" />
+                            </Border>
+                        </StackPanel>
+                        <Border
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="20">
+                            <StackPanel Spacing="14">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="剪贴板热键" Style="{ThemeResource BodyStrongTextBlockStyle}" />
+                                        <TextBlock Text="呼出 / 隐藏剪贴板窗口" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                        <TextBox x:Name="HotKeyBox" Width="150" IsReadOnly="True"
+                                            PlaceholderText="点击后按组合键"
+                                            Text="{Binding Hotkey, Mode=OneWay}"
+                                            PreviewKeyDown="HotKeyBox_PreviewKeyDown" HorizontalAlignment="Right" />
+                                        <Button Content="重置" Command="{Binding ResetHotkeyCommand}" ToolTipService.ToolTip="恢复默认 Ctrl+Alt+S" />
+                                    </StackPanel>
+                                </Grid>
+                                <!-- 长久态错误(热键被占用):常驻显示,不自动消失 -->
+                                <TextBlock
+                                    Text="{Binding HotkeyStatusText}"
+                                    FontSize="12"
+                                    Foreground="#DC2626"
+                                    Visibility="{Binding HasHotkeyIssue, Converter={StaticResource BoolToVis}}" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="设置热键" Style="{ThemeResource BodyStrongTextBlockStyle}" />
+                                        <TextBlock Text="打开 NexClip 设置窗口" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                        <TextBox x:Name="HotKeySettingsBox" Width="150" IsReadOnly="True"
+                                            PlaceholderText="点击后按组合键"
+                                            Text="{Binding HotkeySettings, Mode=OneWay}"
+                                            PreviewKeyDown="HotKeySettingsBox_PreviewKeyDown" HorizontalAlignment="Right" />
+                                        <Button Content="重置" Command="{Binding ResetHotkeySettingsCommand}" ToolTipService.ToolTip="恢复默认 Ctrl+Alt+X" />
+                                    </StackPanel>
+                                </Grid>
+                                <!-- 长久态错误(热键被占用):常驻显示,不自动消失 -->
+                                <TextBlock
+                                    Text="{Binding HotkeySettingsStatusText}"
+                                    FontSize="12"
+                                    Foreground="#DC2626"
+                                    Visibility="{Binding HasHotkeySettingsIssue, Converter={StaticResource BoolToVis}}" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="打开链接热键" Style="{ThemeResource BodyStrongTextBlockStyle}" />
+                                        <TextBlock Text="在浏览器中打开最近复制的网址" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                        <TextBox x:Name="HotKeyOpenUrlBox" Width="150" IsReadOnly="True"
+                                            PlaceholderText="点击后按组合键"
+                                            Text="{Binding HotkeyOpenUrl, Mode=OneWay}"
+                                            PreviewKeyDown="HotKeyOpenUrlBox_PreviewKeyDown" HorizontalAlignment="Right" />
+                                        <Button Content="重置" Command="{Binding ResetHotkeyOpenUrlCommand}" ToolTipService.ToolTip="恢复默认 Ctrl+Alt+O" />
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <StackPanel Spacing="4" Margin="4,0,0,0">
+                            <TextBlock Text="剪贴板窗口快捷操作" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        </StackPanel>
+                        <Border
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="20">
+                            <StackPanel Spacing="8">
+                                <Border
+                                    Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="16,12">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Ctrl + F" FontFamily="Consolas" VerticalAlignment="Center" />
+                                        <TextBlock Grid.Column="1" Text="聚焦搜索框,直接输入即可过滤条目" Margin="16,0,0,0" VerticalAlignment="Center" />
+                                    </Grid>
+                                </Border>
+                                <Border
+                                    Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="16,12">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="↑ / ↓" FontFamily="Consolas" VerticalAlignment="Center" />
+                                        <TextBlock Grid.Column="1" Text="在候选条目间移动(呼出后自动选中最新一条)" Margin="16,0,0,0" VerticalAlignment="Center" />
+                                    </Grid>
+                                </Border>
+                                <Border
+                                    Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="16,12">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Enter" FontFamily="Consolas" VerticalAlignment="Center" />
+                                        <TextBlock Grid.Column="1" Text="确认候选:复制并粘贴到呼出前的窗口输入框" Margin="16,0,0,0" VerticalAlignment="Center" />
+                                    </Grid>
+                                </Border>
+                                <TextBlock Text="以上为当前固定行为说明，暂不开放修改。" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Margin="0,4,0,0" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ====== 数据管理 ====== -->
+                    <StackPanel x:Name="GroupData" Visibility="Collapsed" Spacing="20">
+                        <StackPanel Spacing="4" Margin="4,0,0,0">
+                            <TextBlock Text="本地数据" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        </StackPanel>
+                        <Border
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="20">
+                            <StackPanel Spacing="12">
+                                <!-- 导入 / 导出 -->
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button Click="ExportButton_Click">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Image Source="{x:Bind services:Lucide.Download}" Width="14" Height="14" />
+                                            <TextBlock Text="导出数据" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Click="ImportButton_Click">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Image Source="{x:Bind services:Lucide.Upload}" Width="14" Height="14" />
+                                            <TextBlock Text="导入数据" />
+                                        </StackPanel>
+                                    </Button>
+                                    <ProgressRing IsActive="{Binding IsDataBusy}" Width="16" Height="16" VerticalAlignment="Center" />
+                                </StackPanel>
+
+                                <!-- 储存条目上限 -->
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="储存条目上限" />
+                                        <TextBlock Text="超过上限自动删除最旧条目" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <ComboBox
+                                        Grid.Column="1"
+                                        Width="140"
+                                        HorizontalAlignment="Right"
+                                        ItemsSource="{Binding MaxHistoryOptions}"
+                                        SelectedIndex="{Binding MaxHistoryIndex, Mode=TwoWay}" />
+                                </Grid>
+
+                                <!-- 时间上限 -->
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="保留时长上限" />
+                                        <TextBlock Text="超过期限的旧条目自动清理" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <ComboBox
+                                        Grid.Column="1"
+                                        Width="140"
+                                        HorizontalAlignment="Right"
+                                        ItemsSource="{Binding RetentionDaysLabels}"
+                                        SelectedIndex="{Binding RetentionDaysIndex, Mode=TwoWay}" />
+                                </Grid>
+
+                                <!-- 储存位置:标题行(右侧修改按钮) + 下一行路径 -->
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="储存位置" Style="{ThemeResource BodyStrongTextBlockStyle}" />
+                                        <TextBlock Text="历史数据(数据库与图片缓存)保存目录" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <Button
+                                        Grid.Column="1"
+                                        Click="ChangeStorageDir_Click"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        ToolTipService.ToolTip="选择新的储存位置">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Image Source="{x:Bind services:Lucide.FolderOpen}" Width="14" Height="14" />
+                                            <TextBlock Text="修改" />
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock
+                                        Text="{Binding ConfiguredStorageDir}"
+                                        FontSize="12"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        TextWrapping="Wrap"
+                                        VerticalAlignment="Center" />
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                        <Button
+                                            Click="OpenDbFolder_Click"
+                                            Padding="8,4"
+                                            Background="Transparent"
+                                            BorderThickness="0"
+                                            ToolTipService.ToolTip="打开数据目录"
+                                            AutomationProperties.Name="打开数据目录">
+                                            <Image Source="{x:Bind services:Lucide.FolderOpen}" Width="14" Height="14" />
+                                        </Button>
+                                        <TextBlock
+                                            Text="{Binding DataCountText}"
+                                            FontSize="12"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- 清空历史 -->
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="清空历史" />
+                                        <TextBlock Text="删除全部本地历史与图片缓存(不可恢复)" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="清空历史" Click="ClearHistoryButton_Click" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ====== 关于 ====== -->
+                    <StackPanel x:Name="GroupAbout" Visibility="Collapsed" Spacing="20">
+                        <StackPanel Spacing="4" Margin="4,0,0,0">
+                            <TextBlock Text="应用信息" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        </StackPanel>
+                        <Border
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="24">
+                            <StackPanel Spacing="18">
+
+                                <!-- 应用头部:Logo + 名称 + 版本 -->
+                                <StackPanel Orientation="Horizontal" Spacing="14">
+                                    <Border Width="52" Height="52" CornerRadius="12" VerticalAlignment="Center">
+                                        <Image Source="ms-appx:///Assets/icon.png" Width="52" Height="52" Stretch="Uniform" />
+                                    </Border>
+                                    <StackPanel VerticalAlignment="Center" Spacing="3">
+                                        <StackPanel Orientation="Horizontal" Spacing="10">
+                                            <TextBlock Text="NexClip" Style="{ThemeResource TitleTextBlockStyle}" />
+                                            <Border Background="#2563EB22" CornerRadius="6" Padding="8,2" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding VersionText}" FontSize="12" Foreground="#2563EB" />
+                                            </Border>
+                                        </StackPanel>
+                                        <TextBlock Text="轻量剪贴板管理 · 多端同步" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                                <!-- 信息行:标签 | 值 -->
+                                <StackPanel Spacing="14">
+                                    <Grid ColumnSpacing="32">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="88" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="框架" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                                        <StackPanel Grid.Column="1" Spacing="2">
+                                            <TextBlock Text="WinUI 3 · .NET 9" FontSize="13" />
+                                            <TextBlock Text="自包含 x64 桌面应用" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <Grid ColumnSpacing="32">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="88" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="服务端" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                                        <StackPanel Grid.Column="1" Spacing="2">
+                                            <TextBlock Text="NexClip Server (node)" FontSize="13" />
+                                            <TextBlock Text="SignalR 实时同步 · REST 接口" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <Grid ColumnSpacing="32">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="88" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="数据位置" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                                        <TextBlock
+                                            Grid.Column="1"
+                                            Text="{Binding ConfiguredStorageDir}"
+                                            FontSize="12"
+                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            TextWrapping="Wrap" />
+                                    </Grid>
+                                    <Grid ColumnSpacing="32">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="88" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="项目地址" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                                        <HyperlinkButton Click="OpenProject_Click" HorizontalAlignment="Left" Padding="0">
+                                            <TextBlock Text="github.com/yixing233/easy-clip" FontSize="13" />
+                                        </HyperlinkButton>
+                                    </Grid>
+                                </StackPanel>
+
+                                <Rectangle Height="1" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                                <!-- 简介 -->
+                                <TextBlock
+                                    Text="开源跨平台剪贴板同步工具:复制内容后自动同步到多台设备,支持文本与图片,本机保留历史记录可随时检索与粘贴。"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    TextWrapping="Wrap"
+                                    LineHeight="20" />
+
+                                <!-- 操作 -->
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button Click="OpenProject_Click">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Image Source="{x:Bind services:Lucide.FolderOpen}" Width="14" Height="14" />
+                                            <TextBlock Text="打开项目主页" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Click="CopyVersionInfo_Click">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Image Source="{x:Bind services:Lucide.Copy}" Width="14" Height="14" />
+                                            <TextBlock Text="复制版本信息" />
+                                        </StackPanel>
+                                    </Button>
+                                </StackPanel>
+
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- 统一消息提示:固定在内容区右上角,不挤压设置内容;窄窗口下自动收缩 -->
+            <Grid
+                x:Name="MessageHost"
+                Canvas.ZIndex="10"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Top"
+                Margin="24,16,24,0"
+                MaxWidth="420">
+                <InfoBar
+                    x:Name="SettingsMessageBar"
+                    AutomationProperties.AutomationId="SettingsMessageBar"
+                    AutomationProperties.LiveSetting="Polite"
+                    HorizontalAlignment="Stretch"
+                    IsOpen="{Binding MessageOpen, Mode=TwoWay}"
+                    Severity="{Binding MessageSeverity}"
+                    Message="{Binding MessageText}"
+                    IsClosable="True" />
+            </Grid>
+
+        </Grid>
+    </NavigationView>
 </Page>

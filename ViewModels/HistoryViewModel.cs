@@ -16,7 +16,7 @@ public partial class HistoryViewModel : ObservableObject
     private string searchText = "";
 
     [ObservableProperty]
-    private int filterIndex;   // 0=全部 1=文本 2=图片 3=收藏
+    private int filterIndex;   // 0=全部 1=文本 2=图片 3=收藏 4=链接
 
     [ObservableProperty]
     private bool isBusy;
@@ -75,7 +75,8 @@ public partial class HistoryViewModel : ObservableObject
         {
             var type = FilterIndex switch { 1 => "Text", 2 => "Image", _ => null };
             var starred = FilterIndex == 3;
-            var items = _engine.History.Query(SearchText?.Trim(), type, starred);
+            var urlOnly = FilterIndex == 4;
+            var items = _engine.History.Query(SearchText?.Trim(), type, starred, 500, urlOnly);
             Items.Clear();
             foreach (var item in items)
             {
@@ -109,6 +110,15 @@ public partial class HistoryViewModel : ObservableObject
         item.Starred = !item.Starred;
         _engine.History.ToggleStar(item.Item.Id, item.Starred);
         item.Item.Starred = item.Starred;
+    }
+
+    public void UpdateText(HistoryItemViewModel item, string text)
+    {
+        if (_engine is null) return;
+        var trimmed = text.Trim();
+        if (trimmed.Length == 0 || trimmed == item.Item.Text) return;
+        _engine.History.UpdateText(item.Item.Id, trimmed);
+        item.ApplyText(trimmed);
     }
 
     [RelayCommand]

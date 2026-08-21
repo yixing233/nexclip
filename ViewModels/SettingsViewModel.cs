@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using SyncClipboard.Desktop.Models;
 using SyncClipboard.Desktop.Services;
 
@@ -11,8 +13,8 @@ public partial class SettingsViewModel : ObservableObject
 {
     private readonly AppServices _svc;
 
-    /// <summary>配对码生成完成事件(码 + 过期时间),供页面弹出对话框展示。</summary>
-    public event Action<string, DateTime>? PairingCodeGenerated;
+    /// <summary>配对码生成完成事件,供页面弹出对话框展示(含配对码、过期时间及用户ID)。</summary>
+    public event Action<PairingCodeResult>? PairingCodeGenerated;
 
     // ---- 服务端连接(编辑态,点"保存设置"落盘) ----
     [ObservableProperty]
@@ -21,8 +23,51 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string deviceName = "";
 
-    /// <summary>已配对状态(配对码登记成功即视为已配对;同步接口免认证)。</summary>
+    /// <summary>已配对状态；同步接口同时要求有效的设备令牌。</summary>
     public bool IsPaired => _svc.Settings.IsPaired;
+
+    public string PairingStatusText => IsPaired ? "已完成配对" : "尚未配对";
+
+    public string PairingStatusHint => IsPaired
+        ? "本机可以同步剪贴板并查看其他设备状态"
+        : "生成或输入配对码，完成本机接入";
+
+    public string DeviceIdText => _svc.Settings.DeviceId;
+
+    // ---- 统一消息提示(InfoBar:普通/成功/错误) ----
+    [ObservableProperty]
+    private string messageText = "";
+
+    [ObservableProperty]
+    private InfoBarSeverity messageSeverity = InfoBarSeverity.Informational;
+
+    [ObservableProperty]
+    private bool messageOpen;
+
+    /// <summary>显示消息(空文本关闭)。severity:Informational=普通 Success=成功 Error=错误。</summary>
+    public void ShowMessage(string text, InfoBarSeverity severity = InfoBarSeverity.Informational)
+    {
+        MessageSeverity = severity;
+        MessageText = text;
+        MessageOpen = !string.IsNullOrEmpty(text);
+    }
+
+    // ---- 快捷键页持久状态(长驻错误如热键占用,显示在对应热键项下方) ----
+    [ObservableProperty]
+    private string hotkeyStatusText = "";
+
+    [ObservableProperty]
+    private bool hasHotkeyIssue;
+
+    [ObservableProperty]
+    private string hotkeySettingsStatusText = "";
+
+    [ObservableProperty]
+    private bool hasHotkeySettingsIssue;
+
+    // 快捷键反馈也进入统一消息宿主;长久态占用错误仍保留在对应设置项下方。
+    public void ShowHotkeyMessage(string text, InfoBarSeverity severity = InfoBarSeverity.Informational) =>
+        ShowMessage(text, severity);
 
     [ObservableProperty]
     private string testResult = "";
@@ -30,9 +75,12 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool isTesting;
 
-    // ---- 设备配对(配对码 → 设备专属 Token) ----
+    // ---- 设备配对(配对码 + 用户ID → 等待对方确认) ----
     [ObservableProperty]
     private string pairingCode = "";
+
+    [ObservableProperty]
+    private string pairUserId = "";
 
     [ObservableProperty]
     private bool isPairing;
@@ -70,10 +118,16 @@ public partial class SettingsViewModel : ObservableObject
     private bool notifyEnabled;
 
     [ObservableProperty]
+    private bool copyDirectEnabled;
+
+    [ObservableProperty]
     private string hotkey = "Alt+V";            // 剪贴板呼出
 
     [ObservableProperty]
     private string hotkeySettings = "Alt+X";    // 设置打开
+
+    [ObservableProperty]
+    private string hotkeyOpenUrl = "Ctrl+Alt+O";   // 打开复制的链接
 
     // ---- 设备列表 ----
     public ObservableCollection<DeviceInfo> Devices { get; } = new();
@@ -84,6 +138,15 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool isDevicesLoading;
 
+    [ObservableProperty]
+    private string deviceLoadErrorText = "";
+
+    public bool HasDevices => Devices.Count > 0;
+
+    public bool HasDeviceLoadError => !string.IsNullOrWhiteSpace(DeviceLoadErrorText);
+
+    public bool ShowDeviceEmptyState => !IsDevicesLoading && !HasDeviceLoadError && !HasDevices;
+
     // ---- 历史 / 外观 ----
     [ObservableProperty]
     private int maxHistoryIndex;
@@ -91,7 +154,54 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private int themeModeIndex = 2;   // 0=浅色 1=深色 2=跟随系统
 
+    /// <summary>窗口背景材质:0=云母 1=云母增强 2=亚克力。</summary>
+    [ObservableProperty]
+    private int backdropIndex;
+
+    /// <summary>亚克力背景不透明度(0.5~1,越大越不透明)。</summary>
+    [ObservableProperty]
+    private double backdropTintOpacity = 0.85;
+
+    /// <summary>剪贴板窗口出现位置:0=跟随鼠标 1=屏幕中心。</summary>
+    [ObservableProperty]
+    private int windowPositionIndex;
+
+    /// <summary>历史保留天数:0=不限,其余=天数。</summary>
+    [ObservableProperty]
+    private int retentionDaysIndex;
+
+    /// <summary>粘贴键:0=Shift+Insert 1=Ctrl+V。</summary>
+    [ObservableProperty]
+    private int pasteKeyIndex;
+
+    [ObservableProperty]
+    private string dataStatus = "";
+
+    [ObservableProperty]
+    private bool isDataBusy;
+
+    [ObservableProperty]
+    private string dataResult = "";
+
+    /// <summary>历史条目总数(数据管理页展示)。</summary>
+    public int DataCount => _svc.History.Count;
+
+    public string DataCountText => $"共 {DataCount} 条历史";
+
+    /// <summary>历史数据库路径(数据管理页展示)。</summary>
+    public string StoragePath => _svc.History.DbPath;
+
+    /// <summary>图片缓存目录。</summary>
+    public string ImageCachePath => Services.ImageCodec.CacheDir;
+
+    /// <summary>配置的数据储存目录(设置项,重启后生效)。</summary>
+    public string ConfiguredStorageDir => _svc.Settings.ResolveStorageDir();
+
     public int[] MaxHistoryOptions { get; } = { 50, 100, 200, 500, 1000 };
+
+    public int[] RetentionDaysOptions { get; } = { 0, 7, 30, 90, 180, 365 };
+
+    public string[] RetentionDaysLabels { get; } = { "不限", "7 天", "30 天", "90 天", "180 天", "365 天" };
 
     public string VersionText { get; } = "v" + typeof(SettingsViewModel).Assembly.GetName().Version?.ToString(3);
 
@@ -110,11 +220,58 @@ public partial class SettingsViewModel : ObservableObject
         MonitorEnabled = s.MonitorEnabled;
         AutoPaste = s.AutoPaste;
         NotifyEnabled = s.NotifyEnabled;
+        CopyDirectEnabled = s.CopyDirectEnabled;
         Hotkey = s.Hotkey;
         HotkeySettings = s.HotkeySettings;
+        HotkeyOpenUrl = s.HotkeyOpenUrl;
         var idx = Array.IndexOf(MaxHistoryOptions, s.MaxHistory);
         MaxHistoryIndex = idx >= 0 ? idx : 2;
         ThemeModeIndex = s.ThemeMode switch { "light" => 0, "dark" => 1, _ => 2 };
+        BackdropIndex = s.BackdropMode switch { "MicaAlt" => 1, "Acrylic" => 2, _ => 0 };
+        BackdropTintOpacity = s.BackdropTintOpacity;
+        WindowPositionIndex = s.WindowPositionMode == "center" ? 1 : 0;
+        var rIdx = Array.IndexOf(RetentionDaysOptions, s.RetentionDays);
+        RetentionDaysIndex = rIdx >= 0 ? rIdx : 0;
+        PasteKeyIndex = s.PasteKey == "CtrlV" ? 1 : 0;
+        // 快捷键占用等长久态错误:注册失败时在快捷键页对应区域常驻提示
+        RefreshHotkeyStatus();
+    }
+
+    /// <summary>根据当前注册状态刷新热键常驻提示(占用/非法时显示)。</summary>
+    public void RefreshHotkeyStatus()
+    {
+        HotkeyStatusText = App.Hotkey is { IsRegistered: true }
+            ? ""
+            : $"“{Hotkey}”已被其他程序占用或格式非法,当前无法使用";
+        HasHotkeyIssue = !string.IsNullOrEmpty(HotkeyStatusText);
+        HotkeySettingsStatusText = App.HotkeySettings is { IsRegistered: true }
+            ? ""
+            : $"“{HotkeySettings}”已被其他程序占用或格式非法,当前无法使用";
+        HasHotkeySettingsIssue = !string.IsNullOrEmpty(HotkeySettingsStatusText);
+        HotkeyOpenUrl = App.HotkeyOpenUrl is { IsRegistered: true } ? HotkeyOpenUrl : HotkeyOpenUrl;
+        // 打开链接热键的占用提示并入设置热键状态区(同一常驻提示)
+        var openUrlOk = App.HotkeyOpenUrl is { IsRegistered: true };
+        if (openUrlOk && IsRegisteredHotkeyTextEmpty())
+        {
+            // 全部正常时无提示
+        }
+        else if (string.IsNullOrEmpty(HotkeySettingsStatusText) && !openUrlOk)
+        {
+            HotkeySettingsStatusText = $"“{HotkeyOpenUrl}”已被其他程序占用或格式非法,当前无法使用";
+            HasHotkeySettingsIssue = true;
+        }
+    }
+
+    private bool IsRegisteredHotkeyTextEmpty() => string.IsNullOrEmpty(HotkeySettingsStatusText);
+
+    /// <summary>刷新数据管理页统计(条目数)。</summary>
+    public void RefreshDataStatus()
+    {
+        OnPropertyChanged(nameof(DataCount));
+        OnPropertyChanged(nameof(DataCountText));
+        OnPropertyChanged(nameof(StoragePath));
+        OnPropertyChanged(nameof(ImageCachePath));
+        OnPropertyChanged(nameof(ConfiguredStorageDir));
     }
 
     [RelayCommand]
@@ -125,8 +282,64 @@ public partial class SettingsViewModel : ObservableObject
         s.DeviceName = DeviceName.Trim();
         s.Save();
         _svc.Main.RefreshConnectionState();
-        TestResult = "设置已保存,正在重新连接…";
+        ShowMessage("设置已保存,正在重新连接…", InfoBarSeverity.Success);
         _ = _svc.Engine?.ReconfigureAsync();
+        _ = RefreshDevicesAsync();
+    }
+
+    /// <summary>重新生成本机设备 ID (GUID)。</summary>
+    [RelayCommand]
+    public void RegenerateDeviceId()
+    {
+        var newId = Guid.NewGuid().ToString("N");
+        _svc.Settings.DeviceId = newId;
+        _svc.Settings.Save();
+        OnPropertyChanged(nameof(DeviceIdText));
+        ShowMessage("已重新生成本机设备 ID，正在重新连接…", InfoBarSeverity.Success);
+        _svc.Main.RefreshConnectionState();
+        _ = _svc.Engine?.ReconfigureAsync();
+        _ = RefreshDevicesAsync();
+    }
+
+    /// <summary>复制本机设备 ID 到剪贴板。</summary>
+    [RelayCommand]
+    public void CopyDeviceId()
+    {
+        var dp = new Windows.ApplicationModel.DataTransfer.DataPackage();
+        dp.SetText(DeviceIdText);
+        Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
+        ShowMessage("本机设备 ID 已复制到剪贴板", InfoBarSeverity.Success);
+    }
+
+    /// <summary>保存设备名称并同步至服务端。</summary>
+    [RelayCommand]
+    public async Task SaveDeviceNameAsync()
+    {
+        var newName = DeviceName.Trim();
+        if (string.IsNullOrWhiteSpace(newName))
+        {
+            newName = Environment.MachineName;
+            DeviceName = newName;
+        }
+        _svc.Settings.DeviceName = newName;
+        _svc.Settings.Save();
+
+        var s = _svc.Settings;
+        if (!string.IsNullOrWhiteSpace(s.ServerUrl) && !string.IsNullOrWhiteSpace(s.DeviceId))
+        {
+            try
+            {
+                await _svc.Api.RenameDeviceAsync(s.ServerUrl, s.DeviceId, newName, s.DeviceId, s.AuthToken);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"同步修改设备名称至服务器失败: {ex.Message}");
+            }
+        }
+        _svc.Main.RefreshConnectionState();
+        _ = _svc.Engine?.ReconfigureAsync();
+        _ = RefreshDevicesAsync();
+        ShowMessage($"设备名称已更新为「{newName}」", InfoBarSeverity.Success);
     }
 
     /// <summary>重置剪贴板热键为默认 Alt+V。</summary>
@@ -135,7 +348,7 @@ public partial class SettingsViewModel : ObservableObject
     {
         if (Hotkey == "Alt+V")
         {
-            TestResult = "剪贴板热键已是默认值 Alt+V";
+            ShowHotkeyMessage("剪贴板热键已是默认值 Alt+V");
             return;
         }
         Hotkey = "Alt+V";
@@ -147,17 +360,87 @@ public partial class SettingsViewModel : ObservableObject
     {
         if (HotkeySettings == "Alt+X")
         {
-            TestResult = "设置热键已是默认值 Alt+X";
+            ShowHotkeyMessage("设置热键已是默认值 Alt+X");
             return;
         }
         HotkeySettings = "Alt+X";
+    }
+
+    /// <summary>重置打开链接热键为默认 Ctrl+Alt+O。</summary>
+    [RelayCommand]
+    public void ResetHotkeyOpenUrl()
+    {
+        if (HotkeyOpenUrl == "Ctrl+Alt+O")
+        {
+            ShowHotkeyMessage("打开链接热键已是默认值 Ctrl+Alt+O");
+            return;
+        }
+        HotkeyOpenUrl = "Ctrl+Alt+O";
     }
 
     [RelayCommand]
     public void ClearHistory()
     {
         _svc.Engine?.History.Clear();
-        TestResult = "本地历史已清空";
+        RefreshDataStatus();
+        _ = _svc.HistoryVm.RefreshAsync();
+        ShowMessage("本地历史已清空", InfoBarSeverity.Success);
+    }
+
+    /// <summary>
+    /// 应用新的数据储存位置:把现有数据(数据库 + 图片缓存 + 条目图片路径)迁移到新目录并立即生效。
+    /// 返回操作结果文案(供页面显示)。
+    /// </summary>
+    public string ApplyStorageDir(string newDir)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(newDir)) return "储存位置无效";
+            newDir = Path.GetFullPath(newDir.Trim());
+            Directory.CreateDirectory(newDir);
+
+            var oldDb = _svc.History.DbPath;
+            var oldImages = Services.ImageCodec.CacheDir;
+            var newDb = Path.Combine(newDir, "history.db");
+            var newImages = Path.Combine(newDir, "images");
+
+            // 迁移:新目录无数据才复制(避免覆盖已有数据)
+            if (File.Exists(oldDb) && !File.Exists(newDb))
+            {
+                File.Copy(oldDb, newDb);
+                if (Directory.Exists(oldImages))
+                {
+                    CopyDirectory(oldImages, newImages);
+                }
+                _svc.History.UpdateImagePaths(oldImages, newImages);
+            }
+
+            _svc.Settings.StorageDir = newDir;
+            _svc.Settings.Save();
+            _svc.History.Reopen(newDir);
+            Services.ImageCodec.Initialize(newDir);
+            RefreshDataStatus();
+            _ = _svc.HistoryVm.RefreshAsync();
+            return $"储存位置已更新:{newDir}";
+        }
+        catch (Exception ex)
+        {
+            Log.Error("修改储存位置失败", ex);
+            return $"修改储存位置失败：{ServerApi.DescribeException(ex, "请检查目录路径、权限和磁盘空间。")}";
+        }
+    }
+
+    private static void CopyDirectory(string src, string dst)
+    {
+        Directory.CreateDirectory(dst);
+        foreach (var file in Directory.GetFiles(src))
+        {
+            File.Copy(file, Path.Combine(dst, Path.GetFileName(file)), true);
+        }
+        foreach (var dir in Directory.GetDirectories(src))
+        {
+            CopyDirectory(dir, Path.Combine(dst, Path.GetFileName(dir)));
+        }
     }
 
     /// <summary>
@@ -170,31 +453,39 @@ public partial class SettingsViewModel : ObservableObject
         var url = ServerUrl?.Trim();
         if (string.IsNullOrWhiteSpace(url))
         {
-            PairResult = "请先填写服务器地址";
+            ShowMessage("请先填写服务器地址");
             return;
         }
         IsGeneratingCode = true;
-        PairResult = "";
+        ShowMessage("");
         GeneratedCode = "";
         try
         {
             // 携带本设备信息生成:服务端同步登记本设备,设备列表可看到本机
-            var result = await _svc.Api.CreatePairingCodeAsync(url, _svc.Settings.DeviceId, _svc.Settings.DeviceName);
+            var result = await _svc.Api.CreatePairingCodeAsync(url, _svc.Settings.DeviceId, _svc.Settings.DeviceName, _svc.Settings.AuthToken);
             if (result is null || string.IsNullOrWhiteSpace(result.Code))
             {
-                PairResult = "生成失败:服务器未返回配对码";
+                ShowMessage("生成失败:服务器未返回配对码", InfoBarSeverity.Error);
                 return;
             }
             GeneratedCode = result.Code;
+            if (!string.IsNullOrWhiteSpace(result.DeviceToken))
+            {
+                _svc.Settings.AuthToken = result.DeviceToken;
+                _svc.Settings.IsPaired = true;
+                _svc.Settings.Save();
+                NotifyPairingStateChanged();
+            }
             // 关闭即失效:不再按时间显示有效期
             CodeExpiryText = "关闭对话框后此配对码立即失效";
-            PairResult = "配对码已生成:把此码输入到新设备的配对框即可接入";
-            PairingCodeGenerated?.Invoke(result.Code, result.ExpiresAt);
+            ShowMessage("配对码已生成:把此码输入到新设备的配对框即可接入");
+            PairingCodeGenerated?.Invoke(result);
             _ = RefreshDevicesAsync();
         }
         catch (Exception ex)
         {
-            PairResult = $"生成失败:{ex.Message}";
+            Log.Error("生成配对码失败", ex);
+            ShowMessage($"生成失败：{ServerApi.DescribeException(ex, "请检查服务器配置后重试。")}", InfoBarSeverity.Error);
         }
         finally
         {
@@ -213,62 +504,94 @@ public partial class SettingsViewModel : ObservableObject
         CodeExpiryText = "";
         try
         {
-            await _svc.Api.RevokePairingCodeAsync(ServerUrl.Trim(), code);
-            PairResult = "配对码已作废(对话框关闭)";
+            await _svc.Api.RevokePairingCodeAsync(ServerUrl.Trim(), code, _svc.Settings.DeviceId, _svc.Settings.AuthToken);
         }
         catch (Exception ex)
         {
-            Log.Error($"配对码作废失败:{ex.Message}");
+            Log.Debug($"配对码作废静默捕获: {ex.Message}");
         }
     }
 
     /// <summary>
-    /// 配对:输入另一台设备生成的配对码,完成本设备接入登记。
-    /// 新架构:配对仅登记,同步接口免认证;网页端管理用账密。
+    /// 配对: 输入另一台设备生成的配对码与用户ID, 发起配对并轮询等待对方确认。
     /// </summary>
     [RelayCommand]
     public async Task PairDeviceAsync()
     {
-        var code = PairingCode?.Trim();
+        var code = PairingCode?.Trim().ToUpperInvariant();
+        var uid = PairUserId?.Trim();
         if (string.IsNullOrWhiteSpace(code))
         {
-            PairResult = "请输入配对码";
+            ShowMessage("请输入配对码");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(uid))
+        {
+            ShowMessage("请输入用户 ID");
             return;
         }
         var s = _svc.Settings;
         if (string.IsNullOrWhiteSpace(ServerUrl))
         {
-            PairResult = "请先填写服务器地址";
+            ShowMessage("请先填写服务器地址");
             return;
         }
         IsPairing = true;
-        PairResult = "正在配对…";
+        ShowMessage("已发起配对请求，等待对方设备确认（120秒超时）…");
         try
         {
-            var result = await _svc.Api.PairAsync(ServerUrl.Trim(), code, s.DeviceId, s.DeviceName);
-            if (result is null)
+            var pairResult = await _svc.Api.PairAsync(ServerUrl.Trim(), code, uid, s.DeviceId, s.DeviceName);
+            if (string.IsNullOrWhiteSpace(pairResult.DeviceToken))
             {
-                PairResult = "配对失败:服务器未返回设备信息";
-                return;
+                throw new ApiException("服务器未返回设备凭证，请确认服务端已更新。", System.Net.HttpStatusCode.BadGateway);
             }
-            // 配对即登记:同步接口免认证,无需保存任何令牌
-            s.IsPaired = true;
-            s.Save();
-            _svc.Main.RefreshConnectionState();
-            PairResult = $"配对成功:设备 {result.DeviceId} 已绑定";
-            _ = _svc.Engine?.ReconfigureAsync();
-            _ = RefreshDevicesAsync();
-            OnPropertyChanged(nameof(IsPaired));
-        }
-        catch (ApiException ex)
-        {
-            PairResult = ex.StatusCode == System.Net.HttpStatusCode.BadRequest
-                ? "配对失败:配对码无效、已使用或已过期"
-                : $"配对失败:{ex.Message}";
+
+            // 轮询配对审核结果 (最多等待 2 分钟，120 秒超时倒计时)
+            var deadline = DateTime.UtcNow.AddSeconds(120);
+            string status = "pending";
+            while (DateTime.UtcNow < deadline)
+            {
+                var remaining = (int)Math.Max(0, Math.Ceiling((deadline - DateTime.UtcNow).TotalSeconds));
+                ShowMessage($"已发起配对请求，等待对方设备确认接入（剩余 {remaining}s）…");
+                await Task.Delay(2000);
+                var statusRes = await _svc.Api.GetPairStatusAsync(ServerUrl.Trim(), code, s.DeviceId);
+                status = statusRes.Status;
+                if (status == "approved" || status == "rejected" || status == "expired" || status == "not-found")
+                {
+                    break;
+                }
+            }
+
+            if (status == "approved")
+            {
+                s.AuthToken = pairResult.DeviceToken;
+                s.IsPaired = true;
+                s.Save();
+                _svc.Main.RefreshConnectionState();
+                ShowMessage("配对成功！本设备已成功加入同步设备组", InfoBarSeverity.Success);
+                PairingCode = "";
+                PairUserId = "";
+                _ = _svc.Engine?.ReconfigureAsync();
+                _ = RefreshDevicesAsync();
+                NotifyPairingStateChanged();
+            }
+            else if (status == "rejected")
+            {
+                ShowMessage("配对请求已被对方设备拒绝", InfoBarSeverity.Error);
+            }
+            else if (status == "expired")
+            {
+                ShowMessage("配对码已过期，请重新获取配对码", InfoBarSeverity.Error);
+            }
+            else
+            {
+                ShowMessage("等待对方确认超时，请重新发起配对", InfoBarSeverity.Error);
+            }
         }
         catch (Exception ex)
         {
-            PairResult = $"配对失败:{ex.Message}";
+            Log.Error("设备配对失败", ex);
+            ShowMessage($"配对失败：{ServerApi.DescribeException(ex, "请检查配对码、用户 ID 和服务器配置后重试。")}", InfoBarSeverity.Error);
         }
         finally
         {
@@ -283,28 +606,92 @@ public partial class SettingsViewModel : ObservableObject
         var s = _svc.Settings;
         if (string.IsNullOrWhiteSpace(s.ServerUrl))
         {
-            DeviceStatus = "未配置服务器,无法加载设备列表";
+            Devices.Clear();
+            DeviceStatus = "等待配置";
+            DeviceLoadErrorText = "";
+            NotifyDeviceStateChanged();
             return;
         }
+
+        if (IsDevicesLoading) return;
+
         IsDevicesLoading = true;
-        DeviceStatus = "";
+        DeviceLoadErrorText = "";
+        DeviceStatus = Devices.Count > 0 ? $"正在更新 · {Devices.Count} 台" : "正在加载…";
+        NotifyDeviceStateChanged();
         try
         {
-            // 设备列表 GET 免认证(管理操作在网页端)
-            var list = await _svc.Api.GetDevicesAsync(s.ServerUrl, "");
+            var list = await _svc.Api.GetDevicesAsync(s.ServerUrl, s.DeviceId, s.AuthToken);
             Devices.Clear();
-            foreach (var d in list) Devices.Add(d);
-            DeviceStatus = list.Count == 0 ? "暂无设备" : $"共 {list.Count} 台设备";
+            var myId = s.DeviceId;
+            foreach (var d in list)
+            {
+                d.IsCurrent = string.Equals(d.Id, myId, StringComparison.OrdinalIgnoreCase);
+            }
+            var sorted = list.OrderByDescending(d => d.IsCurrent)
+                             .ThenByDescending(d => d.Online)
+                             .ThenByDescending(d => d.LastSeenAt);
+            foreach (var d in sorted) Devices.Add(d);
+            DeviceStatus = list.Count == 0 ? "暂无设备" : $"{list.Count} 台设备";
         }
         catch (Exception ex)
         {
-            DeviceStatus = $"设备列表加载失败:{ex.Message}";
+            DeviceLoadErrorText = BuildDeviceLoadErrorMessage(ex);
+            DeviceStatus = Devices.Count > 0 ? $"更新失败 · 保留 {Devices.Count} 台" : "加载失败";
+            Log.Warn($"设备列表加载失败:{ex.Message}");
         }
         finally
         {
             IsDevicesLoading = false;
+            NotifyDeviceStateChanged();
         }
     }
+
+    /// <summary>移除/注销指定设备 (DELETE /api/devices/{id})。</summary>
+    [RelayCommand]
+    public async Task RemoveDeviceAsync(DeviceInfo? device)
+    {
+        if (device == null || device.IsCurrent) return;
+        var s = _svc.Settings;
+        if (string.IsNullOrWhiteSpace(s.ServerUrl)) return;
+
+        try
+        {
+            await _svc.Api.RemoveDeviceAsync(s.ServerUrl, device.Id, s.DeviceId, s.AuthToken);
+            Devices.Remove(device);
+            DeviceStatus = Devices.Count == 0 ? "暂无设备" : $"{Devices.Count} 台设备";
+            NotifyDeviceStateChanged();
+            ShowMessage($"已成功移除设备「{device.Name ?? device.Id}」", InfoBarSeverity.Success);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("移除设备失败", ex);
+            ShowMessage($"移除设备失败: {ServerApi.DescribeException(ex, "网络错误")}", InfoBarSeverity.Error);
+        }
+    }
+
+    private void NotifyPairingStateChanged()
+    {
+        OnPropertyChanged(nameof(IsPaired));
+        OnPropertyChanged(nameof(PairingStatusText));
+        OnPropertyChanged(nameof(PairingStatusHint));
+    }
+
+    private void NotifyDeviceStateChanged()
+    {
+        OnPropertyChanged(nameof(HasDevices));
+        OnPropertyChanged(nameof(HasDeviceLoadError));
+        OnPropertyChanged(nameof(ShowDeviceEmptyState));
+    }
+
+    private static string BuildDeviceLoadErrorMessage(Exception ex) => ex switch
+    {
+        UriFormatException => "服务器地址格式不正确，请检查地址后保存并重试。",
+        TaskCanceledException => "服务器响应超时，请确认服务器正在运行，并检查当前网络连接。",
+        HttpRequestException => "无法连接到服务器，请检查服务器地址、网络和防火墙设置。",
+        ApiException api => api.Message,
+        _ => ServerApi.DescribeException(ex, "暂时无法获取设备列表，请检查服务器配置后重试。"),
+    };
 
     // 注:设备移除/重命名属于管理操作,需网页端账密登录后执行;
     // 桌面端设备列表仅作展示与刷新。
@@ -330,25 +717,41 @@ public partial class SettingsViewModel : ObservableObject
         return $"{(int)diff.TotalDays} 天前离线";
     }
 
+    /// <summary>设备名称颜色:在线=主题主色,离线=次要灰(字体颜色区分在线/离线)。</summary>
+    public static Microsoft.UI.Xaml.Media.Brush DeviceNameBrush(bool online) =>
+        (Microsoft.UI.Xaml.Media.Brush)Microsoft.UI.Xaml.Application.Current.Resources[
+            online ? "TextFillColorPrimaryBrush" : "TextFillColorSecondaryBrush"];
+
+    /// <summary>设备状态文字颜色:在线=绿色,离线=淡灰。</summary>
+    public static Microsoft.UI.Xaml.Media.Brush DeviceStatusBrush(bool online)
+    {
+        if (online)
+        {
+            return new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 22, 163, 74)); // 绿
+        }
+        return (Microsoft.UI.Xaml.Media.Brush)Microsoft.UI.Xaml.Application.Current.Resources["TextFillColorTertiaryBrush"];
+    }
+
     [RelayCommand]
     public async Task TestConnectionAsync()
     {
         var s = _svc.Settings;
-        if (!s.IsPaired)
+        if (string.IsNullOrWhiteSpace(ServerUrl))
         {
-            TestResult = "尚未配对:请先用配对码完成设备配对";
+            ShowMessage("请先输入服务器地址", InfoBarSeverity.Warning);
             return;
         }
         IsTesting = true;
-        TestResult = "正在测试…";
+        ShowMessage("正在测试连接…");
         try
         {
-            var (ok, message) = await _svc.Api.TestConnectionAsync(ServerUrl.Trim(), "");
-            TestResult = message;
+            var (ok, message) = await _svc.Api.TestConnectionAsync(ServerUrl.Trim(), s.DeviceId, s.AuthToken);
+            ShowMessage(message, ok ? InfoBarSeverity.Success : InfoBarSeverity.Error);
         }
         catch (Exception ex)
         {
-            TestResult = $"连接失败:{ex.Message}";
+            Log.Error("测试连接失败", ex);
+            ShowMessage($"连接失败：{ServerApi.DescribeException(ex, "请检查服务器配置后重试。")}", InfoBarSeverity.Error);
         }
         finally
         {
@@ -364,7 +767,7 @@ public partial class SettingsViewModel : ObservableObject
         var ok = StartupService.SetEnabled(value);
         if (!ok)
         {
-            TestResult = value ? "开机自启动设置失败(注册表写入被拒)" : "开机自启动已取消,但注册表清理失败";
+            ShowMessage(value ? "开机自启动设置失败(注册表写入被拒)" : "开机自启动已取消,但注册表清理失败", InfoBarSeverity.Error);
         }
     }
     partial void OnStartMinimizedChanged(bool value) { _svc.Settings.StartMinimized = value; _svc.Settings.Save(); }
@@ -372,12 +775,14 @@ public partial class SettingsViewModel : ObservableObject
     partial void OnMonitorEnabledChanged(bool value) { _svc.Settings.MonitorEnabled = value; _svc.Settings.Save(); }
     partial void OnAutoPasteChanged(bool value) { _svc.Settings.AutoPaste = value; _svc.Settings.Save(); }
     partial void OnNotifyEnabledChanged(bool value) { _svc.Settings.NotifyEnabled = value; _svc.Settings.Save(); }
+    partial void OnCopyDirectEnabledChanged(bool value) { _svc.Settings.CopyDirectEnabled = value; _svc.Settings.Save(); }
     partial void OnHotkeyChanged(string value)
     {
         _svc.Settings.Hotkey = value;
         _svc.Settings.Save();
         var ok = App.Hotkey?.Apply(value) ?? false;
-        TestResult = ok ? "剪贴板热键已应用: " + value : "热键格式非法或已被占用: " + value;
+        RefreshHotkeyStatus();
+        ShowHotkeyMessage(ok ? "剪贴板热键已应用: " + value : "热键格式非法或已被占用: " + value, ok ? InfoBarSeverity.Success : InfoBarSeverity.Error);
     }
 
     partial void OnHotkeySettingsChanged(string value)
@@ -385,13 +790,179 @@ public partial class SettingsViewModel : ObservableObject
         _svc.Settings.HotkeySettings = value;
         _svc.Settings.Save();
         var ok = App.HotkeySettings?.Apply(value) ?? false;
-        TestResult = ok ? "设置热键已应用: " + value : "热键格式非法或已被占用: " + value;
+        RefreshHotkeyStatus();
+        ShowHotkeyMessage(ok ? "设置热键已应用: " + value : "热键格式非法或已被占用: " + value, ok ? InfoBarSeverity.Success : InfoBarSeverity.Error);
     }
-    partial void OnMaxHistoryIndexChanged(int value) { _svc.Settings.MaxHistory = MaxHistoryOptions[value]; _svc.Settings.Save(); }
+    partial void OnHotkeyOpenUrlChanged(string value)
+    {
+        _svc.Settings.HotkeyOpenUrl = value;
+        _svc.Settings.Save();
+        var ok = App.HotkeyOpenUrl?.Apply(value) ?? false;
+        ShowHotkeyMessage(ok ? "打开链接热键已应用: " + value : "打开链接热键格式非法或已被占用: " + value, ok ? InfoBarSeverity.Success : InfoBarSeverity.Error);
+    }
     partial void OnThemeModeIndexChanged(int value)
     {
         _svc.Settings.ThemeMode = value switch { 0 => "light", 1 => "dark", _ => "system" };
         _svc.Settings.Save();
         App.ApplyTheme(_svc.Settings.ThemeMode);
+    }
+    partial void OnBackdropIndexChanged(int value)
+    {
+        _svc.Settings.BackdropMode = value switch { 1 => "MicaAlt", 2 => "Acrylic", _ => "Mica" };
+        _svc.Settings.Save();
+        App.ApplyBackdrop(_svc.Settings.BackdropMode);
+    }
+    partial void OnBackdropTintOpacityChanged(double value)
+    {
+        _svc.Settings.BackdropTintOpacity = Math.Clamp(value, 0.5, 1.0);
+        _svc.Settings.Save();
+        App.ApplyBackdrop(_svc.Settings.BackdropMode);
+    }
+    partial void OnWindowPositionIndexChanged(int value)
+    {
+        _svc.Settings.WindowPositionMode = value == 1 ? "center" : "cursor";
+        _svc.Settings.Save();
+    }
+    partial void OnMaxHistoryIndexChanged(int value)
+    {
+        _svc.Settings.MaxHistory = MaxHistoryOptions[value];
+        _svc.Settings.Save();
+        _svc.History.MaxEntries = _svc.Settings.MaxHistory; // 立即按新上限清理
+        OnPropertyChanged(nameof(DataCount));
+        _ = _svc.HistoryVm.RefreshAsync();
+    }
+    partial void OnRetentionDaysIndexChanged(int value)
+    {
+        _svc.Settings.RetentionDays = RetentionDaysOptions[value];
+        _svc.Settings.Save();
+        var removed = _svc.History.PruneOlderThan(_svc.Settings.RetentionDays); // 立即按时间清理
+        OnPropertyChanged(nameof(DataCount));
+        _ = _svc.HistoryVm.RefreshAsync();
+        if (removed > 0) ShowMessage($"已清理 {removed} 条超过保留期的历史");
+    }
+    partial void OnPasteKeyIndexChanged(int value)
+    {
+        _svc.Settings.PasteKey = value == 1 ? "CtrlV" : "ShiftInsert";
+        _svc.Settings.Save();
+    }
+
+    /// <summary>导出全部历史为 JSON 文件(图片内嵌 base64)。</summary>
+    public async Task ExportDataAsync(string path)
+    {
+        IsDataBusy = true;
+        ShowMessage("");
+        try
+        {
+            var items = _svc.History.Query(limit: 100000);
+            var list = new List<object>(items.Count);
+            foreach (var it in items)
+            {
+                string? img = null;
+                if (it.Type == "Image" && !string.IsNullOrEmpty(it.ImagePath) && File.Exists(it.ImagePath))
+                {
+                    img = Convert.ToBase64String(await File.ReadAllBytesAsync(it.ImagePath));
+                }
+                list.Add(new
+                {
+                    type = it.Type,
+                    text = it.Text,
+                    imageBase64 = img,
+                    deviceName = it.DeviceName,
+                    createdAt = it.CreatedAt.ToString("o"),
+                    starred = it.Starred,
+                });
+            }
+            var doc = new
+            {
+                app = "NexClip",
+                version = 1,
+                exportedAt = DateTime.UtcNow.ToString("o"),
+                items = list,
+            };
+            await File.WriteAllTextAsync(path,
+                System.Text.Json.JsonSerializer.Serialize(doc, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            ShowMessage($"导出成功:{items.Count} 条历史 → {path}", InfoBarSeverity.Success);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("导出失败", ex);
+            ShowMessage($"导出失败：{ServerApi.DescribeException(ex, "请检查文件路径和磁盘空间。")}", InfoBarSeverity.Error);
+        }
+        finally
+        {
+            IsDataBusy = false;
+        }
+    }
+
+    /// <summary>从导出 JSON 导入历史。返回导入条数。</summary>
+    public async Task ImportDataAsync(string path)
+    {
+        IsDataBusy = true;
+        ShowMessage("");
+        try
+        {
+            var json = await File.ReadAllTextAsync(path);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("items", out var items) && items.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                var count = 0;
+                foreach (var el in items.EnumerateArray())
+                {
+                    var type = el.TryGetProperty("type", out var t) ? t.GetString() : "Text";
+                    var text = el.TryGetProperty("text", out var tx) ? tx.GetString() : null;
+                    var imgB64 = el.TryGetProperty("imageBase64", out var ib) ? ib.GetString() : null;
+                    var deviceName = el.TryGetProperty("deviceName", out var dn) ? dn.GetString() : null;
+                    var createdAt = el.TryGetProperty("createdAt", out var ca) && DateTime.TryParse(ca.GetString(), null, System.Globalization.DateTimeStyles.RoundtripKind, out var cdt)
+                        ? cdt
+                        : DateTime.UtcNow;
+                    var starred = el.TryGetProperty("starred", out var st) && st.GetBoolean();
+
+                    string? imagePath = null;
+                    if (type == "Image" && !string.IsNullOrEmpty(imgB64))
+                    {
+                        try
+                        {
+                            var bytes = Convert.FromBase64String(imgB64);
+                            // 用随机 id 命名,避免与现有缓存冲突
+                            imagePath = await Services.ImageCodec.SavePngAsync(bytes, DateTime.UtcNow.Ticks % 1_000_000_000);
+                        }
+                        catch { /* 图片损坏则跳过图片 */ }
+                    }
+
+                    var id = _svc.History.Insert(new Models.HistoryItem
+                    {
+                        Type = type ?? "Text",
+                        Text = text,
+                        ImagePath = imagePath,
+                        DeviceId = "import",
+                        DeviceName = deviceName,
+                        CreatedAt = createdAt,
+                        Origin = 0,
+                    });
+                    if (id > 0)
+                    {
+                        count++;
+                        if (starred) _svc.History.ToggleStar(id, true);
+                    }
+                }
+                OnPropertyChanged(nameof(DataCount));
+                _ = _svc.HistoryVm.RefreshAsync();
+                ShowMessage(count > 0 ? $"导入成功:{count} 条(重复条目已跳过)" : "导入完成:没有新增条目(均为重复)", InfoBarSeverity.Success);
+            }
+            else
+            {
+                ShowMessage("导入失败:文件不是有效的 NexClip 导出(缺少 items)", InfoBarSeverity.Error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error("导入失败", ex);
+            ShowMessage($"导入失败：{ServerApi.DescribeException(ex, "请确认文件可读且格式正确。")}", InfoBarSeverity.Error);
+        }
+        finally
+        {
+            IsDataBusy = false;
+        }
     }
 }

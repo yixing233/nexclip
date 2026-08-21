@@ -5,4 +5,5 @@ public sealed class PairResult
 {
     public string DeviceId { get; set; } = "";
     public string DeviceToken { get; set; } = "";
+    public string Status { get; set; } = "pending";
 }

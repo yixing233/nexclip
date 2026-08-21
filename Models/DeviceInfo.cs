@@ -10,6 +10,7 @@ public sealed class DeviceInfo
     public string? Version { get; set; }
     public bool Online { get; set; }
     public DateTime LastSeenAt { get; set; }   // UTC
+    public bool IsCurrent { get; set; }
 
     /// <summary>副标题:平台 · 版本 · IP(非空拼接,IP 规范化)。</summary>
     public string Subtitle

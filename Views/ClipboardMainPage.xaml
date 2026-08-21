@@ -5,35 +5,47 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:converters="using:SyncClipboard.Desktop.Converters"
     xmlns:services="using:SyncClipboard.Desktop.Services"
-    xmlns:vm="using:SyncClipboard.Desktop.ViewModels">
+    xmlns:vm="using:SyncClipboard.Desktop.ViewModels"
+    KeyboardAcceleratorPlacementMode="Hidden">
     <Page.Resources>
         <converters:BooleanToVisibilityConverter x:Key="BoolToVis" />
         <converters:InverseBooleanToVisibilityConverter x:Key="InverseBoolToVis" />
     </Page.Resources>
+    <Page.KeyboardAccelerators>
+        <KeyboardAccelerator Key="F" Modifiers="Control" Invoked="SearchAccelerator_Invoked" />
+    </Page.KeyboardAccelerators>
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 顶栏:拖拽区 + 状态 + 操作 -->
-        <Grid x:Name="TopBar" Height="44" Padding="16,0,16,0">
+        <!-- 顶栏:拖拽区 + 搜索框 + 操作按钮(同一行) -->
+        <Grid x:Name="TopBar" Height="48" Padding="16,0,8,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
-                <Ellipse Width="8" Height="8" VerticalAlignment="Center">
-                    <Ellipse.Fill>
-                        <SolidColorBrush Color="#10B981" />
-                    </Ellipse.Fill>
-                </Ellipse>
-                <TextBlock Text="{Binding ConnectionText}" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
-                <ProgressRing IsActive="{Binding IsBusy}" Width="14" Height="14" />
-            </StackPanel>
+            <!-- 搜索框(拖拽区内,通过 Passthrough 保持可点击输入) -->
+            <TextBox
+                x:Name="SearchBox"
+                PlaceholderText="搜索剪贴板历史"
+                Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                VerticalAlignment="Center"
+                Margin="0,0,8,0" />
             <StackPanel x:Name="TopButtons" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                <Button x:Name="TopmostButton" Click="TopmostButton_Click" Padding="8,6" Background="Transparent" BorderThickness="0" CornerRadius="4" ToolTipService.ToolTip="置顶窗口">
+                    <Button.Resources>
+                        <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                        <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                    </Button.Resources>
+                    <!-- 双图标叠放:切换时交叉淡化,避免 Image.Source 换源瞬间闪烁 -->
+                    <Grid Width="16" Height="16">
+                        <Image x:Name="TopmostIconPin" Source="{x:Bind services:Lucide.Pin}" Width="16" Height="16" />
+                        <Image x:Name="TopmostIconPinOff" Source="{x:Bind services:Lucide.PinOffActive}" Width="16" Height="16" Opacity="0" />
+                    </Grid>
+                </Button>
                 <Button Command="{Binding SyncCurrentClipboardCommand}" Padding="8,6" Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="同步当前剪贴板">
                     <Image Source="{x:Bind services:Lucide.RefreshCw}" Width="16" Height="16" />
                 </Button>
@@ -41,33 +53,40 @@
                     <Image Source="{x:Bind services:Lucide.Settings}" Width="16" Height="16" />
                 </Button>
             </StackPanel>
+
+            <!-- 顶部拖拽提示条:保持轻量,不遮挡搜索框和操作按钮 -->
+            <Border
+                Grid.ColumnSpan="2"
+                Width="56"
+                Height="4"
+                CornerRadius="2"
+                Background="{ThemeResource TextFillColorTertiaryBrush}"
+                Opacity="0.8"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Top"
+                Margin="0,6,0,0"
+                IsHitTestVisible="False"
+                Canvas.ZIndex="2" />
         </Grid>
 
-        <!-- 搜索栏 -->
-        <Grid Grid.Row="1" Padding="16,4,16,0">
-            <TextBox
-                PlaceholderText="搜索剪贴板历史"
-                Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-        </Grid>
-
-        <!-- 分类标签(自定义胶囊,适配窄窗口) -->
-        <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="6" Margin="16,8,16,2">
-            <Border x:Name="TabAll" CornerRadius="4" Padding="10,3" Tapped="FilterTapped" Tag="0" Background="#2563EB">
-                <TextBlock x:Name="TabAllText" Text="全部" FontSize="13" Foreground="White" />
-            </Border>
-            <Border x:Name="TabText" CornerRadius="4" Padding="10,3" Tapped="FilterTapped" Tag="1" Background="Transparent">
-                <TextBlock x:Name="TabTextText" Text="文本" FontSize="13" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
-            </Border>
-            <Border x:Name="TabImage" CornerRadius="4" Padding="10,3" Tapped="FilterTapped" Tag="2" Background="Transparent">
-                <TextBlock x:Name="TabImageText" Text="图片" FontSize="13" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
-            </Border>
-            <Border x:Name="TabStar" CornerRadius="4" Padding="10,3" Tapped="FilterTapped" Tag="3" Background="Transparent">
-                <TextBlock x:Name="TabStarText" Text="收藏" FontSize="13" Foreground="{ThemeResource TextFillColorPrimaryBrush}" />
-            </Border>
-        </StackPanel>
+        <!-- 分类选择栏(WinUI 3 原生 SelectorBar 控件,自带平滑滑块与选中动效) -->
+        <SelectorBar
+            x:Name="CategorySelectorBar"
+            Grid.Row="1"
+            Margin="16,2,16,2"
+            SelectionChanged="CategorySelectorBar_SelectionChanged">
+            <SelectorBarItem x:Name="TabAll" Text="全部" Tag="0" />
+            <SelectorBarItem x:Name="TabText" Text="文本" Tag="1" />
+            <SelectorBarItem x:Name="TabImage" Text="图片" Tag="2" />
+            <SelectorBarItem x:Name="TabLink" Text="链接" Tag="4" />
+            <SelectorBarItem x:Name="TabStar" Text="收藏" Tag="3" />
+        </SelectorBar>
 
         <!-- 条目列表 -->
-        <Grid x:Name="ListHost" Grid.Row="3">
+        <Grid x:Name="ListHost" Grid.Row="2" RenderTransformOrigin="0.5,0.5">
+            <Grid.RenderTransform>
+                <TranslateTransform x:Name="ListTranslateTransform" />
+            </Grid.RenderTransform>
             <Grid.RowDefinitions>
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
@@ -77,7 +96,13 @@
                 ItemsSource="{Binding Items}"
                 SelectionMode="Single"
                 SelectionChanged="EntryList_SelectionChanged"
+                KeyDown="EntryList_KeyDown"
                 Background="Transparent">
+                <ListView.ItemContainerTransitions>
+                    <TransitionCollection>
+                        <EntranceThemeTransition FromVerticalOffset="16" IsStaggeringEnabled="True" />
+                    </TransitionCollection>
+                </ListView.ItemContainerTransitions>
                 <ListView.ItemContainerStyle>
                     <Style TargetType="ListViewItem">
                         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -85,6 +110,8 @@
                         <Setter Property="Padding" Value="0" />
                         <Setter Property="Background" Value="Transparent" />
                         <Setter Property="MinHeight" Value="0" />
+                        <!-- 条目获得键盘焦点时不显示 WinUI 默认黑色焦点框,避免覆盖卡片边缘。 -->
+                        <Setter Property="UseSystemFocusVisuals" Value="False" />
                         <!-- 重写模板:禁用默认 PointerOver/Pressed/Selected 灰色遮罩,hover 效果由条目自身的线框呈现。
                              注意:只引用 WinUI 3 仍然存在的资源,避免 presenter 测量崩溃(E_FAIL)。 -->
                         <Setter Property="Template">
@@ -112,12 +139,60 @@
                         <Border
                             CornerRadius="8"
                             Padding="14,10"
-                            Margin="24,12"
+                            Margin="16,6"
                             PointerEntered="Item_PointerEntered"
                             PointerExited="Item_PointerExited"
+                            DoubleTapped="Item_DoubleTapped"
+                            RightTapped="Item_RightTapped"
+                            ToolTipService.ToolTip="双击粘贴"
                             BorderThickness="{x:Bind BorderThicknessFor(IsSelected, IsHovered), Mode=OneWay}"
                             BorderBrush="{x:Bind BorderBrushFor(IsSelected, IsHovered), Mode=OneWay}"
                             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                            <Border.ContextFlyout>
+                                <MenuFlyout Opening="EntryMenu_Opening">
+                                    <MenuFlyoutItem Text="复制" Click="CopyMenuItem_Click">
+                                        <MenuFlyoutItem.Icon>
+                                            <ImageIcon Source="{x:Bind services:Lucide.Copy}" />
+                                        </MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem Text="收藏" Click="StarMenuItem_Click">
+                                        <MenuFlyoutItem.Icon>
+                                            <ImageIcon Source="{x:Bind services:Lucide.Star}" />
+                                        </MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="EditMenuItem" Text="编辑" Click="EditMenuItem_Click">
+                                        <MenuFlyoutItem.Icon>
+                                            <ImageIcon Source="{x:Bind services:Lucide.Edit}" />
+                                        </MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="ViewImageMenuItem" Text="查看大图" Click="ViewImageMenuItem_Click">
+                                        <MenuFlyoutItem.Icon>
+                                            <ImageIcon Source="{x:Bind services:Lucide.ZoomIn}" />
+                                        </MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="OpenSystemViewerMenuItem" Text="用系统应用打开" Click="OpenSystemViewerMenuItem_Click">
+                                        <MenuFlyoutItem.Icon>
+                                            <ImageIcon Source="{x:Bind services:Lucide.ExternalLink}" />
+                                        </MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="SaveImageMenuItem" Text="另存为..." Click="SaveImageMenuItem_Click">
+                                        <MenuFlyoutItem.Icon>
+                                            <ImageIcon Source="{x:Bind services:Lucide.Save}" />
+                                        </MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="LocateFileMenuItem" Text="在文件夹中显示" Click="LocateFileMenuItem_Click">
+                                        <MenuFlyoutItem.Icon>
+                                            <ImageIcon Source="{x:Bind services:Lucide.FolderOpen}" />
+                                        </MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutSeparator />
+                                    <MenuFlyoutItem Text="删除" Click="DeleteMenuItem_Click">
+                                        <MenuFlyoutItem.Icon>
+                                            <ImageIcon Source="{x:Bind services:Lucide.Trash}" />
+                                        </MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                </MenuFlyout>
+                            </Border.ContextFlyout>
                             <StackPanel Spacing="6">
                                 <!-- 元信息行 + 操作按钮(hover/选中显示,位于条目右上角) -->
                                 <Grid>
@@ -148,7 +223,13 @@
                                     </StackPanel>
                                 </Grid>
                                 <!-- 预览 -->
-                                <Image Source="{x:Bind Thumbnail, Mode=OneTime}" MaxHeight="140" HorizontalAlignment="Left" Visibility="{x:Bind IsImage, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                                <Image
+                                    Source="{x:Bind Thumbnail, Mode=OneTime}"
+                                    MaxHeight="140"
+                                    HorizontalAlignment="Left"
+                                    Tapped="ImageThumbnail_Tapped"
+                                    ToolTipService.ToolTip="点击查看大图 (Esc 退出)"
+                                    Visibility="{x:Bind IsImage, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
                                 <TextBlock
                                     Text="{x:Bind PreviewText, Mode=OneWay}"
                                     TextWrapping="Wrap"
@@ -169,6 +250,130 @@
                 Foreground="{ThemeResource TextFillColorTertiaryBrush}"
                 HorizontalAlignment="Center"
                 Margin="0,12,0,8" />
+            <!-- 回到顶部悬浮按钮:下滑超过阈值后,上滑时出现;点击回到列表顶部 -->
+            <Button
+                x:Name="BackToTopButton"
+                AutomationProperties.AutomationId="BackToTopButton"
+                Grid.RowSpan="2"
+                Width="36"
+                Height="36"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="0,0,16,16"
+                Padding="0"
+                Click="BackToTopButton_Click"
+                PointerExited="BackToTop_PointerExited"
+                Visibility="Collapsed"
+                ToolTipService.ToolTip="回到顶部"
+                Background="#2563EB"
+                BorderThickness="0"
+                CornerRadius="18">
+                <Button.Resources>
+                    <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#1D4ED8" />
+                    <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#1E40AF" />
+                </Button.Resources>
+                <Image Source="{x:Bind services:Lucide.ArrowUp}" Width="16" Height="16" />
+            </Button>
+        </Grid>
+
+        <!-- 全屏大图查看器浮层 (Lightbox ImageViewer) -->
+        <Grid
+            x:Name="ImageViewerOverlay"
+            Grid.RowSpan="3"
+            Canvas.ZIndex="100"
+            Visibility="Collapsed"
+            Background="#E6050B14"
+            KeyDown="ImageViewer_KeyDown">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- 顶栏 HUD (图片文件名/信息 + 关闭按钮) -->
+            <Grid Padding="16,10" Background="#40000000">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <Image Source="{x:Bind services:Lucide.ImageMuted}" Width="15" Height="15" />
+                    <TextBlock x:Name="ViewerInfoText" Text="图片预览" FontSize="13" Foreground="#E2E8F0" FontWeight="SemiBold" VerticalAlignment="Center" />
+                </StackPanel>
+                <Button
+                    Grid.Column="1"
+                    Click="CloseViewer_Click"
+                    Padding="8,6"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    CornerRadius="4"
+                    ToolTipService.ToolTip="关闭 (Esc)">
+                    <Image Source="{x:Bind services:Lucide.XWhite}" Width="15" Height="15" />
+                </Button>
+            </Grid>
+
+            <!-- 中间主视图 (支持滚轮缩放与平移的 ScrollViewer) -->
+            <ScrollViewer
+                x:Name="ViewerScroller"
+                Grid.Row="1"
+                HorizontalScrollBarVisibility="Hidden"
+                VerticalScrollBarVisibility="Hidden"
+                ZoomMode="Enabled"
+                MinZoomFactor="0.1"
+                MaxZoomFactor="8.0"
+                HorizontalScrollMode="Enabled"
+                VerticalScrollMode="Enabled"
+                Background="Transparent"
+                ViewChanged="ViewerScroller_ViewChanged"
+                DoubleTapped="ViewerScroller_DoubleTapped">
+                <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Image
+                        x:Name="ViewerImage"
+                        Stretch="Uniform"
+                        RenderTransformOrigin="0.5,0.5">
+                        <Image.RenderTransform>
+                            <RotateTransform x:Name="ViewerRotateTransform" Angle="0" />
+                        </Image.RenderTransform>
+                    </Image>
+                </Grid>
+            </ScrollViewer>
+
+            <!-- 底部浮动操作工具栏 (HUD Pill Bar) -->
+            <Border
+                Grid.Row="2"
+                HorizontalAlignment="Center"
+                Margin="0,0,0,16"
+                CornerRadius="20"
+                Background="#D91E293B"
+                BorderBrush="#33FFFFFF"
+                BorderThickness="1"
+                Padding="8,4">
+                <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                    <Button Click="ZoomOut_Click" Padding="8,6" Background="Transparent" BorderThickness="0" CornerRadius="14" ToolTipService.ToolTip="缩小 (-)">
+                        <Image Source="{x:Bind services:Lucide.ZoomOutWhite}" Width="15" Height="15" />
+                    </Button>
+                    <TextBlock x:Name="ViewerZoomText" Text="100%" FontSize="12" Foreground="#CBD5E1" VerticalAlignment="Center" Width="44" TextAlignment="Center" />
+                    <Button Click="ZoomIn_Click" Padding="8,6" Background="Transparent" BorderThickness="0" CornerRadius="14" ToolTipService.ToolTip="放大 (+)">
+                        <Image Source="{x:Bind services:Lucide.ZoomInWhite}" Width="15" Height="15" />
+                    </Button>
+                    <Button Click="ZoomReset_Click" Padding="8,6" Background="Transparent" BorderThickness="0" CornerRadius="14" ToolTipService.ToolTip="适应窗口 / 1:1">
+                        <Image Source="{x:Bind services:Lucide.Maximize2White}" Width="15" Height="15" />
+                    </Button>
+                    <Rectangle Width="1" Height="16" Fill="#475569" Margin="4,0" />
+                    <Button Click="Rotate_Click" Padding="8,6" Background="Transparent" BorderThickness="0" CornerRadius="14" ToolTipService.ToolTip="旋转 90°">
+                        <Image Source="{x:Bind services:Lucide.RotateCwWhite}" Width="15" Height="15" />
+                    </Button>
+                    <Button Click="CopyViewerImage_Click" Padding="8,6" Background="Transparent" BorderThickness="0" CornerRadius="14" ToolTipService.ToolTip="复制图片 (Ctrl+C)">
+                        <Image Source="{x:Bind services:Lucide.CopyWhite}" Width="15" Height="15" />
+                    </Button>
+                    <Button Click="SaveViewerImage_Click" Padding="8,6" Background="Transparent" BorderThickness="0" CornerRadius="14" ToolTipService.ToolTip="另存为 (Ctrl+S)">
+                        <Image Source="{x:Bind services:Lucide.SaveWhite}" Width="15" Height="15" />
+                    </Button>
+                    <Button Click="OpenInSystemApp_Click" Padding="8,6" Background="Transparent" BorderThickness="0" CornerRadius="14" ToolTipService.ToolTip="用系统看图软件打开">
+                        <Image Source="{x:Bind services:Lucide.ExternalLinkWhite}" Width="15" Height="15" />
+                    </Button>
+                </StackPanel>
+            </Border>
         </Grid>
     </Grid>
 </Page>

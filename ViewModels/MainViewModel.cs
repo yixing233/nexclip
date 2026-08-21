@@ -120,7 +120,8 @@ public partial class MainViewModel : ObservableObject
         {
             IsConnected = false;
             ConnectionText = "连接失败";
-            StatusMessage = ex.Message;
+            Log.Error("刷新当前剪贴板失败", ex);
+            StatusMessage = ServerApi.DescribeException(ex, "刷新失败，请检查服务器配置后重试。");
         }
         finally
         {
@@ -149,7 +150,7 @@ public partial class MainViewModel : ObservableObject
         StatusMessage = "";
         try
         {
-            var entry = await _svc.Api.PutTextAsync(s.ServerUrl, "", text, s.DeviceId, s.DeviceName);
+            var entry = await _svc.Api.PutTextAsync(s.ServerUrl, s.AuthToken, text, s.DeviceId, s.DeviceName);
             SyncText = "";
             if (entry is not null)
             {
@@ -174,7 +175,8 @@ public partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"同步失败:{ex.Message}";
+            Log.Error("同步文本失败", ex);
+            StatusMessage = $"同步失败：{ServerApi.DescribeException(ex, "请检查服务器配置后重试。")}";
         }
         finally
         {
@@ -203,7 +205,8 @@ public partial class MainViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"同步失败:{ex.Message}";
+            Log.Error("同步当前剪贴板失败", ex);
+            StatusMessage = $"同步失败：{ServerApi.DescribeException(ex, "请检查服务器配置后重试。")}";
         }
         finally
         {

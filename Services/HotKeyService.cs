@@ -17,6 +17,9 @@ public sealed class HotKeyService : IDisposable
     private WndProcDelegate? _wndProc;   // 防止被 GC
     private int _hotKeyId = -1;
 
+    /// <summary>当前是否已成功注册(占用/非法时为 false,供快捷键页常驻提示)。</summary>
+    public bool IsRegistered { get; private set; }
+
     private delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -45,15 +48,25 @@ public sealed class HotKeyService : IDisposable
     {
         Unregister();
         var parsed = Parse(hotkey);
-        if (parsed is null) return false;
+        if (parsed is null)
+        {
+            IsRegistered = false;
+            return false;
+        }
         EnsureMessageWindow();
-        if (_hwnd == IntPtr.Zero) return false;
+        if (_hwnd == IntPtr.Zero)
+        {
+            IsRegistered = false;
+            return false;
+        }
         _hotKeyId = 1;
         if (!RegisterHotKey(_hwnd, 1, parsed.Value.Mods, parsed.Value.Vk))
         {
             _hotKeyId = -1;
+            IsRegistered = false;
             return false;
         }
+        IsRegistered = true;
         return true;
     }
 
@@ -92,6 +105,7 @@ public sealed class HotKeyService : IDisposable
             UnregisterHotKey(_hwnd, _hotKeyId);
         }
         _hotKeyId = -1;
+        IsRegistered = false;
     }
 
     public void Dispose()

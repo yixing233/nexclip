@@ -14,9 +14,16 @@ public static class ImageCodec
     public const uint MaxLongSide = 4096;
     public const long MaxImageBytes = 10 * 1024 * 1024;
 
-    public static string CacheDir { get; } = Path.Combine(
+    private static string _cacheDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "SyncClipboard", "images");
+
+    /// <summary>图片缓存目录(随数据储存目录初始化)。</summary>
+    public static string CacheDir => _cacheDir;
+
+    /// <summary>按数据储存目录初始化图片缓存位置(应用启动时调用)。</summary>
+    public static void Initialize(string storageDir) =>
+        _cacheDir = Path.Combine(storageDir, "images");
 
     /// <summary>读取剪贴板文本;无文本返回 null。</summary>
     public static async Task<string?> ReadClipboardTextAsync()

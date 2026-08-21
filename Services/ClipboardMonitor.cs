@@ -21,6 +21,7 @@ public sealed class ClipboardMonitor
     private bool _capturing;
     private string _lastSeenHash = "";
     private string _suppressHash = "";
+    private DateTime _suppressUntil = DateTime.MinValue;
     private bool _started;
 
     public ClipboardMonitor(DispatcherQueue dispatcher, SettingsStore settings, Func<CapturedClip, CancellationToken, Task> onCapture)
@@ -50,7 +51,12 @@ public sealed class ClipboardMonitor
     }
 
     /// <summary>记录"由本端写入"的内容 hash,监听回调时忽略(防回环)。</summary>
-    public void SuppressNext(string hash) => _suppressHash = hash;
+    /// <summary>记录"由本端写入"的内容 hash,时间窗内的一次捕获忽略(防回环);过期后不再拦截,外部复制同一内容仍可正常捕获。</summary>
+    public void SuppressNext(string hash)
+    {
+        _suppressHash = hash;
+        _suppressUntil = DateTime.UtcNow.AddSeconds(5);
+    }
 
     private void OnContentChanged(object? sender, object e)
     {
@@ -82,22 +88,39 @@ public sealed class ClipboardMonitor
         try
         {
 
-        // 文本优先(轮询时成本低);文本不存在再尝试图片
-        var text = await ImageCodec.ReadClipboardTextAsync();
+        // 图片优先:Windows 中截图/设计软件经常同时提供 Bitmap + Text/HTML,
+        // 若先读文本会把图片误判成文本条目。只有确认没有位图时才读取文本。
+        byte[]? image = await ImageCodec.CaptureClipboardPngAsync();
+        string? text = null;
+        if (image is null || image.LongLength == 0)
+        {
+            text = await ImageCodec.ReadClipboardTextAsync();
+        }
+
         string hash;
-        byte[]? image = null;
-        if (text is not null)
+        if (image is not null && image.LongLength > 0)
+        {
+            hash = HashBytes(image);
+        }
+        else if (text is not null)
         {
             hash = HashText(text);
         }
         else
         {
-            image = await ImageCodec.CaptureClipboardPngAsync();
-            if (image is null || image.LongLength == 0) return;
-            hash = HashBytes(image);
+            return;
         }
 
-        if (hash.Length == 0 || hash == _suppressHash || hash == _lastSeenHash) return;
+        if (hash.Length == 0) return;
+        // 应用自写内容:时间窗内消费一次性抑制,并记录 lastSeen,避免轮询把同一内容再次上传/置顶
+        if (hash == _suppressHash && DateTime.UtcNow < _suppressUntil)
+        {
+            _suppressHash = "";
+            _suppressUntil = DateTime.MinValue;
+            _lastSeenHash = hash;
+            return;
+        }
+        if (hash == _lastSeenHash) return;
         _lastSeenHash = hash;
         await _onCapture(new CapturedClip(text, image, hash), ct);
         }
@@ -110,18 +133,26 @@ public sealed class ClipboardMonitor
     /// <summary>手动捕获(忽略自写抑制,用于"同步当前剪贴板")。返回 hash,空则无内容。</summary>
     public async Task<string> CaptureManualAsync(CancellationToken ct = default)
     {
-        var text = await ImageCodec.ReadClipboardTextAsync();
-        byte[]? image = null;
+        // 与自动监听保持一致:位图优先，避免混合格式被当成文本同步。
+        byte[]? image = await ImageCodec.CaptureClipboardPngAsync();
+        string? text = null;
+        if (image is null || image.LongLength == 0)
+        {
+            text = await ImageCodec.ReadClipboardTextAsync();
+        }
+
         string hash;
-        if (text is not null)
+        if (image is not null && image.LongLength > 0)
+        {
+            hash = HashBytes(image);
+        }
+        else if (text is not null)
         {
             hash = HashText(text);
         }
         else
         {
-            image = await ImageCodec.CaptureClipboardPngAsync();
-            if (image is null || image.LongLength == 0) return "";
-            hash = HashBytes(image);
+            return "";
         }
         await _onCapture(new CapturedClip(text, image, hash), ct);
         return hash;

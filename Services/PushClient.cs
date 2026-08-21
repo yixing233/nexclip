@@ -4,12 +4,18 @@ using SyncClipboard.Desktop.Models;
 namespace SyncClipboard.Desktop.Services;
 
 /// <summary>
-/// SignalR 推送客户端:/hubs/clipboard 推送通道(新架构:同步接口免认证)。
+/// SignalR 推送客户端:/hubs/clipboard 推送通道(设备 ID + 设备令牌鉴权)。
 /// 回调来自 SignalR 线程,调用方需自行切换到 UI 线程。
 /// 首次连接失败会进入后台重连循环(自动重连仅对"已连接后断开"生效)。
 /// </summary>
 public sealed class PushClient : IAsyncDisposable
 {
+    private static readonly TimeSpan[] ReconnectDelays =
+    {
+        TimeSpan.Zero, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(10),
+        TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60),
+    };
+
     private HubConnection? _hub;
     private CancellationTokenSource? _retryCts;
     private Task? _retryTask;
@@ -21,16 +27,19 @@ public sealed class PushClient : IAsyncDisposable
     /// <summary>连接状态变化:connecting/connected/reconnecting/disconnected。</summary>
     public event Action<string>? StateChanged;
 
+    /// <summary>连接失败的原始异常；由界面层负责转换为用户提示，日志保留完整堆栈。</summary>
+    public event Action<Exception>? ErrorOccurred;
+
     public bool IsConnected => _hub?.State == HubConnectionState.Connected;
 
     /// <summary>
     /// 连接推送通道。serverUrl 必填;deviceId/deviceName/platform/version 用于服务端设备登记
     /// (node 服务端从 WebSocket URL 参数识别设备并更新平台信息)。
-    /// 同步接口免认证,不携带任何令牌。
+    /// deviceToken 为服务端签发的设备令牌，缺失或被撤销时服务端拒绝连接。
     /// </summary>
     public async Task ConnectAsync(
         string serverUrl, string? deviceId = null, string? deviceName = null,
-        string? platform = null, string? version = null)
+        string? platform = null, string? version = null, string? deviceToken = null)
     {
         await DisconnectAsync();
 
@@ -38,6 +47,10 @@ public sealed class PushClient : IAsyncDisposable
         if (!string.IsNullOrWhiteSpace(deviceId))
         {
             var qs = new List<string> { "deviceId=" + Uri.EscapeDataString(deviceId) };
+            if (!string.IsNullOrWhiteSpace(deviceToken))
+            {
+                qs.Add("deviceToken=" + Uri.EscapeDataString(deviceToken));
+            }
             if (!string.IsNullOrWhiteSpace(deviceName))
             {
                 qs.Add("deviceName=" + Uri.EscapeDataString(deviceName));
@@ -55,18 +68,25 @@ public sealed class PushClient : IAsyncDisposable
         }
         var builder = new HubConnectionBuilder()
             .WithUrl(endpoint)
-            .WithAutomaticReconnect(new[]
-            {
-                TimeSpan.Zero, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(10),
-                TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60),
-            });
+            .WithAutomaticReconnect(new DeviceAuthRetryPolicy(ReconnectDelays));
         var hub = builder.Build();
         _hub = hub;
 
         hub.On<ClipboardEntry>("ClipboardUpdated", entry => EntryReceived?.Invoke(entry));
-        hub.Reconnecting += _ => { StateChanged?.Invoke("reconnecting"); return Task.CompletedTask; };
+        hub.Reconnecting += ex =>
+        {
+            if (ex is not null) ErrorOccurred?.Invoke(ex);
+            StateChanged?.Invoke("reconnecting");
+            return Task.CompletedTask;
+        };
         hub.Reconnected += _ => { StateChanged?.Invoke("connected"); return Task.CompletedTask; };
-        hub.Closed += _ => { StateChanged?.Invoke("disconnected"); return Task.CompletedTask; };
+        hub.Closed += ex =>
+        {
+            // 鉴权失败会被重试策略直接终止，不会进入 Reconnecting，因此在 Closed 补充上报。
+            if (ex is not null && IsDeviceAuthFailure(ex)) ErrorOccurred?.Invoke(ex);
+            StateChanged?.Invoke("disconnected");
+            return Task.CompletedTask;
+        };
 
         StateChanged?.Invoke("connecting");
         try
@@ -76,8 +96,10 @@ public sealed class PushClient : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            Log.Error($"SignalR 连接失败:{ex.Message}");
+            Log.Error("SignalR 连接失败", ex);
+            ErrorOccurred?.Invoke(ex);
             StateChanged?.Invoke("disconnected");
+            if (IsDeviceAuthFailure(ex)) return;
             // 首次连接失败不会触发自动重连:启动后台重试循环(指数退避,上限 60s)
             StartRetryLoop(hub);
         }
@@ -110,6 +132,8 @@ public sealed class PushClient : IAsyncDisposable
                     catch (Exception ex)
                     {
                         Log.Warn($"SignalR 重连失败(第 {i + 1} 次):{ex.Message}");
+                        ErrorOccurred?.Invoke(ex);
+                        if (IsDeviceAuthFailure(ex)) return;
                         i++;
                     }
                 }
@@ -134,6 +158,43 @@ public sealed class PushClient : IAsyncDisposable
         {
             try { await _hub.DisposeAsync(); } catch { /* 忽略 */ }
             _hub = null;
+        }
+    }
+
+    private static bool IsDeviceAuthFailure(Exception ex)
+    {
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+        {
+            var message = current.Message;
+            if (message.Contains("4001", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("Device removed", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("设备已被移除", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("401", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("403", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("410", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("Forbidden", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("设备凭证", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>设备凭证失效属于永久错误，直接停止 SignalR 自动重连。</summary>
+    private sealed class DeviceAuthRetryPolicy(IReadOnlyList<TimeSpan> delays) : IRetryPolicy
+    {
+        public TimeSpan? NextRetryDelay(RetryContext retryContext)
+        {
+            if (retryContext.RetryReason is not null && IsDeviceAuthFailure(retryContext.RetryReason))
+            {
+                return null;
+            }
+
+            return retryContext.PreviousRetryCount < delays.Count
+                ? delays[(int)retryContext.PreviousRetryCount]
+                : null;
         }
     }
 

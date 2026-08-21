@@ -3,6 +3,6 @@
     x:Class="SyncClipboard.Desktop.ClipboardWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="SyncClipboard 剪贴板">
+    Title="NexClip 剪贴板">
     <views:ClipboardMainPage xmlns:views="using:SyncClipboard.Desktop.Views" />
 </Window>

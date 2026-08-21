@@ -9,6 +9,7 @@ public sealed class HistoryItem
     public string? Text { get; set; }
     public string? ImagePath { get; set; }    // 本地缓存文件
     public string? ImageRef { get; set; }     // 远端引用
+    public string? ContentHash { get; set; }    // 内容哈希(文本/图片字节),用于重复内容置顶去重
     public string DeviceId { get; set; } = "";
     public string? DeviceName { get; set; }
     public DateTime CreatedAt { get; set; }   // UTC
