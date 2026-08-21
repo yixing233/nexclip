@@ -105,7 +105,7 @@ public sealed partial class SettingsPage : Page
 
                 panel.Children.Add(new TextBlock
                 {
-                    Text = "📱 手机使用系统相机或扫一扫即可一秒直连",
+                    Text = "手机使用系统相机或扫一扫即可一秒直连",
                     FontSize = 12,
                     Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
                     HorizontalAlignment = HorizontalAlignment.Center,
