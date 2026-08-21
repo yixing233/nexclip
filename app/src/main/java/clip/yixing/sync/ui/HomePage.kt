@@ -75,9 +75,7 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.ChevronForward
 import top.yukonga.miuix.kmp.icon.extended.Clear
 import top.yukonga.miuix.kmp.icon.extended.Copy
-import top.yukonga.miuix.kmp.icon.extended.Send
 import top.yukonga.miuix.kmp.icon.extended.UploadCloud
-import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
@@ -102,9 +100,6 @@ internal fun HomePage(
         captured.firstOrNull()?.text ?: ClipboardTest.readClipboard(context) ?: ""
     }
 
-    var showSendSheet by remember { mutableStateOf(false) }
-    val sendTextState = remember { TextFieldState("") }
-    var isSendingCustomText by remember { mutableStateOf(false) }
     var isManualPushing by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -129,10 +124,6 @@ internal fun HomePage(
             onlineDevicesCount = 0
             totalDevicesCount = 0
         }
-    }
-
-    LaunchedEffect(showSendSheet) {
-        onOverlayActiveChanged(showSendSheet)
     }
 
     LazyColumn(
@@ -258,27 +249,11 @@ internal fun HomePage(
                             }
                         },
                         enabled = !isManualPushing && currentText.isNotBlank(),
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(imageVector = MiuixIcons.Normal.UploadCloud, contentDescription = "立即推送")
                         Spacer(Modifier.width(6.dp))
-                        Text(if (isManualPushing) "推送中…" else "立即推送")
-                    }
-
-                    Button(
-                        onClick = {
-                            sendTextState.clearText()
-                            showSendSheet = true
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            color = MiuixTheme.colorScheme.surfaceContainerHigh,
-                            contentColor = MiuixTheme.colorScheme.primary
-                        ),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(imageVector = MiuixIcons.Normal.Send, contentDescription = "发送文本")
-                        Spacer(Modifier.width(6.dp))
-                        Text("发送文本")
+                        Text(if (isManualPushing) "推送中…" else "立即推送当前剪贴板")
                     }
                 }
             }
@@ -334,75 +309,6 @@ internal fun HomePage(
 
         item {
             Spacer(Modifier.height(bottomInnerPadding))
-        }
-    }
-
-    // 快捷发送文本底部弹层
-    OverlayBottomSheet(
-        show = showSendSheet,
-        title = "发送自定义文本",
-        onDismissRequest = { showSendSheet = false }
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.navigationBars)
-                .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp)
-        ) {
-            TextField(
-                state = sendTextState,
-                label = "输入要推送到所有设备的文字",
-                useLabelAsPlaceholder = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(110.dp)
-            )
-            Spacer(Modifier.height(12.dp))
-            Button(
-                onClick = {
-                    val text = sendTextState.text.toString().trim()
-                    if (text.isBlank()) {
-                        scope.launch {
-                            snackbarHostState?.showAppSnack("请输入要发送的文本", SnackType.Info)
-                        }
-                        return@Button
-                    }
-                    val url = SyncSettings.serverUrl(context)
-                    if (url.isBlank()) {
-                        scope.launch {
-                            snackbarHostState?.showAppSnack("请先在设置中配置服务器地址", SnackType.Info)
-                        }
-                        return@Button
-                    }
-                    isSendingCustomText = true
-                    showSendSheet = false
-                    // 写入本机剪贴板并添加到历史
-                    copyToClipboard(context, text)
-                    ClipboardMonitorService.addCaptured(context, text)
-                    scope.launch {
-                        try {
-                            val api = SyncApi(url, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
-                            withContext(Dispatchers.IO) {
-                                api.putText(
-                                    text = text,
-                                    deviceId = SyncSettings.ensureDeviceId(context),
-                                    deviceName = SyncSettings.deviceName(context)
-                                )
-                            }
-                            snackbarHostState?.showAppSnack("文本已成功推送至所有设备", SnackType.Success)
-                        } catch (e: Exception) {
-                            snackbarHostState?.showAppSnack(e.message ?: "发送失败", SnackType.Error)
-                        } finally {
-                            isSendingCustomText = false
-                        }
-                    }
-                },
-                enabled = !isSendingCustomText,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(if (isSendingCustomText) "正在发送…" else "立即发送至所有设备")
-            }
-            Spacer(Modifier.height(16.dp))
         }
     }
 }
