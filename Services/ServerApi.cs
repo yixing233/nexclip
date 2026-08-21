@@ -261,6 +261,28 @@ public sealed class ServerApi
     }
 
     /// <summary>
+    /// POST /api/pair/direct: 方案 1/2 单向即入配对 (凭 6 位纯数字验证码直接准入, 无需二次确认)。
+    /// </summary>
+    public async Task<PairResult> PairDirectAsync(
+        string serverUrl, string code,
+        string deviceId, string deviceName, string platform = "Windows", CancellationToken ct = default)
+    {
+        var payload = new { code = code.Trim(), deviceId, deviceName, platform };
+        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(serverUrl, "/api/pair/direct"))
+        {
+            Content = JsonContent.Create(payload),
+        };
+        var json = await SendAsync<JsonElement>(request, "", "", ct);
+        return new PairResult
+        {
+            DeviceId = deviceId,
+            DeviceToken = json.TryGetProperty("deviceToken", out var token) ? token.GetString() ?? "" : "",
+            Status = json.TryGetProperty("status", out var status) ? status.GetString() ?? "approved" : "approved",
+            UserId = json.TryGetProperty("userId", out var uid) ? uid.GetString() ?? "" : "",
+        };
+    }
+
+    /// <summary>
     /// GET /api/pair/status: 轮询配对审核状态 (pending / approved / rejected / expired)。
     /// </summary>
     public async Task<PairStatusResult> GetPairStatusAsync(

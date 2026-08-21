@@ -513,7 +513,7 @@ public partial class SettingsViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 配对: 输入另一台设备生成的配对码与用户ID, 发起配对并轮询等待对方确认。
+    /// 配对: 输入 6 位配对验证码, 采用单向即入配对 (同时兼容旧版双向握手)。
     /// </summary>
     [RelayCommand]
     public async Task PairDeviceAsync()
@@ -522,12 +522,7 @@ public partial class SettingsViewModel : ObservableObject
         var uid = PairUserId?.Trim();
         if (string.IsNullOrWhiteSpace(code))
         {
-            ShowMessage("请输入配对码");
-            return;
-        }
-        if (string.IsNullOrWhiteSpace(uid))
-        {
-            ShowMessage("请输入用户 ID");
+            ShowMessage("请输入 6 位配对验证码");
             return;
         }
         var s = _svc.Settings;
@@ -537,32 +532,51 @@ public partial class SettingsViewModel : ObservableObject
             return;
         }
         IsPairing = true;
-        ShowMessage("已发起配对请求，等待对方设备确认（120秒超时）…");
+        ShowMessage("正在连接服务器进行配对…");
         try
         {
-            var pairResult = await _svc.Api.PairAsync(ServerUrl.Trim(), code, uid, s.DeviceId, s.DeviceName);
-            if (string.IsNullOrWhiteSpace(pairResult.DeviceToken))
+            // 优先使用全新 6 位数字单向即入配对 (无需输入用户ID, 无需对方二次确认)
+            PairResult? pairResult = null;
+            if (string.IsNullOrWhiteSpace(uid) || code.Length == 6)
             {
-                throw new ApiException("服务器未返回设备凭证，请确认服务端已更新。", System.Net.HttpStatusCode.BadGateway);
-            }
-
-            // 轮询配对审核结果 (最多等待 2 分钟，120 秒超时倒计时)
-            var deadline = DateTime.UtcNow.AddSeconds(120);
-            string status = "pending";
-            while (DateTime.UtcNow < deadline)
-            {
-                var remaining = (int)Math.Max(0, Math.Ceiling((deadline - DateTime.UtcNow).TotalSeconds));
-                ShowMessage($"已发起配对请求，等待对方设备确认接入（剩余 {remaining}s）…");
-                await Task.Delay(2000);
-                var statusRes = await _svc.Api.GetPairStatusAsync(ServerUrl.Trim(), code, s.DeviceId);
-                status = statusRes.Status;
-                if (status == "approved" || status == "rejected" || status == "expired" || status == "not-found")
+                try
                 {
-                    break;
+                    pairResult = await _svc.Api.PairDirectAsync(ServerUrl.Trim(), code, s.DeviceId, s.DeviceName);
+                }
+                catch (Exception directEx)
+                {
+                    if (string.IsNullOrWhiteSpace(uid)) throw;
+                    Log.Warn("单向配对失败，尝试兼容双向握手配对: " + directEx.Message);
                 }
             }
 
-            if (status == "approved")
+            if (pairResult == null && !string.IsNullOrWhiteSpace(uid))
+            {
+                pairResult = await _svc.Api.PairAsync(ServerUrl.Trim(), code, uid, s.DeviceId, s.DeviceName);
+                if (string.IsNullOrWhiteSpace(pairResult.DeviceToken))
+                {
+                    throw new ApiException("服务器未返回设备凭证，请确认服务端已更新。", System.Net.HttpStatusCode.BadGateway);
+                }
+
+                // 轮询配对审核结果 (最多等待 2 分钟，120 秒超时倒计时)
+                var deadline = DateTime.UtcNow.AddSeconds(120);
+                string status = "pending";
+                while (DateTime.UtcNow < deadline)
+                {
+                    var remaining = (int)Math.Max(0, Math.Ceiling((deadline - DateTime.UtcNow).TotalSeconds));
+                    ShowMessage($"已发起配对请求，等待对方设备确认接入（剩余 {remaining}s）…");
+                    await Task.Delay(2000);
+                    var statusRes = await _svc.Api.GetPairStatusAsync(ServerUrl.Trim(), code, s.DeviceId);
+                    status = statusRes.Status;
+                    if (status == "approved" || status == "rejected" || status == "expired" || status == "not-found")
+                    {
+                        break;
+                    }
+                }
+                pairResult.Status = status;
+            }
+
+            if (pairResult != null && pairResult.Status == "approved" && !string.IsNullOrWhiteSpace(pairResult.DeviceToken))
             {
                 s.AuthToken = pairResult.DeviceToken;
                 s.IsPaired = true;
@@ -575,23 +589,23 @@ public partial class SettingsViewModel : ObservableObject
                 _ = RefreshDevicesAsync();
                 NotifyPairingStateChanged();
             }
-            else if (status == "rejected")
+            else if (pairResult?.Status == "rejected")
             {
                 ShowMessage("配对请求已被对方设备拒绝", InfoBarSeverity.Error);
             }
-            else if (status == "expired")
+            else if (pairResult?.Status == "expired")
             {
                 ShowMessage("配对码已过期，请重新获取配对码", InfoBarSeverity.Error);
             }
             else
             {
-                ShowMessage("等待对方确认超时，请重新发起配对", InfoBarSeverity.Error);
+                ShowMessage("配对失败或等待对方确认超时，请重新发起配对", InfoBarSeverity.Error);
             }
         }
         catch (Exception ex)
         {
             Log.Error("设备配对失败", ex);
-            ShowMessage($"配对失败：{ServerApi.DescribeException(ex, "请检查配对码、用户 ID 和服务器配置后重试。")}", InfoBarSeverity.Error);
+            ShowMessage($"配对失败：{ServerApi.DescribeException(ex, "请检查配对码和服务器配置后重试。")}", InfoBarSeverity.Error);
         }
         finally
         {

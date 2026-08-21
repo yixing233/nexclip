@@ -7,4 +7,5 @@ public sealed class PairingCodeResult
     public DateTime ExpiresAt { get; set; }   // UTC
     public string? UserId { get; set; }
     public string? DeviceToken { get; set; }
+    public string? QrPayload { get; set; }
 }
