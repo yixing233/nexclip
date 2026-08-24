@@ -153,8 +153,17 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
   // ============ /api/clipboard ============
   if (p === '/api/clipboard' && method === 'GET') {
     if (!requireDeviceOrSession()) return true;
+    const maxAgeRaw = url.searchParams.get('maxAgeSeconds');
+    const maxAgeSeconds = maxAgeRaw ? Number(maxAgeRaw) : null;
     const cur = svc.getCurrent();
     if (!cur) { sendNoContent(res); return true; }
+    if (maxAgeSeconds && maxAgeSeconds > 0) {
+      const ageSec = (Date.now() - new Date(cur.CreatedAt).getTime()) / 1000;
+      if (ageSec > maxAgeSeconds) {
+        sendNoContent(res);
+        return true;
+      }
+    }
     sendJson(res, 200, toEntryDto(svc, cur));
     return true;
   }
@@ -175,7 +184,8 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     const deviceName = typeof json.deviceName === 'string' && json.deviceName ? json.deviceName : deviceId;
     const platform = typeof json.platform === 'string' ? json.platform : null;
     const version = typeof json.version === 'string' ? json.version : null;
-    const { entry, unchanged } = svc.uploadText(text, deviceId, deviceName, platform, version, remoteIp(req), true);
+    const isManual = Boolean(json.isManual);
+    const { entry, unchanged } = svc.uploadText(text, deviceId, deviceName, platform, version, remoteIp(req), true, isManual);
     sendJson(res, 200, { ...entry, unchanged });
     return true;
   }
@@ -200,7 +210,8 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     const explicitPlat = mp.fields.platform?.trim() || null;
     const platform = detectPlatform(explicitPlat, req.headers['user-agent'], deviceName);
     const version = mp.fields.version?.trim() || null;
-    const entry = svc.uploadImage(mp.file.filename || 'image', mp.file.data, deviceId, deviceName, remoteIp(req), platform, version);
+    const isManual = mp.fields.isManual === 'true' || mp.fields.isManual === '1';
+    const entry = svc.uploadImage(mp.file.filename || 'image', mp.file.data, deviceId, deviceName, remoteIp(req), platform, version, isManual);
     sendJson(res, 200, entry);
     return true;
   }
@@ -227,17 +238,20 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
   }
 
   if (p === '/api/clipboard/send' && method === 'POST') {
+    if (!requireDeviceOrSession()) return true;
     const body = await readBody(req, 1024 * 1024);
     let json: Record<string, unknown>;
     try { json = JSON.parse(body.toString('utf8')); } catch { sendJson(res, 400, { error: '无效的 JSON' }); return true; }
     const text = typeof json.text === 'string' ? json.text.trim() : '';
     if (!text) { sendJson(res, 400, { error: 'text 不能为空' }); return true; }
-    const deviceId = typeof json.deviceId === 'string' && json.deviceId ? json.deviceId : 'web-' + randomHex(4);
-    const deviceName = typeof json.deviceName === 'string' && json.deviceName ? json.deviceName : deviceId;
+    const requestedId = typeof json.deviceId === 'string' && json.deviceId ? json.deviceId : 'web-' + randomHex(4);
+    const deviceId = deviceActor?.Id ?? ctx.actor?.deviceId ?? requestedId;
+    if (deviceActor && requestedId !== deviceActor.Id) { sendApiError(res, 403, '上传设备身份与凭证不匹配'); return true; }
+    const deviceName = typeof json.deviceName === 'string' && json.deviceName ? json.deviceName : (deviceActor?.Name ?? deviceId);
     const rawTargets = Array.isArray(json.deviceIds) ? json.deviceIds.filter((x): x is string => typeof x === 'string' && !!x.trim()) : [];
     const targets = [...new Set(rawTargets)];
     // 未指定目标 → 广播全员(旧行为);指定 → 只写库 + 定向通知
-    const { entry } = svc.uploadText(text, deviceId, deviceName, 'Web', null, remoteIp(req), targets.length === 0);
+    const { entry } = svc.uploadText(text, deviceId, deviceName, deviceActor?.Platform ?? 'Web', null, remoteIp(req), targets.length === 0, true);
     if (targets.length > 0) {
       svc.broadcastTo(entry, new Set(targets));
     }

@@ -32,7 +32,6 @@ export function routeClass(method: string, p: string): 'open' | 'user' | 'admin'
     p === '/api/stats' ||
     p === '/api/users' ||
     p.startsWith('/api/admin/') ||
-    p === '/api/clipboard/send' ||
     (p === '/api/clipboard/history' && method === 'DELETE') ||
     (/^\/api\/users\/[^/]+$/.test(p) && method === 'DELETE')
   ) return 'admin';

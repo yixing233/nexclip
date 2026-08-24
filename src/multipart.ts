@@ -37,12 +37,13 @@ export function parseMultipart(contentType: string | undefined, body: Buffer): M
     const partBody = body.subarray(pos, next);
     pos = next + delim.length;
 
-    // 解析 Content-Disposition
-    const disp = /content-disposition:\s*form-data;\s*name="([^"]*)"(?:;\s*filename="([^"]*)")?/i.exec(headerText);
-    if (disp) {
-      const name = disp[1];
-      const filename = disp[2];
-      if (filename !== undefined) {
+    // 解析 Content-Disposition (支持 name="...", name=..., filename="...", filename=...)
+    const nameMatch = /name=(?:"([^"]*)"|([^;\r\n]+))/i.exec(headerText);
+    const fileMatch = /filename=(?:"([^"]*)"|([^;\r\n]+))/i.exec(headerText);
+    if (nameMatch) {
+      const name = (nameMatch[1] ?? nameMatch[2]).trim();
+      if (fileMatch) {
+        const filename = (fileMatch[1] ?? fileMatch[2]).trim();
         result.file = { filename, data: Buffer.from(partBody) };
       } else {
         result.fields[name] = partBody.toString('utf8');

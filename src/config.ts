@@ -55,10 +55,14 @@ export function loadConfig(): AppConfig {
     return Number.isFinite(n) && n > 0 ? n : d;
   };
   const env = (k: string, d: string) => process.env[k] ?? d;
+  let defaultDb = 'data/nexclip.db';
+  if (!existsSync(resolve(rootDir, defaultDb)) && existsSync(resolve(rootDir, 'data/syncclipboard.db'))) {
+    defaultDb = 'data/syncclipboard.db';
+  }
   const cfg: AppConfig = {
     port: num(env('SC_PORT', String(file.port ?? 5033)), 5033),
     maxHistoryCount: num(env('SC_MAX_HISTORY', String(file.maxHistoryCount ?? 1000)), 1000),
-    databasePath: env('SC_DB_PATH', String(file.databasePath ?? 'data/syncclipboard.db')),
+    databasePath: env('SC_DB_PATH', String(file.databasePath ?? defaultDb)),
     imageStoragePath: env('SC_IMAGE_PATH', String(file.imageStoragePath ?? 'data/images')),
     maxImageSizeBytes: num(env('SC_MAX_IMAGE_BYTES', String(file.maxImageSizeBytes ?? 10 * 1024 * 1024)), 10 * 1024 * 1024),
     onlineThresholdSeconds: num(env('SC_ONLINE_THRESHOLD_SECONDS', String(file.onlineThresholdSeconds ?? 120)), 120),

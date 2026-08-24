@@ -3,7 +3,7 @@ import type { AppConfig } from './config.js';
 
 export interface EntryRow {
   Id: number; Type: string; Text: string | null; ImageRef: string | null;
-  ContentHash: string; DeviceId: string; DeviceName: string | null; CreatedAt: string;
+  ContentHash: string; DeviceId: string; DeviceName: string | null; IsManual?: number | null; CreatedAt: string;
 }
 export interface DeviceRow {
   Id: string; Name: string; Platform: string; Ip: string | null; Version: string | null;
@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS "Entries" (
   "ContentHash" TEXT NOT NULL,
   "DeviceId" TEXT NOT NULL,
   "DeviceName" TEXT NULL,
+  "IsManual" INTEGER NULL DEFAULT 0,
   "CreatedAt" TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS "IX_Entries_CreatedAt" ON "Entries" ("CreatedAt");
@@ -92,6 +93,10 @@ CREATE TABLE IF NOT EXISTS "Settings" (
   "Value" TEXT NOT NULL
 );
 `);
+  // Entries 增量加列: IsManual 标记
+  const entryCols = new Set((db.prepare('PRAGMA table_info("Entries")').all() as { name: string }[]).map(c => c.name));
+  if (!entryCols.has('IsManual')) db.exec('ALTER TABLE "Entries" ADD COLUMN "IsManual" INTEGER NULL DEFAULT 0');
+
   // Devices 增量加列(老库兼容):设备专属 Token 哈希 + 配对时间
   const devCols = new Set((db.prepare('PRAGMA table_info("Devices")').all() as { name: string }[]).map(c => c.name));
   if (!devCols.has('Token')) db.exec('ALTER TABLE "Devices" ADD COLUMN "Token" TEXT NULL');
