@@ -1,4 +1,4 @@
-namespace SyncClipboard.Desktop.Services;
+﻿namespace NexClip.Desktop.Services;
 
 /// <summary>链接(URL)识别工具:判断文本是否为可打开的网址。</summary>
 public static class UrlUtil

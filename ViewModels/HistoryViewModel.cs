@@ -2,9 +2,9 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Xaml;
-using SyncClipboard.Desktop.Services;
+using NexClip.Desktop.Services;
 
-namespace SyncClipboard.Desktop.ViewModels;
+namespace NexClip.Desktop.ViewModels;
 
 /// <summary>历史列表 VM:搜索 + 分类标签(全部/文本/图片/收藏)+ 复制/删除/收藏/清空。</summary>
 public partial class HistoryViewModel : ObservableObject
@@ -20,6 +20,15 @@ public partial class HistoryViewModel : ObservableObject
 
     [ObservableProperty]
     private bool isBusy;
+
+    [ObservableProperty]
+    private bool hasMore = true;
+
+    [ObservableProperty]
+    private bool isLoadingMore;
+
+    public const int PageSize = 30;
+    private int _currentOffset;
 
     public ObservableCollection<HistoryItemViewModel> Items { get; } = new();
 
@@ -71,21 +80,77 @@ public partial class HistoryViewModel : ObservableObject
     {
         if (_engine is null) return;
         IsBusy = true;
+        _currentOffset = 0;
         try
         {
             var type = FilterIndex switch { 1 => "Text", 2 => "Image", _ => null };
             var starred = FilterIndex == 3;
             var urlOnly = FilterIndex == 4;
-            var items = _engine.History.Query(SearchText?.Trim(), type, starred, 500, urlOnly);
+            var search = SearchText?.Trim();
+            var items = await Task.Run(() => _engine.History.Query(search, type, starred, PageSize, urlOnly, 0));
             Items.Clear();
+            var index = 1;
             foreach (var item in items)
             {
-                Items.Add(new HistoryItemViewModel(item, this));
+                var vm = new HistoryItemViewModel(item, this)
+                {
+                    IndexInList = index <= 9 ? index : 0
+                };
+                index++;
+                Items.Add(vm);
             }
+            _currentOffset = items.Count;
+            HasMore = items.Count >= PageSize;
         }
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    public async Task LoadMoreAsync()
+    {
+        if (_engine is null || IsLoadingMore || !HasMore || IsBusy) return;
+        IsLoadingMore = true;
+        try
+        {
+            var type = FilterIndex switch { 1 => "Text", 2 => "Image", _ => null };
+            var starred = FilterIndex == 3;
+            var urlOnly = FilterIndex == 4;
+            var search = SearchText?.Trim();
+            var offset = _currentOffset;
+            var items = await Task.Run(() => _engine.History.Query(search, type, starred, PageSize, urlOnly, offset));
+
+            if (items.Count == 0)
+            {
+                HasMore = false;
+                return;
+            }
+
+            foreach (var item in items)
+            {
+                var vm = new HistoryItemViewModel(item, this)
+                {
+                    IndexInList = 0
+                };
+                Items.Add(vm);
+            }
+
+            _currentOffset += items.Count;
+            HasMore = items.Count >= PageSize;
+            UpdateShortcutIndices();
+        }
+        finally
+        {
+            IsLoadingMore = false;
+        }
+    }
+
+    private void UpdateShortcutIndices()
+    {
+        for (var i = 0; i < Items.Count; i++)
+        {
+            Items[i].IndexInList = (i < 9) ? (i + 1) : 0;
         }
     }
 
@@ -101,6 +166,7 @@ public partial class HistoryViewModel : ObservableObject
     {
         _engine?.History.Delete(item.Item.Id);
         Items.Remove(item);
+        UpdateShortcutIndices();
     }
 
     [RelayCommand]

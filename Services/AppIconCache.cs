@@ -1,4 +1,4 @@
-namespace SyncClipboard.Desktop.Services;
+namespace NexClip.Desktop.Services;
 
 using System;
 using System.Collections.Concurrent;
@@ -8,14 +8,14 @@ using System.IO;
 
 /// <summary>
 /// 应用程序图标提取与磁盘/内存双层缓存服务
-/// 缓存目录：%LOCALAPPDATA%/SyncClipboard/app_icons/{processName}_{hash}.png
+/// 缓存目录：%LOCALAPPDATA%/NexClip/app_icons/{processName}_{hash}.png
 /// </summary>
 public static class AppIconCache
 {
     private static readonly ConcurrentDictionary<string, string> Cache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly string IconDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "SyncClipboard", "app_icons");
+        "NexClip", "app_icons");
 
     static AppIconCache()
     {

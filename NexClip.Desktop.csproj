@@ -4,7 +4,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
-    <RootNamespace>SyncClipboard.Desktop</RootNamespace>
+    <RootNamespace>NexClip.Desktop</RootNamespace>
     <AssemblyName>NexClip</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x64</Platforms>
@@ -31,10 +31,10 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
-    <!-- 排除嵌套的 SyncClipboard.Tray 子项目源码与 obj/bin 生成物:默认 Compile 通配会把它们连同自身 obj 里的 AssemblyInfo 一起编进主程序集,造成重复类型/重复特性 -->
-    <Compile Remove="SyncClipboard.Tray\**\*.cs" />
-    <EmbeddedResource Remove="SyncClipboard.Tray\**\*.resx" />
-    <None Remove="SyncClipboard.Tray\**" />
+    <!-- 排除嵌套的 NexClip.Tray 子项目源码与 obj/bin 生成物:默认 Compile 通配会把它们连同自身 obj 里的 AssemblyInfo 一起编进主程序集,造成重复类型/重复特性 -->
+    <Compile Remove="NexClip.Tray\**\*.cs" />
+    <EmbeddedResource Remove="NexClip.Tray\**\*.resx" />
+    <None Remove="NexClip.Tray\**" />
   </ItemGroup>
   <ItemGroup>
     <!-- UIAutomationClient:粘贴时用 UIA 定位目标输入框,精确重建焦点 -->
@@ -50,6 +50,6 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.10" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="SyncClipboard.Tray\SyncClipboard.Tray.csproj" />
+    <ProjectReference Include="NexClip.Tray\NexClip.Tray.csproj" />
   </ItemGroup>
 </Project>

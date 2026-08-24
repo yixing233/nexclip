@@ -3,14 +3,15 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
-using SyncClipboard.Desktop.Services;
-using SyncClipboard.Desktop.ViewModels;
+using NexClip.Desktop.Services;
+using NexClip.Desktop.ViewModels;
 using System.Diagnostics;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage.Pickers;
 using Windows.System;
 using Windows.UI;
 
-namespace SyncClipboard.Desktop.Views;
+namespace NexClip.Desktop.Views;
 
 public sealed partial class ClipboardMainPage : Page
 {
@@ -34,6 +35,7 @@ public sealed partial class ClipboardMainPage : Page
         if (App.Services.Engine is not null)
         {
             _history.AttachEngine(App.Services.Engine);
+            App.Services.ChatVm.AttachEngine(App.Services.Engine);
         }
         _ = _history.RefreshAsync();
         _ = App.Services.Main.RefreshCommand.ExecuteAsync(null);
@@ -52,6 +54,11 @@ public sealed partial class ClipboardMainPage : Page
         };
         // 列表模板应用后挂接内部 ScrollViewer,跟踪滚动位置
         EntryList.Loaded += (_, _) => AttachScroller();
+
+        TransferChatHost.ImagePreviewRequested += (path, thumb) =>
+        {
+            OpenImageViewer(path, thumb, "互传图片预览");
+        };
     }
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e) => App.OpenSettings();
@@ -148,24 +155,36 @@ public sealed partial class ClipboardMainPage : Page
         var oldVisualIndex = _lastVisualIndex;
         _lastVisualIndex = visualIndex;
 
-        // 执行平滑转场动画
-        PlayListTransition(oldVisualIndex, visualIndex);
-
-        // 重置列表滚动条到顶部
-        if (_listScroller is not null && _listScroller.VerticalOffset > 0)
+        if (filterIndex == 5)
         {
-            _listScroller.ChangeView(null, 0, null, true);
+            ListHost.Visibility = Visibility.Collapsed;
+            TransferChatHost.Visibility = Visibility.Visible;
+            PlayTransition(TransferChatHost, ChatTranslateTransform, oldVisualIndex, visualIndex);
+            TransferChatHost.OnActivated();
+            return;
         }
+        else
+        {
+            ListHost.Visibility = Visibility.Visible;
+            TransferChatHost.Visibility = Visibility.Collapsed;
+            PlayTransition(ListHost, ListTranslateTransform, oldVisualIndex, visualIndex);
 
-        _history.FilterIndex = filterIndex;
+            // 重置列表滚动条到顶部
+            if (_listScroller is not null && _listScroller.VerticalOffset > 0)
+            {
+                _listScroller.ChangeView(null, 0, null, true);
+            }
+
+            _history.FilterIndex = filterIndex;
+        }
     }
 
-    /// <summary>分类切换列表转场动效:根据左右切换方向,执行平滑位移 + 淡入淡出动画。</summary>
-    private void PlayListTransition(int oldVisualIndex, int newVisualIndex)
+    /// <summary>分类切换转场动效:根据左右切换方向,执行平滑位移 + 淡入淡出动画。</summary>
+    private void PlayTransition(UIElement target, TranslateTransform transform, int oldVisualIndex, int newVisualIndex)
     {
         if (oldVisualIndex == newVisualIndex) return;
 
-        double fromX = newVisualIndex > oldVisualIndex ? 30.0 : -30.0;
+        double fromX = newVisualIndex > oldVisualIndex ? 26.0 : -26.0;
 
         _transitionStoryboard?.Stop();
 
@@ -173,22 +192,22 @@ public sealed partial class ClipboardMainPage : Page
         {
             From = fromX,
             To = 0.0,
-            Duration = TimeSpan.FromMilliseconds(180),
+            Duration = TimeSpan.FromMilliseconds(200),
             EasingFunction = new ExponentialEase { EasingMode = EasingMode.EaseOut, Exponent = 4.5 },
             EnableDependentAnimation = true,
         };
-        Storyboard.SetTarget(slideAnim, ListTranslateTransform);
+        Storyboard.SetTarget(slideAnim, transform);
         Storyboard.SetTargetProperty(slideAnim, "X");
 
         var fadeAnim = new DoubleAnimation
         {
-            From = 0.25,
+            From = 0.2,
             To = 1.0,
-            Duration = TimeSpan.FromMilliseconds(180),
+            Duration = TimeSpan.FromMilliseconds(200),
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
             EnableDependentAnimation = true,
         };
-        Storyboard.SetTarget(fadeAnim, ListHost);
+        Storyboard.SetTarget(fadeAnim, target);
         Storyboard.SetTargetProperty(fadeAnim, "Opacity");
 
         var storyboard = new Storyboard();
@@ -286,6 +305,15 @@ public sealed partial class ClipboardMainPage : Page
             : offset > BackToTopThreshold && scrolledUp;
         if (show) ShowBackToTopButton();
         else HideBackToTopButton();
+
+        // 触底自动触发懒加载 (当滚动距离底部小于 250px 时提前预加载下一批数据)
+        if (_listScroller.ScrollableHeight > 0 &&
+            offset >= _listScroller.ScrollableHeight - 250 &&
+            !_history.IsLoadingMore &&
+            _history.HasMore)
+        {
+            _ = _history.LoadMoreAsync();
+        }
     }
 
     /// <summary>点击回到列表顶部并立即收起按钮,滚动由 ScrollViewer 平滑完成。</summary>
@@ -476,6 +504,7 @@ public sealed partial class ClipboardMainPage : Page
     }
 
     private HistoryItemViewModel? _currentViewerVm;
+    private string? _currentViewerImagePath;
     private double _currentRotation;
 
     /// <summary>点击图片缩略图直接呼出大图查看器。</summary>
@@ -529,6 +558,26 @@ public sealed partial class ClipboardMainPage : Page
             // 否则菜单关闭后切换选中时,该条目永远不会被 SelectionChanged 清理,选中样式残留。
             EntryList.SelectedItem = vm;
             vm.IsSelected = true;
+        }
+    }
+
+    private async void PushToDevicesMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (_contextItem is { } vm && App.Services.Engine is { } engine)
+        {
+            try
+            {
+                var ok = await engine.PushHistoryItemAsync(vm.Item);
+                if (ok)
+                {
+                    App.Services.Tray?.Notify("NexClip 同步", "已成功推送到所有设备");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error("推送到设备失败", ex);
+                App.Services.Tray?.Notify("NexClip 推送失败", ex.Message);
+            }
         }
     }
 
@@ -612,20 +661,68 @@ public sealed partial class ClipboardMainPage : Page
 
     private void OpenInSystemApp_Click(object sender, RoutedEventArgs e)
     {
-        if (_currentViewerVm is { } vm) OpenWithSystemViewer(vm.Item.ImagePath);
+        var path = _currentViewerVm?.Item.ImagePath ?? _currentViewerImagePath;
+        if (!string.IsNullOrEmpty(path)) OpenWithSystemViewer(path);
     }
 
-    /// <summary>打开全屏大图查看器浮层。</summary>
+    private double _currentZoom = 1.0;
+    private bool _isDraggingViewer;
+    private Windows.Foundation.Point _lastViewerDragPoint;
+
+    private void ResetViewerTransform()
+    {
+        _currentZoom = 1.0;
+        _currentRotation = 0;
+        if (ViewerRotateTransform != null) ViewerRotateTransform.Angle = 0;
+        if (ViewerScaleTransform != null)
+        {
+            ViewerScaleTransform.ScaleX = 1.0;
+            ViewerScaleTransform.ScaleY = 1.0;
+        }
+        if (ViewerTranslateTransform != null)
+        {
+            ViewerTranslateTransform.X = 0;
+            ViewerTranslateTransform.Y = 0;
+        }
+        if (ViewerZoomText != null) ViewerZoomText.Text = "100%";
+    }
+
+    /// <summary>打开全屏大图查看器浮层 (历史记录条目)。</summary>
     private void OpenImageViewer(HistoryItemViewModel vm)
     {
         _currentViewerVm = vm;
-        _currentRotation = 0;
-        ViewerRotateTransform.Angle = 0;
+        _currentViewerImagePath = vm.Item.ImagePath;
+        ResetViewerTransform();
         ViewerImage.Source = vm.Thumbnail;
         ViewerInfoText.Text = $"图片预览 · {vm.RelativeTime}";
-        ViewerZoomText.Text = "100%";
         ImageViewerOverlay.Visibility = Visibility.Visible;
-        ViewerScroller.ChangeView(0, 0, 1.0f, true);
+        ImageViewerOverlay.Focus(FocusState.Programmatic);
+    }
+
+    /// <summary>打开全屏大图查看器浮层 (通用图片路径/缩略图)。</summary>
+    public void OpenImageViewer(string? imagePath, ImageSource? thumbnail, string title = "图片预览")
+    {
+        _currentViewerVm = null;
+        _currentViewerImagePath = imagePath;
+        ResetViewerTransform();
+
+        if (thumbnail != null)
+        {
+            ViewerImage.Source = thumbnail;
+        }
+        else if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
+        {
+            try
+            {
+                var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+                bmp.UriSource = new Uri("file:///" + imagePath.Replace('\\', '/'));
+                ViewerImage.Source = bmp;
+            }
+            catch { }
+        }
+
+        ViewerInfoText.Text = title;
+        ImageViewerOverlay.Visibility = Visibility.Visible;
         ImageViewerOverlay.Focus(FocusState.Programmatic);
     }
 
@@ -637,36 +734,156 @@ public sealed partial class ClipboardMainPage : Page
         ImageViewerOverlay.Visibility = Visibility.Collapsed;
         ViewerImage.Source = null;
         _currentViewerVm = null;
+        _currentViewerImagePath = null;
+        ResetViewerTransform();
         EntryList.Focus(FocusState.Programmatic);
     }
 
-    private void ViewerScroller_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
+    private void ViewerCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        ViewerZoomText.Text = $"{(int)Math.Round(ViewerScroller.ZoomFactor * 100)}%";
+        ViewerCanvas.Clip = new RectangleGeometry { Rect = new Windows.Foundation.Rect(0, 0, e.NewSize.Width, e.NewSize.Height) };
     }
 
-    private void ViewerScroller_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+    private void ViewerCanvas_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
     {
         e.Handled = true;
-        var target = ViewerScroller.ZoomFactor >= 1.9f ? 1.0f : 2.0f;
-        ViewerScroller.ChangeView(null, null, target, false);
+        var pt = e.GetCurrentPoint(ViewerCanvas);
+        var delta = pt.Properties.MouseWheelDelta;
+        if (delta == 0) return;
+
+        var factor = delta > 0 ? 1.25 : 0.8;
+        var newZoom = Math.Clamp(_currentZoom * factor, 0.1, 10.0);
+        if (Math.Abs(newZoom - _currentZoom) < 0.001) return;
+
+        if (newZoom <= 1.05 && delta < 0)
+        {
+            ResetViewerTransform();
+            return;
+        }
+
+        var centerX = ViewerCanvas.ActualWidth / 2.0;
+        var centerY = ViewerCanvas.ActualHeight / 2.0;
+        var mouseRelX = pt.Position.X - centerX;
+        var mouseRelY = pt.Position.Y - centerY;
+
+        var curTx = ViewerTranslateTransform.X;
+        var curTy = ViewerTranslateTransform.Y;
+        var zoomRatio = newZoom / _currentZoom;
+        var newTx = mouseRelX - (mouseRelX - curTx) * zoomRatio;
+        var newTy = mouseRelY - (mouseRelY - curTy) * zoomRatio;
+
+        _currentZoom = newZoom;
+        ViewerScaleTransform.ScaleX = newZoom;
+        ViewerScaleTransform.ScaleY = newZoom;
+        ViewerTranslateTransform.X = newTx;
+        ViewerTranslateTransform.Y = newTy;
+        ViewerZoomText.Text = $"{(int)Math.Round(newZoom * 100)}%";
+    }
+
+    private void ViewerCanvas_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        var pt = e.GetCurrentPoint(ViewerCanvas);
+        if (pt.Properties.IsLeftButtonPressed || pt.Properties.IsMiddleButtonPressed)
+        {
+            _isDraggingViewer = true;
+            _lastViewerDragPoint = pt.Position;
+            ViewerCanvas.CapturePointer(e.Pointer);
+            ProtectedCursor = Microsoft.UI.Input.InputSystemCursor.Create(Microsoft.UI.Input.InputSystemCursorShape.Hand);
+            e.Handled = true;
+        }
+    }
+
+    private void ViewerCanvas_PointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_isDraggingViewer) return;
+
+        var pt = e.GetCurrentPoint(ViewerCanvas);
+        var deltaX = pt.Position.X - _lastViewerDragPoint.X;
+        var deltaY = pt.Position.Y - _lastViewerDragPoint.Y;
+
+        if (Math.Abs(deltaX) > 0.1 || Math.Abs(deltaY) > 0.1)
+        {
+            ViewerTranslateTransform.X += deltaX;
+            ViewerTranslateTransform.Y += deltaY;
+            _lastViewerDragPoint = pt.Position;
+        }
+        e.Handled = true;
+    }
+
+    private void ViewerCanvas_PointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (_isDraggingViewer)
+        {
+            _isDraggingViewer = false;
+            try { ViewerCanvas.ReleasePointerCapture(e.Pointer); } catch { /* ignore */ }
+            ProtectedCursor = Microsoft.UI.Input.InputSystemCursor.Create(Microsoft.UI.Input.InputSystemCursorShape.Arrow);
+            e.Handled = true;
+        }
+    }
+
+    private void ViewerCanvas_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (_currentZoom >= 1.9)
+        {
+            ResetViewerTransform();
+        }
+        else
+        {
+            var pt = e.GetPosition(ViewerCanvas);
+            var centerX = ViewerCanvas.ActualWidth / 2.0;
+            var centerY = ViewerCanvas.ActualHeight / 2.0;
+            var mouseRelX = pt.X - centerX;
+            var mouseRelY = pt.Y - centerY;
+
+            var newZoom = 2.0;
+            var zoomRatio = newZoom / _currentZoom;
+            var curTx = ViewerTranslateTransform.X;
+            var curTy = ViewerTranslateTransform.Y;
+            var newTx = mouseRelX - (mouseRelX - curTx) * zoomRatio;
+            var newTy = mouseRelY - (mouseRelY - curTy) * zoomRatio;
+
+            _currentZoom = newZoom;
+            ViewerScaleTransform.ScaleX = newZoom;
+            ViewerScaleTransform.ScaleY = newZoom;
+            ViewerTranslateTransform.X = newTx;
+            ViewerTranslateTransform.Y = newTy;
+            ViewerZoomText.Text = $"{(int)Math.Round(newZoom * 100)}%";
+        }
     }
 
     private void ZoomIn_Click(object sender, RoutedEventArgs e)
     {
-        var next = Math.Min(ViewerScroller.ZoomFactor * 1.25f, 8.0f);
-        ViewerScroller.ChangeView(null, null, next, false);
+        var newZoom = Math.Min(_currentZoom * 1.25, 10.0);
+        var zoomRatio = newZoom / _currentZoom;
+        _currentZoom = newZoom;
+        ViewerScaleTransform.ScaleX = newZoom;
+        ViewerScaleTransform.ScaleY = newZoom;
+        ViewerTranslateTransform.X *= zoomRatio;
+        ViewerTranslateTransform.Y *= zoomRatio;
+        ViewerZoomText.Text = $"{(int)Math.Round(newZoom * 100)}%";
     }
 
     private void ZoomOut_Click(object sender, RoutedEventArgs e)
     {
-        var next = Math.Max(ViewerScroller.ZoomFactor / 1.25f, 0.1f);
-        ViewerScroller.ChangeView(null, null, next, false);
+        var newZoom = Math.Max(_currentZoom / 1.25, 0.1);
+        if (newZoom <= 1.05)
+        {
+            ResetViewerTransform();
+            return;
+        }
+        var zoomRatio = newZoom / _currentZoom;
+        _currentZoom = newZoom;
+        ViewerScaleTransform.ScaleX = newZoom;
+        ViewerScaleTransform.ScaleY = newZoom;
+        ViewerTranslateTransform.X *= zoomRatio;
+        ViewerTranslateTransform.Y *= zoomRatio;
+        ViewerZoomText.Text = $"{(int)Math.Round(newZoom * 100)}%";
     }
 
     private void ZoomReset_Click(object sender, RoutedEventArgs e)
     {
-        ViewerScroller.ChangeView(0, 0, 1.0f, false);
+        ResetViewerTransform();
     }
 
     private void Rotate_Click(object sender, RoutedEventArgs e)
@@ -677,12 +894,21 @@ public sealed partial class ClipboardMainPage : Page
 
     private void CopyViewerImage_Click(object sender, RoutedEventArgs e)
     {
-        if (_currentViewerVm is { } vm) _ = _history.CopyAsync(vm);
+        if (_currentViewerVm is { } vm)
+        {
+            _ = _history.CopyAsync(vm);
+        }
+        else if (!string.IsNullOrEmpty(_currentViewerImagePath) && File.Exists(_currentViewerImagePath))
+        {
+            ImageCodec.WriteClipboardImage(_currentViewerImagePath);
+            App.Services.Tray?.Notify("NexClip", "已复制图片");
+        }
     }
 
     private void SaveViewerImage_Click(object sender, RoutedEventArgs e)
     {
-        if (_currentViewerVm is { } vm) _ = SaveImageAsync(vm.Item.ImagePath);
+        var path = _currentViewerVm?.Item.ImagePath ?? _currentViewerImagePath;
+        if (!string.IsNullOrEmpty(path)) _ = SaveImageAsync(path);
     }
 
     /// <summary>大图浮层快捷键支持(Esc 退出, Ctrl+C 复制, Ctrl+S 另存为, +/- 缩放)。</summary>
@@ -833,6 +1059,176 @@ public sealed partial class ClipboardMainPage : Page
             {
                 if (item is HistoryItemViewModel vm) vm.IsSelected = true;
             }
+        }
+    }
+
+    /// <summary>页面级快捷键拦截:为前 9 项历史记录提供 Ctrl+1~9 快速选定并直接粘贴。</summary>
+    private async void OnPagePreviewKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Handled) return;
+
+        // 若大图查看器处于激活态，不拦截数字键
+        if (ImageViewerOverlay.Visibility == Visibility.Visible) return;
+
+        var isCtrl = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+
+        if (isCtrl)
+        {
+            var targetIndex = e.Key switch
+            {
+                VirtualKey.Number1 or VirtualKey.NumberPad1 => 0,
+                VirtualKey.Number2 or VirtualKey.NumberPad2 => 1,
+                VirtualKey.Number3 or VirtualKey.NumberPad3 => 2,
+                VirtualKey.Number4 or VirtualKey.NumberPad4 => 3,
+                VirtualKey.Number5 or VirtualKey.NumberPad5 => 4,
+                VirtualKey.Number6 or VirtualKey.NumberPad6 => 5,
+                VirtualKey.Number7 or VirtualKey.NumberPad7 => 6,
+                VirtualKey.Number8 or VirtualKey.NumberPad8 => 7,
+                VirtualKey.Number9 or VirtualKey.NumberPad9 => 8,
+                _ => -1
+            };
+
+            if (targetIndex >= 0 && targetIndex < _history.Items.Count)
+            {
+                e.Handled = true;
+                var targetItem = _history.Items[targetIndex];
+                EntryList.SelectedItem = targetItem;
+                Log.Info($"触发快捷键 Ctrl+{targetIndex + 1}: 粘贴条目 id={targetItem.Item.Id}");
+                await (App.ClipboardWindow?.PasteItemAsync(targetItem) ?? Task.CompletedTask);
+            }
+        }
+    }
+
+    // ==================== 全窗口拖拽发送覆盖层 (Drag & Drop Overlay) ====================
+
+    private void ShowDragDropOverlay(bool show)
+    {
+        if (show)
+        {
+            DragDropOverlay.Visibility = Visibility.Visible;
+            DragDropOverlay.Opacity = 1;
+        }
+        else
+        {
+            DragDropOverlay.Opacity = 0;
+            DragDropOverlay.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void Page_DragOver(object sender, DragEventArgs e)
+    {
+        if (e.DataView.Contains(StandardDataFormats.StorageItems) ||
+            e.DataView.Contains(StandardDataFormats.Bitmap) ||
+            e.DataView.Contains(StandardDataFormats.Text))
+        {
+            e.AcceptedOperation = DataPackageOperation.Copy;
+            e.DragUIOverride.Caption = "发送到 NexClip";
+            e.DragUIOverride.IsCaptionVisible = true;
+            e.DragUIOverride.IsContentVisible = true;
+            ShowDragDropOverlay(true);
+        }
+    }
+
+    private void Page_DragLeave(object sender, DragEventArgs e)
+    {
+        ShowDragDropOverlay(false);
+    }
+
+    private async void Page_Drop(object sender, DragEventArgs e)
+    {
+        ShowDragDropOverlay(false);
+        var def = e.GetDeferral();
+        try
+        {
+            if (e.DataView.Contains(StandardDataFormats.StorageItems))
+            {
+                var items = await e.DataView.GetStorageItemsAsync();
+                foreach (var item in items)
+                {
+                    if (item is Windows.Storage.StorageFile file)
+                    {
+                        var ext = file.FileType.ToLowerInvariant();
+                        if (ext is ".png" or ".jpg" or ".jpeg" or ".bmp" or ".gif" or ".webp")
+                        {
+                            var bytes = await File.ReadAllBytesAsync(file.Path);
+                            await UploadDroppedImageAsync(bytes, file.Name);
+                        }
+                        else
+                        {
+                            var text = await Windows.Storage.FileIO.ReadTextAsync(file);
+                            if (!string.IsNullOrWhiteSpace(text))
+                            {
+                                await UploadDroppedTextAsync(text);
+                            }
+                        }
+                    }
+                }
+            }
+            else if (e.DataView.Contains(StandardDataFormats.Bitmap))
+            {
+                var bmpStreamRef = await e.DataView.GetBitmapAsync();
+                using var stream = await bmpStreamRef.OpenReadAsync();
+                using var ms = new MemoryStream();
+                await stream.AsStreamForRead().CopyToAsync(ms);
+                await UploadDroppedImageAsync(ms.ToArray(), "screenshot.png");
+            }
+            else if (e.DataView.Contains(StandardDataFormats.Text))
+            {
+                var text = await e.DataView.GetTextAsync();
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    await UploadDroppedTextAsync(text);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error("拖拽发送处理失败", ex);
+        }
+        finally
+        {
+            def.Complete();
+        }
+    }
+
+    private async Task UploadDroppedImageAsync(byte[] bytes, string fileName)
+    {
+        var s = App.Services.Settings;
+        if (!s.IsPaired || string.IsNullOrWhiteSpace(s.ServerUrl))
+        {
+            App.Services.Tray?.Notify("NexClip", "未配对服务器，无法发送拖拽内容");
+            return;
+        }
+        try
+        {
+            await App.Services.Api.UploadImageAsync(s.ServerUrl, s.AuthToken, bytes, s.DeviceId, s.DeviceName, "Windows", Environment.OSVersion.VersionString, isManual: true);
+            App.Services.Tray?.Notify("NexClip 拖拽发送", $"已发送图片: {fileName}");
+        }
+        catch (Exception ex)
+        {
+            Log.Error("拖拽发送图片失败", ex);
+            App.Services.Tray?.Notify("NexClip 发送失败", ex.Message);
+        }
+    }
+
+    private async Task UploadDroppedTextAsync(string text)
+    {
+        var s = App.Services.Settings;
+        if (!s.IsPaired || string.IsNullOrWhiteSpace(s.ServerUrl))
+        {
+            App.Services.Tray?.Notify("NexClip", "未配对服务器，无法发送拖拽内容");
+            return;
+        }
+        try
+        {
+            await App.Services.Api.PutTextAsync(s.ServerUrl, s.AuthToken, text, s.DeviceId, s.DeviceName, "Windows", Environment.OSVersion.VersionString, isManual: true);
+            App.Services.Tray?.Notify("NexClip 拖拽发送", "已发送文本内容");
+        }
+        catch (Exception ex)
+        {
+            Log.Error("拖拽发送文本失败", ex);
+            App.Services.Tray?.Notify("NexClip 发送失败", ex.Message);
         }
     }
 }

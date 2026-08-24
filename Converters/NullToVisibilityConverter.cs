@@ -1,7 +1,7 @@
-using Microsoft.UI.Xaml;
+﻿using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Data;
 
-namespace SyncClipboard.Desktop.Converters;
+namespace NexClip.Desktop.Converters;
 
 /// <summary>null → Collapsed,非 null → Visible(用于行内编辑区显隐)。</summary>
 public sealed class NullToVisibilityConverter : IValueConverter

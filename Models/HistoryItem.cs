@@ -1,4 +1,4 @@
-namespace SyncClipboard.Desktop.Models;
+﻿namespace NexClip.Desktop.Models;
 
 /// <summary>本地历史条目(设计文档 §5)。</summary>
 public sealed class HistoryItem
@@ -18,4 +18,5 @@ public sealed class HistoryItem
     public DateTime CreatedAt { get; set; }   // UTC
     public int Origin { get; set; }           // 0=本地捕获 1=远端推送 2=本端主动同步
     public bool Starred { get; set; }
+    public bool IsManual => Origin == 2 || SourceAppName == "即时互传" || SourceAppName == "手动推送";
 }

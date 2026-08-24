@@ -1,11 +1,11 @@
-namespace SyncClipboard.Desktop.Services;
+namespace NexClip.Desktop.Services;
 
-/// <summary>极简文件日志:写 %LOCALAPPDATA%/SyncClipboard/logs/app-{yyyyMMdd}.log。</summary>
+/// <summary>极简文件日志:写 %LOCALAPPDATA%/NexClip/logs/app-{yyyyMMdd}.log。</summary>
 public static class Log
 {
     private static readonly string Dir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "SyncClipboard", "logs");
+        "NexClip", "logs");
 
     public static void Info(string message)
     {

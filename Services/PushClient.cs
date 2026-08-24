@@ -1,7 +1,7 @@
-using Microsoft.AspNetCore.SignalR.Client;
-using SyncClipboard.Desktop.Models;
+﻿using Microsoft.AspNetCore.SignalR.Client;
+using NexClip.Desktop.Models;
 
-namespace SyncClipboard.Desktop.Services;
+namespace NexClip.Desktop.Services;
 
 /// <summary>
 /// SignalR 推送客户端:/hubs/clipboard 推送通道(设备 ID + 设备令牌鉴权)。

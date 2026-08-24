@@ -1,8 +1,8 @@
 using System.Data;
 using Microsoft.Data.Sqlite;
-using SyncClipboard.Desktop.Models;
+using NexClip.Desktop.Models;
 
-namespace SyncClipboard.Desktop.Services;
+namespace NexClip.Desktop.Services;
 
 /// <summary>
 /// 本地历史(SQLite,设计文档 §5):%LOCALAPPDATA%/SyncClipboard/history.db。
@@ -212,7 +212,7 @@ public sealed class HistoryStore : IDisposable
     }
 
     /// <summary>查询历史(新→旧)。search 模糊匹配文本;type 过滤;starredOnly 只看收藏;urlOnly 只看链接。</summary>
-    public List<HistoryItem> Query(string? search = null, string? type = null, bool starredOnly = false, int limit = 500, bool urlOnly = false)
+    public List<HistoryItem> Query(string? search = null, string? type = null, bool starredOnly = false, int limit = 500, bool urlOnly = false, int offset = 0)
     {
         lock (_lock)
         {
@@ -223,13 +223,14 @@ public sealed class HistoryStore : IDisposable
             if (starredOnly) conds.Add("starred = 1");
             if (urlOnly) conds.Add("(type = 'Text' AND (text LIKE 'http://%' OR text LIKE 'https://%'))");
             if (conds.Count > 0) sql += " WHERE " + string.Join(" AND ", conds);
-            sql += " ORDER BY created_at DESC LIMIT @limit";
+            sql += " ORDER BY created_at DESC LIMIT @limit OFFSET @offset";
 
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = sql;
             cmd.Parameters.AddWithValue("@search", $"%{search}%");
             cmd.Parameters.AddWithValue("@type", type ?? "");
             cmd.Parameters.AddWithValue("@limit", limit);
+            cmd.Parameters.AddWithValue("@offset", offset);
             var list = new List<HistoryItem>();
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
@@ -461,7 +462,17 @@ public sealed class HistoryStore : IDisposable
         }
     }
 
-    public void Clear()
+    public int CountStarred()
+    {
+        lock (_lock)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(1) FROM entries WHERE starred = 1";
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+    }
+
+    public void Clear(bool keepStarred = false)
     {
         lock (_lock)
         {
@@ -469,7 +480,9 @@ public sealed class HistoryStore : IDisposable
             var files = new List<string>();
             using (var q = _conn.CreateCommand())
             {
-                q.CommandText = "SELECT image_path FROM entries WHERE image_path IS NOT NULL";
+                q.CommandText = keepStarred
+                    ? "SELECT image_path FROM entries WHERE image_path IS NOT NULL AND starred = 0"
+                    : "SELECT image_path FROM entries WHERE image_path IS NOT NULL";
                 using var r = q.ExecuteReader();
                 while (r.Read())
                 {
@@ -481,7 +494,7 @@ public sealed class HistoryStore : IDisposable
                 try { File.Delete(f); } catch { /* 忽略 */ }
             }
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = "DELETE FROM entries";
+            cmd.CommandText = keepStarred ? "DELETE FROM entries WHERE starred = 0" : "DELETE FROM entries";
             cmd.ExecuteNonQuery();
         }
     }

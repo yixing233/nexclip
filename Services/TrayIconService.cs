@@ -1,10 +1,10 @@
-namespace SyncClipboard.Desktop.Services;
+﻿namespace NexClip.Desktop.Services;
 
 using Microsoft.UI.Dispatching;
-using SyncClipboard.Tray;
+using NexClip.Tray;
 
 /// <summary>
-/// 托盘图标服务: 桥接至 SyncClipboard.Tray.TrayManager (基于 Windows Forms NotifyIcon 保证 100% 稳定挂载系统通知区)。
+/// 托盘图标服务: 桥接至 NexClip.Tray.TrayManager (基于 Windows Forms NotifyIcon 保证 100% 稳定挂载系统通知区)。
 /// 启动后延迟 1.5s/5s/12s 各强制重挂一次: 覆盖 Explorer/Shell 未就绪导致首次 NIM_ADD 失败 -> 托盘图标"看不到"的场景(自愈)。
 /// </summary>
 public sealed class TrayIconService : IDisposable

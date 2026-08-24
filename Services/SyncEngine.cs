@@ -1,7 +1,7 @@
 using Microsoft.UI.Dispatching;
-using SyncClipboard.Desktop.Models;
+using NexClip.Desktop.Models;
 
-namespace SyncClipboard.Desktop.Services;
+namespace NexClip.Desktop.Services;
 
 /// <summary>
 /// 同步引擎(设计文档 §4):连接状态机 + 上传/下载管线 + 防回环 + 指数退避重试。
@@ -384,7 +384,7 @@ public sealed class SyncEngine : IDisposable
         {
             try
             {
-                return await _svc.Api.PutTextAsync(s.ServerUrl, s.AuthToken, text, s.DeviceId, s.DeviceName, SystemInfo.Platform, SystemInfo.Version, ct);
+                return await _svc.Api.PutTextAsync(s.ServerUrl, s.AuthToken, text, s.DeviceId, s.DeviceName, SystemInfo.Platform, SystemInfo.Version, isManual: false, ct);
             }
             catch (Exception ex) when (attempt < 3 && ex is not ApiException { StatusCode: System.Net.HttpStatusCode.Unauthorized })
             {
@@ -400,7 +400,7 @@ public sealed class SyncEngine : IDisposable
         {
             try
             {
-                return await _svc.Api.UploadImageAsync(s.ServerUrl, s.AuthToken, png, s.DeviceId, s.DeviceName, SystemInfo.Platform, SystemInfo.Version, ct);
+                return await _svc.Api.UploadImageAsync(s.ServerUrl, s.AuthToken, png, s.DeviceId, s.DeviceName, SystemInfo.Platform, SystemInfo.Version, isManual: false, ct);
             }
             catch (Exception ex) when (attempt < 3 && ex is not ApiException { StatusCode: System.Net.HttpStatusCode.Unauthorized })
             {
@@ -452,8 +452,8 @@ public sealed class SyncEngine : IDisposable
                 ? ClipboardMonitor.HashBytes(imageBytes)
                 : null;
 
-        // 写入本地历史(远端条目: 先尝试命中已有相同内容的条目并置顶, 否则插入新记录)
-        var touched = contentHash is not null && History.TouchByHash(
+        // 写入本地历史(远端条目: 手动互传条目始终插入新记录以完整保留对话流与发送方设备信息; 普通剪贴板先尝试命中已有相同内容置顶)
+        var touched = !entry.IsManual && contentHash is not null && History.TouchByHash(
             contentHash,
             entry.Id,
             entry.DeviceId,
@@ -473,11 +473,13 @@ public sealed class SyncEngine : IDisposable
                 DeviceName = entry.DeviceName,
                 CreatedAt = entry.CreatedAt != default ? entry.CreatedAt : DateTime.UtcNow,
                 Origin = 1,
+                SourceAppName = entry.IsManual ? "即时互传" : null,
                 ContentHash = contentHash,
             });
         }
 
-        if (s.AutoPaste)
+        var isFresh = entry.CreatedAt == default || Math.Abs((DateTime.UtcNow - entry.CreatedAt).TotalMinutes) <= 5;
+        if (s.AutoPaste && isFresh)
         {
             try
             {
@@ -510,7 +512,12 @@ public sealed class SyncEngine : IDisposable
         try
         {
             var entry = await _svc.Api.GetCurrentAsync(s.ServerUrl, s.DeviceId, s.AuthToken);
-            _dispatcher.TryEnqueue(() => EntryUpdated?.Invoke(entry!, null, false));
+            if (entry is null) return;
+            var isFresh = entry.CreatedAt == default || Math.Abs((DateTime.UtcNow - entry.CreatedAt).TotalMinutes) <= 5;
+            if (isFresh)
+            {
+                _dispatcher.TryEnqueue(() => EntryUpdated?.Invoke(entry, null, false));
+            }
         }
         catch (Exception ex)
         {
@@ -574,6 +581,80 @@ public sealed class SyncEngine : IDisposable
         catch (Exception ex)
         {
             Log.Error($"复制历史条目失败:{ex.Message}");
+        }
+    }
+
+    /// <summary>手动推送单条历史记录到所有设备。</summary>
+    public async Task<bool> PushHistoryItemAsync(Models.HistoryItem item)
+    {
+        var s = _svc.Settings;
+        if (string.IsNullOrWhiteSpace(s.ServerUrl) || !s.IsPaired)
+        {
+            throw new InvalidOperationException("尚未配对或连接服务器");
+        }
+
+        SetTransfer(true, TransferKind.Upload);
+        try
+        {
+            if (item.Type == "Text" && item.Text is not null)
+            {
+                await _svc.Api.PutTextAsync(s.ServerUrl, s.AuthToken, item.Text, s.DeviceId, s.DeviceName, "Windows", Environment.OSVersion.VersionString);
+                return true;
+            }
+            else if (item.Type == "Image")
+            {
+                var path = item.ImagePath;
+                byte[]? bytes = null;
+                if (!string.IsNullOrEmpty(path) && File.Exists(path))
+                {
+                    bytes = await File.ReadAllBytesAsync(path);
+                }
+                else if (!string.IsNullOrEmpty(item.ImageRef))
+                {
+                    bytes = await _svc.Api.DownloadImageAsync(s.ServerUrl, s.DeviceId, s.AuthToken, item.ImageRef);
+                }
+
+                if (bytes is not null && bytes.Length > 0)
+                {
+                    await _svc.Api.UploadImageAsync(s.ServerUrl, s.AuthToken, bytes, s.DeviceId, s.DeviceName, "Windows", Environment.OSVersion.VersionString);
+                    return true;
+                }
+            }
+            return false;
+        }
+        finally
+        {
+            SetTransfer(false, TransferKind.Upload);
+        }
+    }
+
+    /// <summary>手动推送自定义文本或图片到所有设备。</summary>
+    public async Task<bool> PushManualContentAsync(string? text, byte[]? imageBytes)
+    {
+        var s = _svc.Settings;
+        if (string.IsNullOrWhiteSpace(s.ServerUrl) || !s.IsPaired)
+        {
+            throw new InvalidOperationException("尚未配对或连接服务器");
+        }
+
+        SetTransfer(true, TransferKind.Upload);
+        try
+        {
+            if (imageBytes is not null && imageBytes.Length > 0)
+            {
+                await _svc.Api.UploadImageAsync(s.ServerUrl, s.AuthToken, imageBytes, s.DeviceId, s.DeviceName, "Windows", Environment.OSVersion.VersionString);
+                return true;
+            }
+            else if (!string.IsNullOrWhiteSpace(text))
+            {
+                await _svc.Api.PutTextAsync(s.ServerUrl, s.AuthToken, text.Trim(), s.DeviceId, s.DeviceName, "Windows", Environment.OSVersion.VersionString);
+                return true;
+            }
+            return false;
+        }
+        finally
+        {
+            SetTransfer(false, TransferKind.Upload);
         }
     }
 

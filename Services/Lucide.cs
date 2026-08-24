@@ -1,8 +1,8 @@
-using Microsoft.UI.Xaml;
+﻿using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 
-namespace SyncClipboard.Desktop.Services;
+namespace NexClip.Desktop.Services;
 
 /// <summary>
 /// lucide 图标加载(官方 SVG)。
@@ -12,7 +12,7 @@ namespace SyncClipboard.Desktop.Services;
 public static class Lucide
 {
     private static readonly string BaseDir = Path.Combine(AppContext.BaseDirectory, "Assets", "lucide");
-    private static readonly string CacheDir = Path.Combine(Path.GetTempPath(), "SyncClipboardIcons");
+    private static readonly string CacheDir = Path.Combine(Path.GetTempPath(), "NexClipIcons");
 
     private static ImageSource? _clipboard;
     private static ImageSource? _copy;

@@ -1,9 +1,9 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using Microsoft.UI.Dispatching;
 using Windows.ApplicationModel.DataTransfer;
 
-namespace SyncClipboard.Desktop.Services;
+namespace NexClip.Desktop.Services;
 
 /// <summary>
 /// 剪贴板监听:ContentChanged 事件 + 150ms 去抖 + 2s 轮询兜底。

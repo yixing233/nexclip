@@ -4,6 +4,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>SyncClipboard.Tray</RootNamespace>
+    <RootNamespace>NexClip.Tray</RootNamespace>
+    <AssemblyName>NexClip.Tray</AssemblyName>
   </PropertyGroup>
 </Project>

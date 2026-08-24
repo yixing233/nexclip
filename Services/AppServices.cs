@@ -1,6 +1,6 @@
-using SyncClipboard.Desktop.ViewModels;
+﻿using NexClip.Desktop.ViewModels;
 
-namespace SyncClipboard.Desktop.Services;
+namespace NexClip.Desktop.Services;
 
 /// <summary>组合根:应用级单例。Engine/Tray 在 App.OnLaunched 中创建(需 UI 线程)。</summary>
 public sealed class AppServices
@@ -11,6 +11,7 @@ public sealed class AppServices
     public ServerApi Api { get; }
     public MainViewModel Main { get; }
     public SettingsViewModel SettingsVm { get; }
+    public TransferChatViewModel ChatVm { get; }
     public SyncEngine? Engine { get; set; }
     public TrayIconService? Tray { get; set; }
 
@@ -27,5 +28,6 @@ public sealed class AppServices
         // HistoryVm 先于 SettingsVm 创建:设置项变更处理器(上限/保留期)会立即刷新历史列表
         HistoryVm = new HistoryViewModel(this);
         SettingsVm = new SettingsViewModel(this);
+        ChatVm = new TransferChatViewModel(this);
     }
 }

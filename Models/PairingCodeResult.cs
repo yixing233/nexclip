@@ -1,4 +1,4 @@
-namespace SyncClipboard.Desktop.Models;
+﻿namespace NexClip.Desktop.Models;
 
 /// <summary>配对码生成响应(POST /api/pairing-codes)。</summary>
 public sealed class PairingCodeResult

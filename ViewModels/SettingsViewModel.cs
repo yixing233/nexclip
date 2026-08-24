@@ -3,10 +3,10 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using SyncClipboard.Desktop.Models;
-using SyncClipboard.Desktop.Services;
+using NexClip.Desktop.Models;
+using NexClip.Desktop.Services;
 
-namespace SyncClipboard.Desktop.ViewModels;
+namespace NexClip.Desktop.ViewModels;
 
 /// <summary>设置页 VM:编辑态字段 + 行为开关(变更即保存)+ 测试连接。</summary>
 public partial class SettingsViewModel : ObservableObject
@@ -358,6 +358,14 @@ public partial class SettingsViewModel : ObservableObject
         Hotkey = "Alt+V";
     }
 
+    /// <summary>清空剪贴板呼出热键。</summary>
+    [RelayCommand]
+    public void ClearHotkey()
+    {
+        Hotkey = "";
+        ShowHotkeyMessage("已清除剪贴板呼出热键");
+    }
+
     /// <summary>重置设置热键为默认 Alt+X。</summary>
     [RelayCommand]
     public void ResetHotkeySettings()
@@ -368,6 +376,14 @@ public partial class SettingsViewModel : ObservableObject
             return;
         }
         HotkeySettings = "Alt+X";
+    }
+
+    /// <summary>清空设置热键。</summary>
+    [RelayCommand]
+    public void ClearHotkeySettings()
+    {
+        HotkeySettings = "";
+        ShowHotkeyMessage("已清除设置热键");
     }
 
     /// <summary>重置打开链接热键为默认 Ctrl+Alt+O。</summary>
@@ -382,13 +398,21 @@ public partial class SettingsViewModel : ObservableObject
         HotkeyOpenUrl = "Ctrl+Alt+O";
     }
 
+    /// <summary>清空打开链接热键。</summary>
     [RelayCommand]
-    public void ClearHistory()
+    public void ClearHotkeyOpenUrl()
     {
-        _svc.Engine?.History.Clear();
+        HotkeyOpenUrl = "";
+        ShowHotkeyMessage("已清除打开链接热键");
+    }
+
+    [RelayCommand]
+    public void ClearHistory(bool keepStarred = false)
+    {
+        _svc.Engine?.History.Clear(keepStarred);
         RefreshDataStatus();
         _ = _svc.HistoryVm.RefreshAsync();
-        ShowMessage("本地历史已清空", InfoBarSeverity.Success);
+        ShowMessage(keepStarred ? "已清空未收藏历史" : "本地历史已清空", InfoBarSeverity.Success);
     }
 
     /// <summary>

@@ -1,9 +1,9 @@
-using Microsoft.UI.Windowing;
+﻿using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
-using SyncClipboard.Desktop.Services;
+using NexClip.Desktop.Services;
 using Windows.Graphics;
 
-namespace SyncClipboard.Desktop;
+namespace NexClip.Desktop;
 
 /// <summary>设置窗口:从托盘菜单打开;关闭即销毁。</summary>
 public sealed partial class SettingsWindow : Window

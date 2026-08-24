@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace SyncClipboard.Desktop.Services;
+namespace NexClip.Desktop.Services;
 
 /// <summary>
 /// 全局热键(RegisterHotKey + 消息窗口,无第三方依赖)。
@@ -74,7 +74,7 @@ public sealed class HotKeyService : IDisposable
     {
         if (_hwnd != IntPtr.Zero) return;
         _wndProc = WndProc;
-        _hwnd = CreateWindowExW(0, "STATIC", "SyncClipboardHotKey", 0,
+        _hwnd = CreateWindowExW(0, "STATIC", "NexClipHotKey", 0,
             0, 0, 0, 0, new IntPtr(-3 /* HWND_MESSAGE */), IntPtr.Zero, GetModuleHandleW(null), IntPtr.Zero);
         if (_hwnd != IntPtr.Zero)
         {
