@@ -1,6 +1,6 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 
-namespace SyncClipboardServer;
+namespace NexClipServer;
 
 /// 剪贴板条目(共享模型:当前剪贴板 = CreatedAt 最新一条)
 public class ClipboardEntry
@@ -13,6 +13,7 @@ public class ClipboardEntry
     [MaxLength(64)] public string ContentHash { get; set; } = "";
     [MaxLength(64)] public string DeviceId { get; set; } = "";
     [MaxLength(128)] public string? DeviceName { get; set; }
+    public bool IsManual { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
@@ -39,6 +40,6 @@ public class ActivityLog
 }
 
 // ---------- 请求 DTO ----------
-public record UploadTextRequest(string? Type, string? Text, string? DeviceId, string? DeviceName, string? Platform, string? Version);
-public record SendRequest(string? Text, string[]? DeviceIds, string? DeviceId, string? DeviceName);
+public record UploadTextRequest(string? Type, string? Text, string? DeviceId, string? DeviceName, string? Platform, string? Version, bool IsManual = false);
+public record SendRequest(string? Text, string[]? DeviceIds, string? DeviceId, string? DeviceName, bool IsManual = true);
 public record RenameDeviceRequest(string? Name);

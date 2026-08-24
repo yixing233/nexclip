@@ -1,6 +1,6 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 
-namespace SyncClipboardServer;
+namespace NexClipServer;
 
 public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {

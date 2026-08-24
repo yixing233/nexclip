@@ -1,6 +1,6 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 
-namespace SyncClipboardServer;
+namespace NexClipServer;
 
 [ApiController]
 [Route("api/clipboard")]
@@ -25,15 +25,15 @@ public class ClipboardController(ClipboardService svc) : ControllerBase
         var deviceId = string.IsNullOrEmpty(req.DeviceId) ? "web-" + Guid.NewGuid().ToString("N")[..8] : req.DeviceId;
         var deviceName = string.IsNullOrEmpty(req.DeviceName) ? deviceId : req.DeviceName;
         var ip = IpUtil.Normalize(HttpContext.Connection.RemoteIpAddress?.ToString());
-        var (entry, unchanged) = await svc.UploadTextAsync(text, deviceId, deviceName, req.Platform, req.Version, ip);
+        var (entry, unchanged) = await svc.UploadTextAsync(text, deviceId, deviceName, req.Platform, req.Version, ip, isManual: req.IsManual);
         // 扁平条目 + unchanged 标记:web 端直接取条目字段,桌面端读 unchanged 判断是否新内容
-        return Ok(new { entry!.Id, entry.Type, entry.Text, entry.ImageRef, entry.DeviceId, entry.DeviceName, entry.CreatedAt, unchanged });
+        return Ok(new { entry!.Id, entry.Type, entry.Text, entry.ImageRef, entry.DeviceId, entry.DeviceName, entry.IsManual, entry.CreatedAt, unchanged });
     }
 
-    /// 上传图片剪贴板(multipart/form-data: file + deviceId + deviceName)
+    /// 上传图片剪贴板(multipart/form-data: file + deviceId + deviceName + isManual)
     [HttpPost("image")]
     [RequestSizeLimit(15 * 1024 * 1024)]
-    public async Task<IActionResult> UploadImage(IFormFile file, [FromForm] string? deviceId, [FromForm] string? deviceName)
+    public async Task<IActionResult> UploadImage(IFormFile file, [FromForm] string? deviceId, [FromForm] string? deviceName, [FromForm] bool isManual = false)
     {
         if (file is null || file.Length == 0)
             return BadRequest(new { error = "缺少图片文件" });
@@ -43,7 +43,7 @@ public class ClipboardController(ClipboardService svc) : ControllerBase
         var did = string.IsNullOrEmpty(deviceId) ? "web-" + Guid.NewGuid().ToString("N")[..8] : deviceId;
         var dname = string.IsNullOrEmpty(deviceName) ? did : deviceName;
         await using var stream = file.OpenReadStream();
-        var entry = await svc.UploadImageAsync(stream, file.FileName, did, dname, IpUtil.Normalize(HttpContext.Connection.RemoteIpAddress?.ToString()));
+        var entry = await svc.UploadImageAsync(stream, file.FileName, did, dname, IpUtil.Normalize(HttpContext.Connection.RemoteIpAddress?.ToString()), isManual: isManual);
         return Ok(entry);
     }
 
@@ -92,7 +92,7 @@ public class ClipboardController(ClipboardService svc) : ControllerBase
         var deviceName = string.IsNullOrEmpty(req.DeviceName) ? deviceId : req.DeviceName;
         var targets = req.DeviceIds?.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().ToList() ?? [];
         var (entry, _) = await svc.UploadTextAsync(text, deviceId, deviceName, "Web", null,
-            IpUtil.Normalize(HttpContext.Connection.RemoteIpAddress?.ToString()), broadcast: targets.Count == 0);
+            IpUtil.Normalize(HttpContext.Connection.RemoteIpAddress?.ToString()), broadcast: targets.Count == 0, isManual: true);
         if (entry is not null && targets.Count > 0)
             await svc.BroadcastAsync(entry, targets);
         return Ok(entry);
