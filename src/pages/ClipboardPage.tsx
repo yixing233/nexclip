@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { Card, Table, Tag, Button, Space, Image as AntImage, Typography, Empty, message, Popconfirm, Drawer, Skeleton, Select } from 'antd'
-import { Copy, Trash2, Share2 } from 'lucide-react'
+import { Card, Table, Tag, Button, Space, Image as AntImage, Typography, Empty, message, Popconfirm, Drawer, Skeleton, Select, Modal, Input, Radio, Upload, Checkbox } from 'antd'
+import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
+import { faPaperPlane, faShareNodes, faCopy, faTrashCan, faFileLines, faImage, faPlus } from '@fortawesome/free-solid-svg-icons'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
-import { getHistory, deleteEntry, imageUrl, listUsers, type ClipboardEntry } from '../api'
+import { getHistory, deleteEntry, imageUrl, listUsers, pushText, pushImage, sendToDevices, getDevices, deviceId, getDefaultDeviceName, type ClipboardEntry, type DeviceInfo } from '../api'
 
 dayjs.extend(relativeTime)
 const { Text } = Typography
+const { TextArea } = Input
 
 const PAGE_SIZE = 20
 
@@ -28,6 +30,15 @@ export default function ClipboardPage({ refreshTick, userFilter, onUserFilterCha
   const offsetRef = useRef(0)
   const hasMoreRef = useRef(true)
 
+  // 手动推送弹窗状态
+  const [pushModalOpen, setPushModalOpen] = useState(false)
+  const [pushType, setPushType] = useState<'text' | 'image'>('text')
+  const [pushContent, setPushContent] = useState('')
+  const [pushImageFile, setPushImageFile] = useState<File | null>(null)
+  const [pushSending, setPushSending] = useState(false)
+  const [onlineDevices, setOnlineDevices] = useState<DeviceInfo[]>([])
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([])
+
   // 搜索关键字防抖(顶栏连续输入时避免每键一次请求)
   const [debouncedSearch, setDebouncedSearch] = useState(search)
   useEffect(() => {
@@ -37,6 +48,16 @@ export default function ClipboardPage({ refreshTick, userFilter, onUserFilterCha
 
   // 用户筛选下拉(管理端)
   useEffect(() => { listUsers().then(setUsers).catch(() => message.error('用户列表加载失败')) }, [])
+
+  // 打开推送弹窗时获取在线设备
+  useEffect(() => {
+    if (pushModalOpen) {
+      getDevices().then(devs => {
+        setOnlineDevices(devs)
+        setSelectedDeviceIds(devs.filter(d => d.online).map(d => d.id))
+      }).catch(() => {})
+    }
+  }, [pushModalOpen])
 
   const fetchPage = async (offset: number, first: boolean) => {
     if (first) setFirstLoading(true); else setLoadingMore(true)
@@ -75,9 +96,65 @@ export default function ClipboardPage({ refreshTick, userFilter, onUserFilterCha
     try {
       await deleteEntry(id)
       message.success('已删除')
-      fetchPage(0, false) // 刷新当前列表(不闪骨架)
+      fetchPage(0, false)
     } catch (e) {
       message.error('删除失败:' + (e as Error).message)
+    }
+  }
+
+  const doPushItem = async (entry: ClipboardEntry) => {
+    try {
+      if (entry.type === 'Text' && entry.text) {
+        await pushText(entry.text, deviceId(), getDefaultDeviceName())
+        message.success('已成功推送到所有设备')
+      } else if (entry.type === 'Image' && entry.imageRef) {
+        const resp = await fetch(imageUrl(entry.imageRef))
+        const blob = await resp.blob()
+        await pushImage(blob, deviceId(), getDefaultDeviceName())
+        message.success('已成功推送到所有设备')
+      }
+    } catch (e) {
+      message.error('推送失败: ' + (e as Error).message)
+    }
+  }
+
+  const handleManualPush = async () => {
+    if (pushType === 'text') {
+      if (!pushContent.trim()) {
+        message.warning('请输入要推送的文本内容')
+        return
+      }
+      setPushSending(true)
+      try {
+        if (selectedDeviceIds.length > 0 && selectedDeviceIds.length < onlineDevices.length) {
+          await sendToDevices(pushContent.trim(), selectedDeviceIds)
+        } else {
+          await pushText(pushContent.trim(), deviceId(), getDefaultDeviceName())
+        }
+        message.success('已成功推送到设备')
+        setPushModalOpen(false)
+        setPushContent('')
+      } catch (e) {
+        message.error('推送失败: ' + (e as Error).message)
+      } finally {
+        setPushSending(false)
+      }
+    } else {
+      if (!pushImageFile) {
+        message.warning('请选择要推送的图片')
+        return
+      }
+      setPushSending(true)
+      try {
+        await pushImage(pushImageFile, deviceId(), getDefaultDeviceName())
+        message.success('已成功推送到设备')
+        setPushModalOpen(false)
+        setPushImageFile(null)
+      } catch (e) {
+        message.error('推送失败: ' + (e as Error).message)
+      } finally {
+        setPushSending(false)
+      }
     }
   }
 
@@ -104,19 +181,34 @@ export default function ClipboardPage({ refreshTick, userFilter, onUserFilterCha
       render: (v: string) => <Text type="secondary">{dayjs(v).format('YYYY-MM-DD HH:mm:ss')}</Text>,
     },
     {
-      title: '操作', key: 'action', width: 150,
+      title: '操作', key: 'action', width: 160,
       render: (_, r) => (
         <Space size={4}>
-          <Button type="link" size="small" icon={<Share2 size={16} />} onClick={() => message.info('已推送')} />
           <Button
-            type="link" size="small" icon={<Copy size={16} />}
+            type="link"
+            size="small"
+            icon={<FontAwesomeIcon icon={faShareNodes} />}
+            title="推送到所有设备"
+            onClick={() => doPushItem(r)}
+          />
+          <Button
+            type="link"
+            size="small"
+            icon={<FontAwesomeIcon icon={faCopy} />}
+            title="复制"
             onClick={() => { if (r.text) navigator.clipboard.writeText(r.text); message.success('已复制') }}
           />
           <Popconfirm
             title="确定删除这条记录?"
             onConfirm={() => doDelete(r.id)}
           >
-            <Button type="link" size="small" danger icon={<Trash2 size={16} />} />
+            <Button
+              type="link"
+              size="small"
+              danger
+              icon={<FontAwesomeIcon icon={faTrashCan} />}
+              title="删除"
+            />
           </Popconfirm>
           <Button type="link" size="small" onClick={() => setDetail(r)}>详情</Button>
         </Space>
@@ -130,14 +222,23 @@ export default function ClipboardPage({ refreshTick, userFilter, onUserFilterCha
       className="clipsync-page-card"
       title={'剪贴板历史' + (total > 0 ? ' (' + data.length + ' / ' + total + ')' : '')}
       extra={
-        <Select
-          allowClear
-          placeholder="全部用户"
-          style={{ width: 180 }}
-          value={userFilter ?? undefined}
-          onChange={(v) => onUserFilterChange(v ?? null)}
-          options={users.map(u => ({ value: u.id, label: u.name }))}
-        />
+        <Space>
+          <Button
+            type="primary"
+            icon={<FontAwesomeIcon icon={faPaperPlane} />}
+            onClick={() => setPushModalOpen(true)}
+          >
+            手动推送
+          </Button>
+          <Select
+            allowClear
+            placeholder="全部用户"
+            style={{ width: 160 }}
+            value={userFilter ?? undefined}
+            onChange={(v) => onUserFilterChange(v ?? null)}
+            options={users.map(u => ({ value: u.id, label: u.name }))}
+          />
+        </Space>
       }
       style={{ borderRadius: 14, height: 'calc(100vh - 112px)', display: 'flex', flexDirection: 'column' }}
       styles={{ body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }}
@@ -165,6 +266,8 @@ export default function ClipboardPage({ refreshTick, userFilter, onUserFilterCha
           <div style={{ textAlign: 'center', color: '#9CA3AF', fontSize: 12, padding: '8px 0' }}>已加载全部 {data.length} 条</div>
         ) : null}
       </div>
+
+      {/* 详情抽屉 */}
       <Drawer
         id="clipsync-clipboard-detail-drawer"
         className="clipsync-drawer"
@@ -175,17 +278,119 @@ export default function ClipboardPage({ refreshTick, userFilter, onUserFilterCha
       >
         {detail ? (
           <div>
-            <p><Tag color="blue">{detail.type === 'Text' ? '文本' : '图片'}</Tag>
+            <p>
+              <Tag color="blue">{detail.type === 'Text' ? '文本' : '图片'}</Tag>
               <Tag color="blue" style={{ borderRadius: 999 }}>{detail.deviceName}</Tag>
-              <Text type="secondary">{dayjs(detail.createdAt).format('YYYY-MM-DD HH:mm:ss')}</Text></p>
+              <Text type="secondary">{dayjs(detail.createdAt).format('YYYY-MM-DD HH:mm:ss')}</Text>
+            </p>
             {detail.type === 'Image' ? (
               <AntImage src={imageUrl(detail.imageRef)} style={{ width: '100%', borderRadius: 10 }} />
             ) : (
               <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'rgba(0, 0, 0, 0.045)', padding: 12, borderRadius: 10 }}>{detail.text}</pre>
             )}
+            <div style={{ marginTop: 16 }}>
+              <Button
+                type="primary"
+                icon={<FontAwesomeIcon icon={faShareNodes} />}
+                onClick={() => doPushItem(detail)}
+              >
+                推送到所有设备
+              </Button>
+            </div>
           </div>
         ) : null}
       </Drawer>
+
+      {/* 手动推送模态框 */}
+      <Modal
+        title={
+          <Space>
+            <FontAwesomeIcon icon={faPaperPlane} style={{ color: '#2563EB' }} />
+            <span>手动推送至设备</span>
+          </Space>
+        }
+        open={pushModalOpen}
+        onCancel={() => setPushModalOpen(false)}
+        onOk={handleManualPush}
+        confirmLoading={pushSending}
+        okText="立即推送"
+        cancelText="取消"
+        width={520}
+      >
+        <div style={{ padding: '12px 0' }}>
+          <Radio.Group
+            value={pushType}
+            onChange={e => setPushType(e.target.value)}
+            style={{ marginBottom: 16 }}
+          >
+            <Radio.Button value="text">
+              <Space>
+                <FontAwesomeIcon icon={faFileLines} />
+                <span>文本消息</span>
+              </Space>
+            </Radio.Button>
+            <Radio.Button value="image">
+              <Space>
+                <FontAwesomeIcon icon={faImage} />
+                <span>图片推送</span>
+              </Space>
+            </Radio.Button>
+          </Radio.Group>
+
+          {pushType === 'text' ? (
+            <div>
+              <TextArea
+                rows={5}
+                placeholder="输入要发送的文本内容或从剪贴板粘贴…"
+                value={pushContent}
+                onChange={e => setPushContent(e.target.value)}
+                maxLength={50000}
+                showCount
+              />
+            </div>
+          ) : (
+            <div>
+              <Upload.Dragger
+                maxCount={1}
+                beforeUpload={(file) => {
+                  setPushImageFile(file)
+                  return false
+                }}
+                onRemove={() => setPushImageFile(null)}
+                accept="image/*"
+              >
+                <p className="ant-upload-drag-icon">
+                  <FontAwesomeIcon icon={faPlus} size="2x" style={{ color: '#2563EB' }} />
+                </p>
+                <p className="ant-upload-text">点击或将图片拖拽到此处选择</p>
+                <p className="ant-upload-hint">支持 PNG、JPG、GIF、WEBP 格式图片</p>
+              </Upload.Dragger>
+            </div>
+          )}
+
+          {onlineDevices.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 6 }}>
+                目标设备（默认全选在线设备）：
+              </Text>
+              <Checkbox.Group
+                value={selectedDeviceIds}
+                onChange={vals => setSelectedDeviceIds(vals as string[])}
+              >
+                <Space wrap>
+                  {onlineDevices.map(d => (
+                    <Checkbox key={d.id} value={d.id}>
+                      <Tag color={d.online ? 'green' : 'default'} style={{ borderRadius: 999 }}>
+                        {d.name} {d.online ? '(在线)' : '(离线)'}
+                      </Tag>
+                    </Checkbox>
+                  ))}
+                </Space>
+              </Checkbox.Group>
+            </div>
+          )}
+        </div>
+      </Modal>
     </Card>
   )
 }
