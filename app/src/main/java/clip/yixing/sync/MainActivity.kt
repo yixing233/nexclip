@@ -81,7 +81,7 @@ import clip.yixing.sync.ui.FloatingBottomBar
 import clip.yixing.sync.ui.FloatingBottomBarItem
 import clip.yixing.sync.ui.SettingsPage
 import clip.yixing.sync.ui.scan.QrScanPage
-import clip.yixing.sync.ui.theme.SyncClipboardTheme
+import clip.yixing.sync.ui.theme.NexClipTheme
 import clip.yixing.sync.util.SyncSettings
 import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
@@ -115,7 +115,7 @@ import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
 import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.menu.OverlayIconDropdownMenu
+import top.yukonga.miuix.kmp.menu.WindowIconDropdownMenu
 import top.yukonga.miuix.kmp.icon.basic.ArrowUpDown
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Home
@@ -126,6 +126,9 @@ import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollHorizontal
 import top.yukonga.miuix.kmp.utils.overScrollVertical
+import android.os.Build
+import androidx.compose.runtime.DisposableEffect
+import androidx.navigationevent.OnBackInvokedOverlayInput
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -142,15 +145,26 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             // 气泡菜单/弹窗等组件依赖 NavigationEventDispatcher 处理返回手势,
-            // 需在根节点提供 DispatcherOwner,否则点击下拉菜单会闪退。
+            // 需在根节点提供 DispatcherOwner, 并挂载 OnBackInvokedOverlayInput 接收系统返回事件。
             val dispatcherOwner = rememberNavigationEventDispatcherOwner(
                 enabled = true,
                 parent = null,
             )
+            DisposableEffect(dispatcherOwner) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    val input = OnBackInvokedOverlayInput(onBackInvokedDispatcher)
+                    dispatcherOwner.navigationEventDispatcher.addInput(input)
+                    onDispose {
+                        dispatcherOwner.navigationEventDispatcher.removeInput(input)
+                    }
+                } else {
+                    onDispose { }
+                }
+            }
             CompositionLocalProvider(
                 LocalNavigationEventDispatcherOwner provides dispatcherOwner
             ) {
-                SyncClipboardTheme {
+                NexClipTheme {
                     MainScreen()
                 }
             }
@@ -167,6 +181,8 @@ val cardContentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp)
 private class PagerNavigator(private val scope: CoroutineScope) {
 
     private var navJob: Job? = null
+    var isProgrammaticScroll by mutableStateOf(false)
+        private set
 
     fun animateTo(pagerState: PagerState, targetIndex: Int) {
         if (targetIndex == pagerState.currentPage) return
@@ -175,16 +191,17 @@ private class PagerNavigator(private val scope: CoroutineScope) {
 
         val distance = abs(targetIndex - pagerState.currentPage).coerceAtLeast(2)
         val duration = 100 * distance + 100
-        val layoutInfo = pagerState.layoutInfo
-        val pageSize = layoutInfo.pageSize + layoutInfo.pageSpacing
-        val currentDistanceInPages = targetIndex - pagerState.currentPage - pagerState.currentPageOffsetFraction
-        val scrollPixels = currentDistanceInPages * pageSize
 
+        isProgrammaticScroll = true
         navJob = scope.launch {
-            pagerState.animateScrollToPage(
-                page = targetIndex,
-                animationSpec = tween(easing = EaseInOut, durationMillis = duration)
-            )
+            try {
+                pagerState.animateScrollToPage(
+                    page = targetIndex,
+                    animationSpec = tween(easing = EaseInOut, durationMillis = duration)
+                )
+            } finally {
+                isProgrammaticScroll = false
+            }
         }
     }
 }
@@ -194,24 +211,25 @@ private fun MainScreen() {
     val pagerState = rememberPagerState(pageCount = { 3 })
     val scope = rememberCoroutineScope()
     val pagerNavigator = remember { PagerNavigator(scope) }
-    var isTimeForward by remember { mutableStateOf(true) } // true = 时间正序(最新在前, 默认), false = 时间倒序(最早在前)
-    var isRecordsMultiSelect by remember { mutableStateOf(false) }
-    var recordsSelectedCount by remember { mutableIntStateOf(0) }
-    var recordsTotalFilteredCount by remember { mutableIntStateOf(0) }
-    var onToggleSelectAllRecords by remember { mutableStateOf<(() -> Unit)?>(null) }
-    var onExitRecordsMultiSelect by remember { mutableStateOf<(() -> Unit)?>(null) }
     var searchOpen by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     val snackbarHostState = remember { SnackbarHostState() }
-    // 底栏选中索引:点击立即驱动(指示器马上跟随),页面手势滑动停稳后同步
+    // 底栏选中索引:点击立即驱动(指示器马上跟随目标页),用户手势滑动时实时同步当前页(屏蔽跨页跳转动画过程中的中间瞬态)
     var tabIndex by remember { mutableIntStateOf(pagerState.currentPage) }
-    LaunchedEffect(pagerState) {
-        snapshotFlow { pagerState.settledPage }.collectLatest { tabIndex = it }
+    LaunchedEffect(pagerState, pagerNavigator) {
+        snapshotFlow {
+            if (pagerNavigator.isProgrammaticScroll) null else pagerState.currentPage
+        }.collectLatest { page ->
+            if (page != null) {
+                tabIndex = page
+            }
+        }
     }
-    // 悬浮底栏开关(设置页可切,默认开启)
     val appContext = LocalContext.current
     var floatingBar by remember { mutableStateOf(SyncSettings.floatingBottomBarEnabled(appContext)) }
-    var isOverlayActive by remember { mutableStateOf(false) }
+    var isOverlayActiveHome by remember { mutableStateOf(false) }
+    var isOverlayActiveRecords by remember { mutableStateOf(false) }
+    var isOverlayActiveSettings by remember { mutableStateOf(false) }
     var isScanOpen by remember { mutableStateOf(false) }
     var displayedScanOpen by remember { mutableStateOf(false) }
     val scanAnimProgress = remember { Animatable(1f) }
@@ -220,8 +238,8 @@ private fun MainScreen() {
     var displayedManualPushOpen by remember { mutableStateOf(false) }
     val manualPushAnimProgress = remember { Animatable(1f) }
 
-    var enterMultiSelectTrigger by remember { mutableIntStateOf(0) }
-    var clearDialogTrigger by remember { mutableIntStateOf(0) }
+    val isGlobalOverlayActive = isScanOpen || isManualPushOpen || searchOpen
+    val isAnyOverlayActive = isOverlayActiveHome || isOverlayActiveRecords || isOverlayActiveSettings || isGlobalOverlayActive
 
     fun openScanner() {
         displayedScanOpen = true
@@ -323,7 +341,8 @@ private fun MainScreen() {
                 modifier = Modifier
                     .fillMaxSize()
                     .overScrollHorizontal(),
-                beyondViewportPageCount = 3
+                beyondViewportPageCount = 3,
+                userScrollEnabled = !isAnyOverlayActive
             ) { page ->
                 when (page) {
                     0 -> PageShell(
@@ -333,7 +352,7 @@ private fun MainScreen() {
                             IconButton(onClick = { openManualPush() }) {
                                 Icon(
                                     imageVector = LucideIcons.Send,
-                                    contentDescription = "跨设备互传",
+                                    contentDescription = "即时互传",
                                     tint = MiuixTheme.colorScheme.onSurface
                                 )
                             }
@@ -361,98 +380,19 @@ private fun MainScreen() {
                             },
                             onOpenQrScanner = { openScanner() },
                             onOpenManualPush = { openManualPush() },
-                            onOverlayActiveChanged = { isOverlayActive = it }
+                            onOverlayActiveChanged = { isOverlayActiveHome = it }
                         )
                     }
-                    1 -> PageShell(
-                        title = if (isRecordsMultiSelect) "已选择 ${recordsSelectedCount} 项" else "捕获记录",
+                    1 -> RecordsPage(
                         bottomInnerPadding = bottomInnerPadding,
-                        navigationIcon = if (isRecordsMultiSelect) {
-                            {
-                                Text(
-                                    text = "取消",
-                                    color = MiuixTheme.colorScheme.primary,
-                                    fontSize = 16.sp,
-                                    modifier = Modifier
-                                        .clickable { onExitRecordsMultiSelect?.invoke() }
-                                        .padding(horizontal = 14.dp, vertical = 8.dp)
-                                )
-                            }
-                        } else { {} },
-                        actions = {
-                            if (isRecordsMultiSelect) {
-                                val isAllSelected = recordsSelectedCount > 0 && recordsSelectedCount == recordsTotalFilteredCount
-                                Text(
-                                    text = if (isAllSelected) "取消全选" else "全选",
-                                    color = MiuixTheme.colorScheme.primary,
-                                    fontSize = 16.sp,
-                                    modifier = Modifier
-                                        .clickable { onToggleSelectAllRecords?.invoke() }
-                                        .padding(horizontal = 14.dp, vertical = 8.dp)
-                                )
-                            } else {
-                                // 整合菜单: 排序(正序/倒序) + 多选管理 + 清空全部记录
-                                OverlayIconDropdownMenu(
-                                    entry = DropdownEntry(
-                                        items = listOf(
-                                            DropdownItem(
-                                                text = "时间正序",
-                                                selected = isTimeForward,
-                                                onClick = { isTimeForward = true },
-                                            ),
-                                            DropdownItem(
-                                                text = "时间倒序",
-                                                selected = !isTimeForward,
-                                                onClick = { isTimeForward = false },
-                                            ),
-                                            DropdownItem(
-                                                text = "多选管理",
-                                                onClick = { enterMultiSelectTrigger++ },
-                                            ),
-                                            DropdownItem(
-                                                text = "清空全部记录",
-                                                onClick = { clearDialogTrigger++ },
-                                            ),
-                                        ),
-                                    ),
-                                    onExpandedChange = { isOverlayActive = it }
-                                ) {
-                                    Icon(
-                                        imageVector = MiuixIcons.Normal.More,
-                                        contentDescription = "更多操作",
-                                    )
-                                }
-                                // 搜索:打开全屏搜索页
-                                IconButton(
-                                    onClick = {
-                                        searchQuery = ""
-                                        searchOpen = true
-                                    },
-                                ) {
-                                    Icon(
-                                        imageVector = MiuixIcons.Normal.Search,
-                                        contentDescription = "搜索"
-                                    )
-                                }
-                            }
-                        }
-                    ) { scrollBehavior, topPadding ->
-                        RecordsPage(
-                            scrollBehavior, topPadding, bottomInnerPadding,
-                            sortForward = isTimeForward,
-                            snackbarHostState = snackbarHostState,
-                            enterMultiSelectTrigger = enterMultiSelectTrigger,
-                            clearDialogTrigger = clearDialogTrigger,
-                            onMultiSelectStateChanged = { inMultiSelect, selectedCount, totalCount, toggleSelectAll, exitMultiSelect ->
-                                isRecordsMultiSelect = inMultiSelect
-                                recordsSelectedCount = selectedCount
-                                recordsTotalFilteredCount = totalCount
-                                onToggleSelectAllRecords = toggleSelectAll
-                                onExitRecordsMultiSelect = exitMultiSelect
-                            },
-                            onOverlayActiveChanged = { isOverlayActive = it }
-                        )
-                    }
+                        snackbarHostState = snackbarHostState,
+                        onOpenSearch = {
+                            searchQuery = ""
+                            searchOpen = true
+                        },
+                        onOverlayActiveChanged = { isOverlayActiveRecords = it },
+                        isGlobalOverlayActive = isGlobalOverlayActive
+                    )
                     else -> SettingsPage(
                         bottomInnerPadding = bottomInnerPadding,
                         snackbarHostState = snackbarHostState,
@@ -461,23 +401,24 @@ private fun MainScreen() {
                             floatingBar = it
                             SyncSettings.setFloatingBottomBarEnabled(appContext, it)
                         },
-                        onOverlayActiveChanged = { isOverlayActive = it },
-                        onOpenQrScanner = { openScanner() }
+                        onOverlayActiveChanged = { isOverlayActiveSettings = it },
+                        onOpenQrScanner = { openScanner() },
+                        isGlobalOverlayActive = isGlobalOverlayActive
                     )
                 }
             }
         }
     }
 
-    // Snackbar:按消息类型着色 —— 成功=主题蓝,失败=红,普通=黑(浅色模式足够深)
+    // Snackbar: 修复配色与操作按钮文字可见性 (操作按钮蓝底白字, 错误提示红字, 成功/普通白底黑字)
     SnackbarHost(
         state = snackbarHostState,
         modifier = Modifier
             .align(Alignment.BottomCenter)
-            // 避开底栏:悬浮条(132dp)或普通贴底条(80dp + 手势区)
+            // 避开底栏:悬浮条(108dp)或普通贴底条(80dp + 手势区)
             .padding(
                 bottom = if (floatingBar) {
-                    132.dp
+                    108.dp
                 } else {
                     80.dp + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
                 },
@@ -487,18 +428,18 @@ private fun MainScreen() {
     ) { data ->
         val scheme = MiuixTheme.colorScheme
         val type = SnackTypeStore.current
-        val textColor = when (type) {
-            SnackType.Success -> scheme.primary
+        val contentColor = when (type) {
             SnackType.Error -> scheme.error
-            SnackType.Info -> scheme.onBackground
+            else -> scheme.onSurface
         }
         Snackbar(
             data = data,
             colors = SnackbarDefaults.snackbarColors(
                 containerColor = scheme.surfaceContainerHigh,
-                contentColor = textColor,
-                actionContentColor = textColor,
-                dismissActionContentColor = textColor,
+                contentColor = contentColor,
+                actionContainerColor = scheme.primary,
+                actionContentColor = Color.White,
+                dismissActionContentColor = scheme.onBackgroundVariant.copy(alpha = 0.8f),
             )
         )
     }
@@ -506,7 +447,7 @@ private fun MainScreen() {
     // 底栏:悬浮(液态玻璃)或普通贴底,由设置开关控制,默认开启
     // 当全屏搜索或任一弹层/对话框/多选操作/扫码激活时平滑隐藏,防止遮挡弹层内容与操作按钮
     AnimatedVisibility(
-        visible = !searchOpen && !isOverlayActive && !isScanOpen,
+        visible = !searchOpen && !isAnyOverlayActive && !isScanOpen && !isManualPushOpen,
         enter = fadeIn(tween(180)) + slideInVertically(initialOffsetY = { it }, animationSpec = tween(180)),
         exit = fadeOut(tween(180)) + slideOutVertically(targetOffsetY = { it }, animationSpec = tween(180)),
         modifier = Modifier.align(Alignment.BottomCenter)
@@ -541,9 +482,9 @@ private fun MainScreen() {
                 }) {
                     Icon(
                         imageVector = BottomBarIcons.forTab(1, tabIndex == 1),
-                        contentDescription = "记录"
+                        contentDescription = "剪贴板"
                     )
-                    BarLabel("记录")
+                    BarLabel("剪贴板")
                 }
                 FloatingBottomBarItem(onClick = {
                     tabIndex = 2
@@ -577,7 +518,7 @@ private fun MainScreen() {
                             selected = tabIndex == 1,
                             onClick = { tabIndex = 1; pagerNavigator.animateTo(pagerState, 1) },
                             icon = BottomBarIcons.forTab(1, tabIndex == 1),
-                            label = "记录"
+                            label = "剪贴板"
                         )
                         NavigationBarItem(
                             selected = tabIndex == 2,
@@ -602,7 +543,7 @@ private fun MainScreen() {
         )
     ) {
         SearchPage(
-            sortForward = isTimeForward,
+            sortForward = true,
             query = searchQuery,
             onQueryChange = { searchQuery = it },
             onClose = { searchOpen = false },
@@ -610,20 +551,20 @@ private fun MainScreen() {
         )
     }
 
-    // 全屏扫码配对页(全屏覆盖,独立预测返回跟手手势)
+    // 全屏扫码配对页(全屏覆盖,水平平滑滑入退出与独立预测返回)
     if (displayedScanOpen) {
         val p = scanAnimProgress.value
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    translationY = p * size.height * 0.35f
-                    val s = 1f - p * 0.08f
+                    translationX = p * size.width
+                    val s = 1f - p * 0.05f
                     scaleX = s
                     scaleY = s
-                    alpha = 1f - p * 0.4f
+                    alpha = 1f - p * 0.3f
                     clip = true
-                    shape = RoundedCornerShape((p * 28).dp)
+                    shape = RoundedCornerShape((p * 24).dp)
                     shadowElevation = (1f - p) * 24f
                 }
         ) {

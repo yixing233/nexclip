@@ -290,9 +290,23 @@ fun FullscreenImagePreviewDialog(
                         .clip(RoundedCornerShape(28.dp))
                         .background(Color(0xFF222224).copy(alpha = 0.9f))
                         .padding(horizontal = 18.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(22.dp),
+                    horizontalArrangement = Arrangement.spacedBy(18.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // 使用其他应用打开
+                    ActionIconItem(
+                        icon = LucideIcons.ExternalLink,
+                        label = "外部打开",
+                        onClick = {
+                            scope.launch {
+                                val ok = ImageLoader.openImageWithOtherApp(context, imageRef, rawText)
+                                if (!ok) {
+                                    Toast.makeText(context, "无法使用其他应用打开", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    )
+
                     // 保存到相册
                     ActionIconItem(
                         icon = MiuixIcons.Normal.Download,

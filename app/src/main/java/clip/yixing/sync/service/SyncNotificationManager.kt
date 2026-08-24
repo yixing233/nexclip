@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
 import androidx.core.app.NotificationCompat
@@ -17,9 +18,7 @@ import clip.yixing.sync.MainActivity
 import clip.yixing.sync.R
 import clip.yixing.sync.util.NotificationStyle
 import clip.yixing.sync.util.SyncSettings
-import io.github.d4viddf.hyperisland_kit.HyperIslandNotification
-import org.json.JSONArray
-import org.json.JSONObject
+import com.xzakota.hyper.notification.focus.FocusNotification
 
 /**
  * 集中管理应用通知构建与分发:
@@ -205,38 +204,122 @@ object SyncNotificationManager {
             addQuickActions(context, builder, latestClip.text)
         }
 
-        // 1. 使用 hyperisland_kit 构建基础 Extras
+        // 1. 使用 FocusNotification.buildV3 构建原生 HyperOS 超级岛 / 焦点通知
         try {
-            val island = HyperIslandNotification.Companion.Builder(context, CHANNEL_ISLAND, "NexClip")
-            island.setSmallIsland(preview.take(14))
-            island.setHintInfo(title, preview.take(50))
-            island.setIslandFirstFloat(false)
-            island.setShowSmallIcon(true)
+            val lightLogoIcon = Icon.createWithResource(context, R.drawable.ic_notification_nc).setTint(Color.BLACK)
+            val darkLogoIcon = Icon.createWithResource(context, R.drawable.ic_notification_nc).setTint(Color.WHITE)
 
-            val customExtras = island.buildCustomExtras()
-            if (customExtras != null) {
-                builder.addExtras(customExtras)
+            val islandExtras = FocusNotification.buildV3 {
+                val lightLogoKey = createPicture("key_logo_light", lightLogoIcon)
+                val darkLogoKey = createPicture("key_logo_dark", darkLogoIcon)
+
+                val enableGlow = SyncSettings.isHyperOsOuterGlow(context)
+                val glowColor = SyncSettings.hyperOsGlowColor(context)
+
+                islandFirstFloat = false
+                enableFloat = false
+                updatable = true
+                ticker = title
+                tickerPic = lightLogoKey
+                if (enableGlow) {
+                    outEffectSrc = "outer_glow"
+                    outEffectColor = glowColor
+                }
+
+                // 小米超级岛 (打孔胶囊与大岛展开态)
+                island {
+                    islandProperty = 1
+
+                    bigIslandArea {
+                        imageTextInfoLeft {
+                            type = 1
+                            picInfo {
+                                type = 1
+                                pic = darkLogoKey
+                            }
+                        }
+                        imageTextInfoRight {
+                            type = 3
+                            textInfo {
+                                this.title = if (latestClip != null) "${latestClip.text.length}字" else "0字"
+                            }
+                        }
+                    }
+
+                    smallIslandArea {
+                        picInfo {
+                            type = 1
+                            pic = darkLogoKey
+                        }
+                    }
+                }
+
+                // 焦点通知大卡片
+                baseInfo {
+                    type = 2
+                    this.title = title
+                    content = preview.take(50).ifEmpty { " " }
+                }
+
+                picInfo {
+                    type = 1
+                    pic = lightLogoKey
+                    picDark = darkLogoKey
+                }
+
+                // 快捷操作按钮
+                if (latestClip != null) {
+                    val copyIntent = Intent(context, NotificationActionReceiver::class.java).apply {
+                        action = NotificationActionReceiver.ACTION_COPY_LATEST
+                        putExtra(NotificationActionReceiver.EXTRA_CLIP_TEXT, latestClip.text)
+                    }
+                    val copyPi = PendingIntent.getBroadcast(
+                        context,
+                        101,
+                        copyIntent,
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                    )
+                    val favIntent = Intent(context, NotificationActionReceiver::class.java).apply {
+                        action = NotificationActionReceiver.ACTION_FAVORITE_LATEST
+                    }
+                    val favPi = PendingIntent.getBroadcast(
+                        context,
+                        102,
+                        favIntent,
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                    )
+
+                    textButton {
+                        addActionInfo {
+                            val nativeAction = Notification.Action.Builder(
+                                Icon.createWithResource(context, R.drawable.ic_notification_nc),
+                                "复制",
+                                copyPi
+                            ).build()
+                            action = createAction("miui_action_copy", nativeAction)
+                            actionTitle = "复制"
+                            actionBgColor = "#006EFF"
+                            actionBgColorDark = "#006EFF"
+                            actionTitleColor = "#FFFFFF"
+                            actionTitleColorDark = "#FFFFFF"
+                        }
+                        addActionInfo {
+                            val nativeAction = Notification.Action.Builder(
+                                Icon.createWithResource(context, R.drawable.ic_notification_nc),
+                                "收藏",
+                                favPi
+                            ).build()
+                            action = createAction("miui_action_fav", nativeAction)
+                            actionTitle = "收藏"
+                        }
+                    }
+                }
             }
-            val resBundle = island.buildResourceBundle()
-            if (resBundle != null) {
-                builder.addExtras(resBundle)
-            }
-        } catch (_: Exception) {
+
+            builder.addExtras(islandExtras)
+        } catch (e: Throwable) {
+            android.util.Log.e("SyncNotification", "buildHyperOsIslandForegroundNotification error", e)
         }
-
-        // 2. 兜底写入标准 HyperOS 焦点通知 JSON 协议
-        val islandJson = buildHyperOsIslandJson(
-            title = "NexClip",
-            summaryTitle = "剪贴板",
-            summaryContent = preview,
-            focusSubTitle = if (isServerConnected) "云端已连接 · 实时同步" else "本地监听中",
-            focusContent = latestClip?.text?.take(260) ?: "等待剪贴板变化...",
-            statusText = status
-        )
-        builder.extras.putString("miui.focus.param", islandJson)
-        builder.extras.putBoolean("miui.enableFloat", false)
-        builder.extras.putBoolean("miui.showAction", true)
-        builder.extras.putInt("miui.focus.type", 1)
 
         return builder.build()
     }
@@ -329,7 +412,7 @@ object SyncNotificationManager {
                     .setSubText(deviceLabel)
                     .setStyle(NotificationCompat.BigTextStyle().bigText(clip.text))
                     .setContentIntent(openAppPi)
-                    .setOngoing(true)
+                    .setOngoing(false)
                     .setShowWhen(true)
                     .setWhen(clip.time)
                     .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -339,38 +422,120 @@ object SyncNotificationManager {
 
                 addQuickActions(context, builder, clip.text)
 
-                // 1. 使用 hyperisland_kit 构建
+                // 1. 使用 FocusNotification.buildV3 构建原生 HyperOS 灵动胶囊 / 超级岛
                 try {
-                    val island = HyperIslandNotification.Companion.Builder(context, CHANNEL_ISLAND, "NexClip")
-                    island.setSmallIsland(preview.take(14))
-                    island.setHintInfo(title, preview.take(50))
-                    island.setIslandFirstFloat(true) // 触发顶部小岛胶囊浮出动画
-                    island.setShowSmallIcon(true)
+                    val lightLogoIcon = Icon.createWithResource(context, R.drawable.ic_notification_nc).setTint(Color.BLACK)
+                    val darkLogoIcon = Icon.createWithResource(context, R.drawable.ic_notification_nc).setTint(Color.WHITE)
 
-                    val customExtras = island.buildCustomExtras()
-                    if (customExtras != null) {
-                        builder.addExtras(customExtras)
+                    val islandExtras = FocusNotification.buildV3 {
+                        val lightLogoKey = createPicture("key_logo_light", lightLogoIcon)
+                        val darkLogoKey = createPicture("key_logo_dark", darkLogoIcon)
+
+                        val enableGlow = SyncSettings.isHyperOsOuterGlow(context)
+                        val glowColor = SyncSettings.hyperOsGlowColor(context)
+
+                        islandFirstFloat = true   // 触发顶部灵动胶囊浮出与流光动画
+                        enableFloat = true
+                        updatable = true
+                        ticker = title
+                        tickerPic = lightLogoKey
+                        if (enableGlow) {
+                            outEffectSrc = "outer_glow"
+                            outEffectColor = glowColor
+                        }
+
+                        // 小米超级岛 (打孔胶囊与大岛展开态)
+                        island {
+                            islandProperty = 1
+
+                            bigIslandArea {
+                                imageTextInfoLeft {
+                                    type = 1
+                                    picInfo {
+                                        type = 1
+                                        pic = darkLogoKey
+                                    }
+                                }
+                                imageTextInfoRight {
+                                    type = 3
+                                    textInfo {
+                                        this.title = "${clip.text.length}字"
+                                    }
+                                }
+                            }
+
+                            smallIslandArea {
+                                picInfo {
+                                    type = 1
+                                    pic = darkLogoKey
+                                }
+                            }
+                        }
+
+                        // 焦点通知大卡片
+                        baseInfo {
+                            type = 2
+                            this.title = title
+                            content = preview.take(50).ifEmpty { " " }
+                        }
+
+                        picInfo {
+                            type = 1
+                            pic = lightLogoKey
+                            picDark = darkLogoKey
+                        }
+
+                        // 快捷操作按钮
+                        val copyIntent = Intent(context, NotificationActionReceiver::class.java).apply {
+                            action = NotificationActionReceiver.ACTION_COPY_LATEST
+                            putExtra(NotificationActionReceiver.EXTRA_CLIP_TEXT, clip.text)
+                        }
+                        val copyPi = PendingIntent.getBroadcast(
+                            context,
+                            201,
+                            copyIntent,
+                            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                        )
+                        val favIntent = Intent(context, NotificationActionReceiver::class.java).apply {
+                            action = NotificationActionReceiver.ACTION_FAVORITE_LATEST
+                        }
+                        val favPi = PendingIntent.getBroadcast(
+                            context,
+                            202,
+                            favIntent,
+                            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                        )
+
+                        textButton {
+                            addActionInfo {
+                                val nativeAction = Notification.Action.Builder(
+                                    Icon.createWithResource(context, R.drawable.ic_notification_nc),
+                                    "复制",
+                                    copyPi
+                                ).build()
+                                action = createAction("miui_action_copy", nativeAction)
+                                actionTitle = "复制"
+                                actionBgColor = "#006EFF"
+                                actionBgColorDark = "#006EFF"
+                                actionTitleColor = "#FFFFFF"
+                                actionTitleColorDark = "#FFFFFF"
+                            }
+                            addActionInfo {
+                                val nativeAction = Notification.Action.Builder(
+                                    Icon.createWithResource(context, R.drawable.ic_notification_nc),
+                                    "收藏",
+                                    favPi
+                                ).build()
+                                action = createAction("miui_action_fav", nativeAction)
+                                actionTitle = "收藏"
+                            }
+                        }
                     }
-                    val resBundle = island.buildResourceBundle()
-                    if (resBundle != null) {
-                        builder.addExtras(resBundle)
-                    }
-                } catch (_: Exception) {
+
+                    builder.addExtras(islandExtras)
+                } catch (e: Throwable) {
+                    android.util.Log.e("SyncNotification", "notifyNewClip hyperos island error", e)
                 }
-
-                // 2. 注入 HyperOS 超级岛协议
-                val islandJson = buildHyperOsIslandJson(
-                    title = title,
-                    summaryTitle = "收到剪贴板",
-                    summaryContent = preview,
-                    focusSubTitle = "来自 $deviceLabel",
-                    focusContent = clip.text.take(300),
-                    statusText = "已就绪"
-                )
-                builder.extras.putString("miui.focus.param", islandJson)
-                builder.extras.putBoolean("miui.enableFloat", true) // 允许弹出小岛
-                builder.extras.putBoolean("miui.showAction", true)
-                builder.extras.putInt("miui.focus.type", 1)
 
                 postNotification(context, NOTIFICATION_ID_PUSH, builder.build())
             }
@@ -410,61 +575,5 @@ object SyncNotificationManager {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
         builder.addAction(0, "收藏", favPi)
-    }
-
-    /**
-     * 构造 Xiaomi HyperOS 小米超级岛 / 焦点通知 JSON 协议字符串
-     */
-    fun buildHyperOsIslandJson(
-        title: String,
-        summaryTitle: String,
-        summaryContent: String,
-        focusSubTitle: String,
-        focusContent: String,
-        statusText: String
-    ): String {
-        return try {
-            val root = JSONObject()
-            val paramV2 = JSONObject()
-
-            // 1. 摘要态数据 (小岛/打孔屏胶囊)
-            val summaryData = JSONObject().apply {
-                put("title", summaryTitle)
-                put("content", summaryContent.take(50))
-                put("sub_title", statusText)
-            }
-
-            // 2. 焦点通知展开态数据 (大岛卡片)
-            val focusData = JSONObject().apply {
-                put("title", title)
-                put("sub_title", focusSubTitle)
-                put("content", focusContent)
-                put("status", statusText)
-            }
-
-            // 3. 交互操作配置
-            val interactData = JSONObject().apply {
-                val actions = JSONArray().apply {
-                    put(JSONObject().apply {
-                        put("action_id", "copy")
-                        put("title", "复制内容")
-                    })
-                    put(JSONObject().apply {
-                        put("action_id", "fav")
-                        put("title", "加入收藏")
-                    })
-                }
-                put("actions", actions)
-            }
-
-            paramV2.put("summary_data", summaryData)
-            paramV2.put("focus_data", focusData)
-            paramV2.put("interact_data", interactData)
-            root.put("param_v2", paramV2)
-
-            root.toString()
-        } catch (_: Exception) {
-            "{}"
-        }
     }
 }

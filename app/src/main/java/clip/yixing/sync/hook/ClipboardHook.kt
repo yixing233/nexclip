@@ -17,7 +17,7 @@ import io.github.libxposed.api.XposedModuleInterface.SystemServerStartingParam
 class ClipboardHook : XposedModule() {
 
     companion object {
-        const val TAG = "SyncClipboard"
+        const val TAG = "NexClip"
         const val MODULE_PACKAGE = "clip.yixing.sync"
         // AppOpsManager.OP_READ_CLIPBOARD = 29 (AOSP 定义,compileSdk 37 中为隐藏 API)
         private const val OP_READ_CLIPBOARD = 29
@@ -69,6 +69,39 @@ class ClipboardHook : XposedModule() {
                     }
                 }
                 log(Log.INFO, TAG, "hook installed: ${clazz.name}#${method.name} (${method.parameterTypes.size} params)")
+            }
+
+            // 2. Hook setPrimaryClip 捕获剪贴板来源包名并注入 ClipDescription.extras
+            val setClipMethods = clazz.declaredMethods.filter {
+                it.name == "setPrimaryClip" || it.name == "setPrimaryClipInternal"
+            }
+            for (method in setClipMethods) {
+                hook(method).intercept { chain ->
+                    try {
+                        val clip = chain.args.firstOrNull() as? android.content.ClipData
+                        if (clip != null) {
+                            val callingPkg = chain.args.filterIsInstance<String>().firstOrNull {
+                                it.contains(".") && it != MODULE_PACKAGE && !it.startsWith("android.")
+                            } ?: chain.args.filterIsInstance<String>().firstOrNull { it.contains(".") }
+
+                            if (!callingPkg.isNullOrBlank()) {
+                                val desc = clip.description
+                                if (desc != null) {
+                                    var extras = desc.extras
+                                    if (extras == null) {
+                                        extras = android.os.PersistableBundle()
+                                        desc.extras = extras
+                                    }
+                                    extras.putString("source_package", callingPkg)
+                                }
+                            }
+                        }
+                    } catch (t: Throwable) {
+                        log(Log.WARN, TAG, "failed to record clip source package: ${t.message}")
+                    }
+                    chain.proceed()
+                }
+                log(Log.INFO, TAG, "setPrimaryClip hook installed: ${clazz.name}#${method.name} (${method.parameterTypes.size} params)")
             }
         } catch (t: Throwable) {
             log(Log.ERROR, TAG, "failed to hook ClipboardService", t)

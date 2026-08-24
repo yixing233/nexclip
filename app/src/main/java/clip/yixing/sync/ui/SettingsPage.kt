@@ -3,6 +3,7 @@ package clip.yixing.sync.ui
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -31,8 +32,11 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import kotlinx.coroutines.CancellationException
+import clip.yixing.sync.util.AppSourceHelper
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,24 +44,34 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.clearText
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import clip.yixing.sync.hook.ModuleStatusStore
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -70,6 +84,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -99,9 +114,9 @@ import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.SnackbarHostState
 import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
-import top.yukonga.miuix.kmp.preference.OverlayDropdownPreference
+import top.yukonga.miuix.kmp.window.WindowDialog
+import top.yukonga.miuix.kmp.preference.ArrowPreference
+import top.yukonga.miuix.kmp.preference.WindowDropdownPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
@@ -125,13 +140,10 @@ import java.util.Locale
 /**
  * 设置二级页面枚举
  */
-enum class SettingsSubPage(val title: String, val subtitle: String) {
-    Basic("基础设置", "设备名称、开机自启、悬浮底栏、记录上限"),
-    Sync("同步设置", "服务器配置、设备配对、在线设备列表"),
-    Filter("过滤规则", "内容过滤黑名单、敏感内容保护"),
-    Data("数据管理", "备份导出与导入、应用缓存清理"),
-    Permission("权限管理", "通知权限、电池优化白名单、自启动"),
-    About("关于", "版本信息、项目仓库与开源致谢")
+enum class SettingsSubPage(val title: String) {
+    Devices("设备列表与配对"),
+    Filter("过滤规则"),
+    About("关于")
 }
 
 @Composable
@@ -142,6 +154,7 @@ internal fun SettingsPage(
     onFloatingBarChange: (Boolean) -> Unit,
     onOverlayActiveChanged: (Boolean) -> Unit = {},
     onOpenQrScanner: () -> Unit = {},
+    isGlobalOverlayActive: Boolean = false,
 ) {
     val context = LocalContext.current
     val prefs = remember { SyncSettings.prefs(context) }
@@ -177,11 +190,19 @@ internal fun SettingsPage(
     var selfDeviceId by remember { mutableStateOf(SyncSettings.ensureDeviceId(context)) }
     var showNameDialog by remember { mutableStateOf(false) }
     val nameDialogState = remember { TextFieldState(deviceName) }
-    var showResetIdDialog by remember { mutableStateOf(false) }
 
     var bootStart by remember { mutableStateOf(SyncSettings.bootStartEnabled(context)) }
     var notificationStyle by remember { mutableStateOf(SyncSettings.notificationStyle(context)) }
-    var showNotificationStyleDialog by remember { mutableStateOf(false) }
+    val notificationStyles = remember { NotificationStyle.entries }
+    val notificationStyleLabels = remember { notificationStyles.map { it.label } }
+    var outerGlowEnabled by remember { mutableStateOf(SyncSettings.isHyperOsOuterGlow(context)) }
+    val glowColors = remember { SyncSettings.GLOW_COLORS }
+    val glowColorLabels = remember { glowColors.map { it.second } }
+    var glowColorIndex by remember {
+        mutableStateOf(
+            glowColors.indexOfFirst { it.first.equals(SyncSettings.hyperOsGlowColor(context), ignoreCase = true) }.coerceAtLeast(0)
+        )
+    }
     val historyOptions = SyncSettings.MAX_HISTORY_OPTIONS.toList()
     val historyLabels = historyOptions.map { "$it 条" }
     var historyIndex by remember {
@@ -202,38 +223,53 @@ internal fun SettingsPage(
     var generatedCode by remember { mutableStateOf<PairingCode?>(null) }
     var showCodeSheet by remember { mutableStateOf(false) }
     var deleteTargetDevice by remember { mutableStateOf<DeviceInfo?>(null) }
+    var showAppPickerDialog by remember { mutableStateOf(false) }
+    var isDropdownExpanded by remember { mutableStateOf(false) }
 
     // 是否有任何弹窗、Bottom Sheet 或选择器处于打开状态
-    val isAnyOverlayOpen = showNotificationStyleDialog ||
-        showNameDialog ||
-        showResetIdDialog ||
+    val isAnyOverlayOpen = showNameDialog ||
         showPairDialog ||
         showCodeSheet ||
-        deleteTargetDevice != null
+        deleteTargetDevice != null ||
+        showAppPickerDialog ||
+        isDropdownExpanded
+
+    val dispatcherOwner = androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner.current
+    val directInput = remember { androidx.navigationevent.DirectNavigationEventInput() }
+    androidx.compose.runtime.DisposableEffect(dispatcherOwner, directInput) {
+        dispatcherOwner?.navigationEventDispatcher?.addInput(directInput)
+        onDispose {
+            dispatcherOwner?.navigationEventDispatcher?.removeInput(directInput)
+        }
+    }
+
+    // 0. 气泡下拉菜单展开时优先拦截返回手势，仅关闭气泡菜单
+    BackHandler(enabled = isDropdownExpanded && !isGlobalOverlayActive) {
+        directInput.backCompleted()
+        isDropdownExpanded = false
+    }
 
     // 1. 弹层开启时优先拦截返回键/手势，仅关闭当前弹窗
-    PredictiveBackHandler(enabled = isAnyOverlayOpen) { progress ->
+    PredictiveBackHandler(enabled = isAnyOverlayOpen && !isDropdownExpanded && !isGlobalOverlayActive) { progress ->
         try {
             progress.collect { }
         } finally {
-            if (showNotificationStyleDialog) {
-                showNotificationStyleDialog = false
-            } else if (showNameDialog) {
+            if (showNameDialog) {
                 showNameDialog = false
-            } else if (showResetIdDialog) {
-                showResetIdDialog = false
             } else if (showPairDialog) {
                 showPairDialog = false
             } else if (showCodeSheet) {
                 showCodeSheet = false
             } else if (deleteTargetDevice != null) {
                 deleteTargetDevice = null
+            } else if (showAppPickerDialog) {
+                showAppPickerDialog = false
             }
         }
     }
 
     // 2. 预测返回手势监听（无缝连贯跟手，二级页面退出）
-    PredictiveBackHandler(enabled = currentSubPage != null && !isAnyOverlayOpen) { progress ->
+    PredictiveBackHandler(enabled = currentSubPage != null && !isAnyOverlayOpen && !isGlobalOverlayActive) { progress ->
         if (!predictiveBackEnabled) {
             closeSubPage()
             return@PredictiveBackHandler
@@ -261,8 +297,9 @@ internal fun SettingsPage(
     val isServerConnected by ClipboardMonitorService.isServerConnected.collectAsState()
     var autoRefreshUntil by remember { mutableLongStateOf(0L) }
 
-    // ① 设备列表基础加载
-    LaunchedEffect(devicesReload) {
+    // ① 设备列表基础加载与进入设备列表二级页面时即时自动拉取
+    LaunchedEffect(devicesReload, currentSubPage) {
+        if (currentSubPage != null && currentSubPage != SettingsSubPage.Devices) return@LaunchedEffect
         val serverUrl = SyncSettings.serverUrl(context)
         if (serverUrl.isBlank() || !SyncSettings.isPaired(context) || SyncSettings.deviceToken(context).isBlank()) {
             devices = emptyList()
@@ -350,6 +387,7 @@ internal fun SettingsPage(
 
     // ---- 3. 过滤规则状态 ----
     var filterKeywords by remember { mutableStateOf(SyncSettings.filterKeywords(context)) }
+    var filterPackages by remember { mutableStateOf(SyncSettings.filterPackages(context)) }
     var ignoreSensitive by remember { mutableStateOf(SyncSettings.ignoreSensitive(context)) }
     val addKeywordState = remember { TextFieldState("") }
 
@@ -447,9 +485,45 @@ internal fun SettingsPage(
         )
     }
 
-    // 弹层或二级页面开启时通知底栏收起避让
-    LaunchedEffect(currentSubPage, isAnyOverlayOpen) {
-        onOverlayActiveChanged(currentSubPage != null || isAnyOverlayOpen)
+    var isCameraGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        isCameraGranted = isGranted
+        if (isGranted) {
+            scope.launch { snackbarHostState.showAppSnack("已授予相机扫描权限", SnackType.Success) }
+        } else {
+            scope.launch { snackbarHostState.showAppSnack("未授予相机权限", SnackType.Info) }
+        }
+    }
+
+    // 页面 Resume 时自动刷新所有权限与系统状态
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                isNotificationGranted = if (Build.VERSION.SDK_INT >= 33) {
+                    ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+                } else true
+                isBatteryOptIgnored = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    powerManager.isIgnoringBatteryOptimizations(context.packageName)
+                } else true
+                isCameraGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    // 二级子页面全屏滑入时通知底栏收起避让（对话框和气泡卡片不隐藏底栏，由系统 Window 遮罩自然覆盖）
+    LaunchedEffect(currentSubPage) {
+        onOverlayActiveChanged(currentSubPage != null)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -481,47 +555,375 @@ internal fun SettingsPage(
                         start = 16.dp,
                         end = 16.dp,
                         top = topPadding + 8.dp,
-                        bottom = 8.dp
+                        bottom = bottomInnerPadding + 16.dp
                     ),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // 5 大二级设置入口卡片（无分隔线）
+                    // 1. 基础与界面
                     item {
-                        SectionBlock(title = "设置分类", insideMargin = PaddingValues()) {
-                            SettingsNavRow(
-                                title = "基础设置",
-                                summary = "设备名称、开机自启、悬浮底栏、记录上限",
-                                onClick = { openSubPage(SettingsSubPage.Basic) }
+                        SectionBlock(title = "基础与界面", insideMargin = PaddingValues()) {
+                            ArrowPreference(
+                                title = "设备名称",
+                                endActions = {
+                                    Text(
+                                        text = deviceName,
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.7f),
+                                        fontSize = 14.sp
+                                    )
+                                },
+                                onClick = {
+                                    nameDialogState.setTextAndPlaceCursorAtEnd(deviceName)
+                                    showNameDialog = true
+                                }
                             )
-                            SettingsNavRow(
-                                title = "同步设置",
-                                summary = "服务器配置、设备配对、在线设备列表",
-                                onClick = { openSubPage(SettingsSubPage.Sync) }
+                            SwitchPreference(
+                                checked = bootStart,
+                                onCheckedChange = { checked ->
+                                    bootStart = checked
+                                    prefs.edit()
+                                        .putBoolean(SyncSettings.KEY_BOOT_START_ENABLED, checked)
+                                        .apply()
+                                },
+                                title = "开机自启"
                             )
-                            SettingsNavRow(
-                                title = "过滤规则",
-                                summary = "内容过滤黑名单、敏感内容保护",
-                                onClick = { openSubPage(SettingsSubPage.Filter) }
+                            SwitchPreference(
+                                checked = floatingBarEnabled,
+                                onCheckedChange = onFloatingBarChange,
+                                title = "悬浮底栏"
                             )
-                            SettingsNavRow(
-                                title = "数据管理",
-                                summary = "备份导出与导入、应用缓存清理",
-                                onClick = { openSubPage(SettingsSubPage.Data) }
-                            )
-                            SettingsNavRow(
-                                title = "权限管理",
-                                summary = "通知权限、电池优化白名单、自启动",
-                                onClick = { openSubPage(SettingsSubPage.Permission) }
+                            SwitchPreference(
+                                checked = predictiveBackEnabled,
+                                onCheckedChange = { checked ->
+                                    predictiveBackEnabled = checked
+                                    SyncSettings.setPredictiveBackEnabled(context, checked)
+                                },
+                                title = "预测返回手势"
                             )
                         }
                     }
 
-                    // 关于（独立二级页面入口）
+                    // 2. 同步服务
+                    item {
+                        SectionBlock(title = "同步服务") {
+                            TextField(
+                                state = urlState,
+                                label = "服务器地址",
+                                useLabelAsPlaceholder = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Button(
+                                    onClick = {
+                                        val newUrl = urlState.text.toString().trim()
+                                        prefs.edit()
+                                            .putString(SyncSettings.KEY_SERVER_URL, newUrl)
+                                            .apply()
+                                        scope.launch { snackbarHostState.showAppSnack("已保存", SnackType.Success) }
+                                        devicesReload++
+                                        if (ClipboardMonitorService.isRunning.value) {
+                                            ClipboardMonitorService.stop(context)
+                                            ClipboardMonitorService.start(context)
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColorsPrimary(),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("保存配置")
+                                }
+                                Button(
+                                    onClick = {
+                                        val url = urlState.text.toString().trim()
+                                            .ifEmpty { SyncSettings.serverUrl(context) }
+                                        if (url.isEmpty()) {
+                                            scope.launch { snackbarHostState.showAppSnack("请先填写服务器地址", SnackType.Info) }
+                                            return@Button
+                                        }
+                                        testing = true
+                                        val api = SyncApi(url, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
+                                        scope.launch {
+                                            val (ok, msg) = withContext(Dispatchers.IO) {
+                                                api.testConnection()
+                                            }
+                                            testing = false
+                                            snackbarHostState.showAppSnack(msg, if (ok) SnackType.Success else SnackType.Error)
+                                        }
+                                    },
+                                    enabled = !testing,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(if (testing) "测试中…" else "连通性测试")
+                                }
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            ArrowPreference(
+                                title = "扫码加入设备组",
+                                onClick = onOpenQrScanner
+                            )
+                            ArrowPreference(
+                                title = "设备列表与配对",
+                                endActions = {
+                                    Text(
+                                        text = if (!SyncSettings.isPaired(context) || SyncSettings.deviceToken(context).isBlank()) "未加入"
+                                        else if (devicesLoading && devices.isEmpty()) "加载中…"
+                                        else "${devices.count { it.online }} / ${devices.size} 在线",
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.7f),
+                                        fontSize = 14.sp
+                                    )
+                                },
+                                onClick = { openSubPage(SettingsSubPage.Devices) }
+                            )
+                        }
+                    }
+
+                    // 3. 通知与隐私
+                    item {
+                        SectionBlock(title = "通知与隐私", insideMargin = PaddingValues()) {
+                            SwitchPreference(
+                                checked = notificationEnabled,
+                                onCheckedChange = { checked ->
+                                    notificationEnabled = checked
+                                    SyncSettings.setNotificationEnabled(context, checked)
+                                    ClipboardMonitorService.updateNotification(context)
+                                },
+                                title = "同步与捕获通知"
+                            )
+                            if (notificationEnabled) {
+                                val notificationStyleIndex = notificationStyles.indexOf(notificationStyle).coerceAtLeast(0)
+                                WindowDropdownPreference(
+                                    items = notificationStyleLabels,
+                                    selectedIndex = notificationStyleIndex,
+                                    onSelectedIndexChange = { index ->
+                                        val style = notificationStyles[index]
+                                        notificationStyle = style
+                                        SyncSettings.setNotificationStyle(context, style)
+                                        ClipboardMonitorService.updateNotification(context)
+                                    },
+                                    onExpandedChange = { isDropdownExpanded = it },
+                                    title = "通知展示样式"
+                                )
+                                if (notificationStyle == NotificationStyle.HYPEROS_ISLAND || SyncSettings.isHyperOs()) {
+                                    SwitchPreference(
+                                        checked = outerGlowEnabled,
+                                        onCheckedChange = { checked ->
+                                            outerGlowEnabled = checked
+                                            SyncSettings.setHyperOsOuterGlow(context, checked)
+                                            ClipboardMonitorService.updateNotification(context)
+                                        },
+                                        title = "超级岛流光呼吸灯效"
+                                    )
+                                    if (outerGlowEnabled) {
+                                        GlowColorPaletteChips(
+                                            selectedColor = glowColors.getOrNull(glowColorIndex)?.first ?: "#006EFF",
+                                            onColorSelected = { colorHex ->
+                                                val newIndex = glowColors.indexOfFirst { it.first.equals(colorHex, ignoreCase = true) }.coerceAtLeast(0)
+                                                glowColorIndex = newIndex
+                                                SyncSettings.setHyperOsGlowColor(context, colorHex)
+                                                ClipboardMonitorService.updateNotification(context)
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                            SwitchPreference(
+                                checked = ignoreSensitive,
+                                onCheckedChange = { checked ->
+                                    ignoreSensitive = checked
+                                    SyncSettings.setIgnoreSensitive(context, checked)
+                                },
+                                title = "忽略敏感与密码标记"
+                            )
+                            val totalFilterRules = filterKeywords.size + filterPackages.size
+                            ArrowPreference(
+                                title = "过滤与忽略黑名单",
+                                endActions = {
+                                    Text(
+                                        text = if (totalFilterRules == 0) "未设置" else "${totalFilterRules} 条规则",
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.7f),
+                                        fontSize = 14.sp
+                                    )
+                                },
+                                onClick = { openSubPage(SettingsSubPage.Filter) }
+                            )
+                        }
+                    }
+
+                    // 4. 数据与存储
+                    item {
+                        SectionBlock(title = "数据与存储", insideMargin = PaddingValues()) {
+                            WindowDropdownPreference(
+                                items = historyLabels,
+                                selectedIndex = historyIndex,
+                                onSelectedIndexChange = { index ->
+                                    historyIndex = index
+                                    prefs.edit()
+                                        .putInt(SyncSettings.KEY_MAX_HISTORY, historyOptions[index])
+                                        .apply()
+                                },
+                                onExpandedChange = { isDropdownExpanded = it },
+                                title = "记录上限"
+                            )
+                            ArrowPreference(
+                                title = "导出记录备份",
+                                onClick = {
+                                    val timeStr = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                                    exportLauncher.launch("sync_clipboard_backup_$timeStr.json")
+                                }
+                            )
+                            ArrowPreference(
+                                title = "导入记录备份",
+                                onClick = {
+                                    importLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
+                                }
+                            )
+                            ArrowPreference(
+                                title = "应用缓存",
+                                endActions = {
+                                    Text(
+                                        text = cacheSizeText,
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.7f),
+                                        fontSize = 14.sp
+                                    )
+                                },
+                                onClick = {
+                                    scope.launch(Dispatchers.IO) {
+                                        deleteFolderContents(context.cacheDir)
+                                        deleteFolderContents(context.codeCacheDir)
+                                        refreshCacheSize()
+                                        snackbarHostState.showAppSnack("缓存已清理", SnackType.Success)
+                                    }
+                                }
+                            )
+                        }
+                    }
+
+                    // 5. 权限与保活
+                    item {
+                        val moduleStatus by ModuleStatusStore.moduleStatus.collectAsState()
+                        val isModuleActivated = moduleStatus.activated
+
+                        SectionBlock(title = "权限与保活", insideMargin = PaddingValues()) {
+                            ArrowPreference(
+                                title = "通知与前台服务权限",
+                                endActions = {
+                                    Text(
+                                        text = if (isNotificationGranted) "已开启" else "去开启",
+                                        color = if (isNotificationGranted) Color(0xFF34C759) else MiuixTheme.colorScheme.primary,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                },
+                                onClick = {
+                                    if (Build.VERSION.SDK_INT >= 33 && !isNotificationGranted) {
+                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    } else {
+                                        val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                                            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                                        }
+                                        runCatching { context.startActivity(intent) }.onFailure {
+                                            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                                data = Uri.parse("package:${context.packageName}")
+                                            })
+                                        }
+                                    }
+                                }
+                            )
+                            ArrowPreference(
+                                title = "忽略电池优化 (防杀后台)",
+                                endActions = {
+                                    Text(
+                                        text = if (isBatteryOptIgnored) "已加白" else "去加白",
+                                        color = if (isBatteryOptIgnored) Color(0xFF34C759) else MiuixTheme.colorScheme.primary,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                },
+                                onClick = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                            data = Uri.parse("package:${context.packageName}")
+                                        }
+                                        runCatching { context.startActivity(intent) }.onFailure {
+                                            runCatching {
+                                                context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                                            }
+                                        }
+                                    }
+                                }
+                            )
+                            ArrowPreference(
+                                title = "相机扫描权限",
+                                endActions = {
+                                    Text(
+                                        text = if (isCameraGranted) "已授权" else "去授权",
+                                        color = if (isCameraGranted) Color(0xFF34C759) else MiuixTheme.colorScheme.primary,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                },
+                                onClick = {
+                                    if (!isCameraGranted) {
+                                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                    } else {
+                                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                            data = Uri.parse("package:${context.packageName}")
+                                        }
+                                        runCatching { context.startActivity(intent) }
+                                    }
+                                }
+                            )
+                            ArrowPreference(
+                                title = "系统自启动与运行配置",
+                                endActions = {
+                                    Text(
+                                        text = "前往",
+                                        color = MiuixTheme.colorScheme.primary,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                },
+                                onClick = {
+                                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                        data = Uri.parse("package:${context.packageName}")
+                                    }
+                                    runCatching { context.startActivity(intent) }
+                                }
+                            )
+                            ArrowPreference(
+                                title = "LSPosed 系统框架模块",
+                                endActions = {
+                                    Text(
+                                        text = if (isModuleActivated) (moduleStatus.frameworkVersion?.let { "v$it 已激活" } ?: "已激活") else "未激活",
+                                        color = if (isModuleActivated) Color(0xFF34C759) else Color(0xFFFF9500),
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                },
+                                onClick = {
+                                    val opened = openLsposedManager(context)
+                                    if (!opened) {
+                                        scope.launch {
+                                            snackbarHostState.showAppSnack("未检测到 LSPosed 管理器应用，请手动打开", SnackType.Info)
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                    }
+
+                    // 6. 关于
                     item {
                         SectionBlock(title = "关于", insideMargin = PaddingValues()) {
-                            SettingsNavRow(
+                            ArrowPreference(
                                 title = "关于 NexClip",
-                                summary = "版本 v${appVersion(context)} · 开源仓库与项目致谢",
+                                endActions = {
+                                    Text(
+                                        text = "v" + appVersion(context),
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.7f),
+                                        fontSize = 14.sp
+                                    )
+                                },
                                 onClick = { openSubPage(SettingsSubPage.About) }
                             )
                         }
@@ -561,10 +963,10 @@ internal fun SettingsPage(
                     }
             ) {
                 when (subPage) {
-                    SettingsSubPage.Basic -> {
-                        // ---- 二级页面 1: 基础设置 ----
+                    SettingsSubPage.Devices -> {
+                        // ---- 二级页面 1: 设备列表与配对 ----
                         PageShell(
-                            title = "基础设置",
+                            title = "设备列表与配对",
                             bottomInnerPadding = bottomInnerPadding,
                             navigationIcon = {
                                 IconButton(onClick = { closeSubPage() }) {
@@ -576,984 +978,626 @@ internal fun SettingsPage(
                             }
                         ) { scrollBehavior, topPadding ->
                             LazyColumn(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .overScrollVertical()
-                            .nestedScroll(scrollBehavior.nestedScrollConnection),
-                        contentPadding = PaddingValues(
-                            start = 16.dp,
-                            end = 16.dp,
-                            top = topPadding + 8.dp,
-                            bottom = bottomInnerPadding + 16.dp
-                        ),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                    item {
-                        SectionBlock(title = "设备信息", insideMargin = PaddingValues()) {
-                            // 修改设备名称
-                            Row(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        nameDialogState.edit { replace(0, length, deviceName) }
-                                        showNameDialog = true
-                                    }
-                                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                    .fillMaxSize()
+                                    .overScrollVertical()
+                                    .nestedScroll(scrollBehavior.nestedScrollConnection),
+                                contentPadding = PaddingValues(
+                                    start = 16.dp,
+                                    end = 16.dp,
+                                    top = topPadding + 8.dp,
+                                    bottom = bottomInnerPadding + 16.dp
+                                ),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "设备名称",
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Spacer(Modifier.height(2.dp))
-                                    Text(
-                                        text = deviceName,
-                                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                                        fontSize = 13.sp
-                                    )
-                                }
-                                Icon(
-                                    imageVector = MiuixIcons.Normal.ChevronForward,
-                                    contentDescription = "修改",
-                                    tint = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.45f)
-                                )
-                            }
-
-                            // 设备标识 Device ID
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "设备标识 (Device ID)",
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Spacer(Modifier.height(2.dp))
-                                    Text(
-                                        text = selfDeviceId,
-                                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                                        fontSize = 13.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                                IconButton(
-                                    onClick = {
-                                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                        cm.setPrimaryClip(ClipData.newPlainText("Device ID", selfDeviceId))
-                                        scope.launch { snackbarHostState.showAppSnack("已复制 Device ID", SnackType.Success) }
-                                    }
-                                ) {
-                                    Icon(imageVector = MiuixIcons.Normal.Copy, contentDescription = "复制")
-                                }
-                                IconButton(
-                                    onClick = { showResetIdDialog = true }
-                                ) {
-                                    Icon(imageVector = MiuixIcons.Normal.Refresh, contentDescription = "重置")
-                                }
-                            }
-                        }
-                    }
-
-                    item {
-                        SectionBlock(title = "界面与交互", insideMargin = PaddingValues()) {
-                            SwitchPreference(
-                                checked = predictiveBackEnabled,
-                                onCheckedChange = { checked ->
-                                    predictiveBackEnabled = checked
-                                    SyncSettings.setPredictiveBackEnabled(context, checked)
-                                },
-                                title = "预测返回手势",
-                                summary = "边缘侧滑返回时支持实时跟手视差与缩放预览"
-                            )
-                            SwitchPreference(
-                                checked = floatingBarEnabled,
-                                onCheckedChange = onFloatingBarChange,
-                                title = "悬浮底栏",
-                                summary = "使用液态玻璃悬浮导航栏"
-                            )
-                            SwitchPreference(
-                                checked = bootStart,
-                                onCheckedChange = { checked ->
-                                    bootStart = checked
-                                    prefs.edit()
-                                        .putBoolean(SyncSettings.KEY_BOOT_START_ENABLED, checked)
-                                        .apply()
-                                },
-                                title = "开机自启",
-                                summary = "开机后自动恢复剪贴板监听"
-                            )
-                        }
-                    }
-
-                    item {
-                        SectionBlock(title = "通知与记录", insideMargin = PaddingValues()) {
-                            SwitchPreference(
-                                checked = notificationEnabled,
-                                onCheckedChange = { checked ->
-                                    notificationEnabled = checked
-                                    SyncSettings.setNotificationEnabled(context, checked)
-                                    ClipboardMonitorService.updateNotification(context)
-                                },
-                                title = "同步与捕获通知",
-                                summary = "在收到新同步内容或本地复制时展示系统通知"
-                            )
-                            if (notificationEnabled) {
-                                // 通知展示样式 (普通通知 / 实时通知 / HyperOS 超级岛)
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { showNotificationStyleDialog = true }
-                                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = "通知展示样式",
-                                            fontSize = 16.sp,
-                                            fontWeight = FontWeight.Medium
-                                        )
-                                        Spacer(Modifier.height(2.dp))
-                                        Text(
-                                            text = notificationStyle.label + " · " + notificationStyle.summary,
-                                            color = MiuixTheme.colorScheme.onBackgroundVariant,
-                                            fontSize = 13.sp
-                                        )
-                                    }
-                                    Icon(
-                                        imageVector = MiuixIcons.Normal.ChevronForward,
-                                        contentDescription = "选择样式",
-                                        tint = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.45f)
-                                    )
-                                }
-                            }
-                            OverlayDropdownPreference(
-                                items = historyLabels,
-                                selectedIndex = historyIndex,
-                                onSelectedIndexChange = { index ->
-                                    historyIndex = index
-                                    prefs.edit()
-                                        .putInt(SyncSettings.KEY_MAX_HISTORY, historyOptions[index])
-                                        .apply()
-                                },
-                                title = "记录上限",
-                                summary = "本地最多保留 ${historyOptions[historyIndex]} 条捕获记录"
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        SettingsSubPage.Sync -> {
-                // ---- 二级页面 2: 同步设置 ----
-                PageShell(
-                    title = "同步设置",
-                    bottomInnerPadding = bottomInnerPadding,
-                    navigationIcon = {
-                        IconButton(onClick = { closeSubPage() }) {
-                            Icon(
-                                imageVector = MiuixIcons.Normal.Back,
-                                contentDescription = "返回"
-                            )
-                        }
-                    }
-                ) { scrollBehavior, topPadding ->
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .overScrollVertical()
-                            .nestedScroll(scrollBehavior.nestedScrollConnection),
-                        contentPadding = PaddingValues(
-                            start = 16.dp,
-                            end = 16.dp,
-                            top = topPadding + 8.dp,
-                            bottom = bottomInnerPadding + 16.dp
-                        ),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                    item {
-                        SectionBlock(title = "服务器设置") {
-                            TextField(
-                                state = urlState,
-                                label = "服务器地址",
-                                useLabelAsPlaceholder = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Button(
-                                    onClick = {
-                                        val newUrl = urlState.text.toString().trim()
-                                        prefs.edit()
-                                            .putString(SyncSettings.KEY_SERVER_URL, newUrl)
-                                            .apply()
-                                        scope.launch { snackbarHostState.showAppSnack("已保存", SnackType.Success) }
-                                        devicesReload++
-                                        if (ClipboardMonitorService.isRunning.value) {
-                                            ClipboardMonitorService.stop(context)
-                                            ClipboardMonitorService.start(context)
-                                        }
-                                    },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("保存")
-                                }
-                                Button(
-                                    onClick = {
-                                        val url = urlState.text.toString().trim()
-                                            .ifEmpty { SyncSettings.serverUrl(context) }
-                                        if (url.isEmpty()) {
-                                            scope.launch { snackbarHostState.showAppSnack("请先填写服务器地址", SnackType.Info) }
-                                            return@Button
-                                        }
-                                        testing = true
-                                        val api = SyncApi(url, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
-                                        scope.launch {
-                                            val (ok, msg) = withContext(Dispatchers.IO) {
-                                                api.testConnection()
+                                item {
+                                    SectionBlock(title = "配对管理") {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                        ) {
+                                            Button(
+                                                onClick = {
+                                                    val url = urlState.text.toString().trim()
+                                                        .ifEmpty { SyncSettings.serverUrl(context) }
+                                                    if (url.isEmpty()) {
+                                                        scope.launch { snackbarHostState.showAppSnack("请先填写服务器地址", SnackType.Info) }
+                                                        return@Button
+                                                    }
+                                                    generatingCode = true
+                                                    val genDeviceId = SyncSettings.ensureDeviceId(context)
+                                                    val genDeviceName = SyncSettings.deviceName(context)
+                                                    val api = SyncApi(url, genDeviceId, SyncSettings.deviceToken(context))
+                                                    scope.launch {
+                                                        val r = withContext(Dispatchers.IO) {
+                                                            runCatching { api.createPairingCode(genDeviceId, genDeviceName) }
+                                                        }
+                                                        generatingCode = false
+                                                        r.onSuccess {
+                                                            it.deviceToken?.let { token ->
+                                                                SyncSettings.setDeviceToken(context, token)
+                                                                SyncSettings.setPaired(context, true)
+                                                            }
+                                                            generatedCode = it
+                                                            showCodeSheet = true
+                                                            snackbarHostState.showAppSnack("配对码已生成", SnackType.Success)
+                                                        }.onFailure { e ->
+                                                            snackbarHostState.showAppSnack(e.message ?: "生成失败", SnackType.Error)
+                                                        }
+                                                    }
+                                                },
+                                                enabled = !generatingCode,
+                                                colors = ButtonDefaults.buttonColors(
+                                                    color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                                                    contentColor = MiuixTheme.colorScheme.onSurface
+                                                ),
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Icon(
+                                                    imageVector = MiuixIcons.Normal.Refresh,
+                                                    contentDescription = "生成配对码",
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Spacer(Modifier.width(6.dp))
+                                                Text(if (generatingCode) "生成中…" else "生成配对码")
                                             }
-                                            testing = false
-                                            snackbarHostState.showAppSnack(msg, if (ok) SnackType.Success else SnackType.Error)
-                                        }
-                                    },
-                                    enabled = !testing,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text(if (testing) "测试中…" else "连通性测试")
-                                }
-                            }
-                            if (testing) {
-                                Spacer(Modifier.height(6.dp))
-                                Text(
-                                    text = "正在连接服务器…",
-                                    fontSize = 13.sp,
-                                    color = MiuixTheme.colorScheme.onBackgroundVariant
-                                )
-                            }
-                        }
-                    }
-
-                    item {
-                        SectionBlock(title = "配对管理") {
-                            // 1. 扫码配对主按钮
-                            Button(
-                                onClick = onOpenQrScanner,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(
-                                    imageVector = LucideIcons.ScanLine,
-                                    contentDescription = "扫码配对",
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text("扫码配对 (推荐)")
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Button(
-                                    onClick = {
-                                        val url = urlState.text.toString().trim()
-                                            .ifEmpty { SyncSettings.serverUrl(context) }
-                                        if (url.isEmpty()) {
-                                            scope.launch { snackbarHostState.showAppSnack("请先填写服务器地址", SnackType.Info) }
-                                            return@Button
-                                        }
-                                        generatingCode = true
-                                        val genDeviceId = SyncSettings.ensureDeviceId(context)
-                                        val genDeviceName = SyncSettings.deviceName(context)
-                                        val api = SyncApi(url, genDeviceId, SyncSettings.deviceToken(context))
-                                        scope.launch {
-                                            val r = withContext(Dispatchers.IO) {
-                                                runCatching { api.createPairingCode(genDeviceId, genDeviceName) }
+                                            Button(
+                                                onClick = { showPairDialog = true },
+                                                enabled = !pairing,
+                                                colors = ButtonDefaults.buttonColorsPrimary(),
+                                                modifier = Modifier.weight(1f)
+                                            ) {
+                                                Icon(
+                                                    imageVector = LucideIcons.ScanLine,
+                                                    contentDescription = "开始配对",
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                                Spacer(Modifier.width(6.dp))
+                                                Text(if (pairing) "配对中…" else "开始配对")
                                             }
-                                            generatingCode = false
-                                            r.onSuccess {
-                                                it.deviceToken?.let { token ->
-                                                    SyncSettings.setDeviceToken(context, token)
-                                                    SyncSettings.setPaired(context, true)
+                                        }
+                                        if (pairing) {
+                                            Spacer(Modifier.height(6.dp))
+                                            Text(
+                                                text = "等待对方确认…",
+                                                fontSize = 13.sp,
+                                                color = MiuixTheme.colorScheme.onBackgroundVariant
+                                            )
+                                        }
+                                    }
+                                }
+
+                                item {
+                                    SectionBlock(
+                                        title = "设备列表",
+                                        trailing = {
+                                            if (SyncSettings.isPaired(context) && SyncSettings.deviceToken(context).isNotBlank()) {
+                                                Text(
+                                                    text = if (devicesLoading && devices.isEmpty()) "加载中…"
+                                                    else "${devices.count { it.online }} / ${devices.size} 在线",
+                                                    fontSize = 13.sp,
+                                                    color = MiuixTheme.colorScheme.onBackgroundVariant
+                                                )
+                                                Spacer(Modifier.width(6.dp))
+                                                IconButton(onClick = { devicesManual = true; devicesReload++ }) {
+                                                    Icon(
+                                                        imageVector = LucideIcons.RefreshCw,
+                                                        contentDescription = "刷新",
+                                                        tint = MiuixTheme.colorScheme.onBackgroundVariant,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
                                                 }
-                                                generatedCode = it
-                                                showCodeSheet = true
-                                                snackbarHostState.showAppSnack("配对码已生成", SnackType.Success)
-                                            }.onFailure { e ->
-                                                snackbarHostState.showAppSnack(e.message ?: "生成失败", SnackType.Error)
+                                            }
+                                        },
+                                    ) {
+                                        if (!SyncSettings.isPaired(context) || SyncSettings.deviceToken(context).isBlank()) {
+                                            Spacer(Modifier.height(8.dp))
+                                            Text(
+                                                text = "当前未加入任何设备组。请点击上方「生成配对码」或「输入配对码」接入。",
+                                                fontSize = 13.sp,
+                                                color = MiuixTheme.colorScheme.onBackgroundVariant
+                                            )
+                                        } else if (devices.isEmpty() && !devicesLoading && devicesError == null) {
+                                            Spacer(Modifier.height(8.dp))
+                                            Text(
+                                                text = "设备组中暂无其他设备。",
+                                                fontSize = 13.sp,
+                                                color = MiuixTheme.colorScheme.onBackgroundVariant
+                                            )
+                                        }
+                                        val sortedDevices = remember(devices, selfDeviceId) {
+                                            devices.sortedWith(
+                                                compareByDescending<DeviceInfo> { it.id == selfDeviceId }
+                                                    .thenByDescending { it.online }
+                                                    .thenByDescending { it.lastSeenAt }
+                                            )
+                                        }
+                                        sortedDevices.forEach { device ->
+                                            Spacer(Modifier.height(10.dp))
+                                            DeviceCard(
+                                                device = device,
+                                                isSelf = device.id == selfDeviceId,
+                                                isServerConnected = isServerConnected,
+                                                onDeleteClick = { deleteTargetDevice = it },
+                                                onCopyId = { id ->
+                                                    copyPairingCode(context, id)
+                                                    scope.launch { snackbarHostState.showAppSnack("设备 ID 已复制", SnackType.Success) }
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    SettingsSubPage.Filter -> {
+                        // ---- 二级页面 2: 过滤规则 ----
+                        PageShell(
+                            title = "过滤规则",
+                            bottomInnerPadding = bottomInnerPadding,
+                            navigationIcon = {
+                                IconButton(onClick = { closeSubPage() }) {
+                                    Icon(
+                                        imageVector = MiuixIcons.Normal.Back,
+                                        contentDescription = "返回"
+                                    )
+                                }
+                            }
+                        ) { scrollBehavior, topPadding ->
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .overScrollVertical()
+                                    .nestedScroll(scrollBehavior.nestedScrollConnection),
+                                contentPadding = PaddingValues(
+                                    start = 16.dp,
+                                    end = 16.dp,
+                                    top = topPadding + 8.dp,
+                                    bottom = bottomInnerPadding + 16.dp
+                                ),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                // 1. 应用忽略黑名单
+                                item {
+                                    SectionBlock(title = "应用忽略黑名单") {
+                                        Text(
+                                            text = "选中的应用在产生剪贴板复制行为时，应用将自动跳过捕获与多端同步（适合密码管理器、手机银行等敏感应用）。",
+                                            fontSize = 13.sp,
+                                            lineHeight = 18.sp,
+                                            color = MiuixTheme.colorScheme.onBackgroundVariant
+                                        )
+                                        Spacer(Modifier.height(12.dp))
+                                        Button(
+                                            onClick = { showAppPickerDialog = true },
+                                            colors = ButtonDefaults.buttonColorsPrimary(),
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Icon(
+                                                imageVector = LucideIcons.Smartphone,
+                                                contentDescription = "选择应用",
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            Text("从已安装应用中挑选…")
+                                        }
+                                        Spacer(Modifier.height(10.dp))
+
+                                        if (filterPackages.isEmpty()) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 12.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = "暂无忽略应用",
+                                                    fontSize = 13.sp,
+                                                    color = MiuixTheme.colorScheme.onBackgroundVariant
+                                                )
+                                            }
+                                        } else {
+                                            Column(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                filterPackages.forEach { pkg ->
+                                                    val appName = remember(pkg) { AppSourceHelper.resolveAppName(context, pkg) ?: pkg }
+                                                    val appIcon = remember(pkg) { AppSourceHelper.getAppIconBitmap(context, pkg) }
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .clip(RoundedCornerShape(8.dp))
+                                                            .background(MiuixTheme.colorScheme.surfaceContainer)
+                                                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        if (appIcon != null) {
+                                                            Image(
+                                                                bitmap = appIcon,
+                                                                contentDescription = appName,
+                                                                modifier = Modifier
+                                                                    .size(28.dp)
+                                                                    .clip(RoundedCornerShape(6.dp))
+                                                            )
+                                                        } else {
+                                                            Box(
+                                                                modifier = Modifier
+                                                                    .size(28.dp)
+                                                                    .clip(RoundedCornerShape(6.dp))
+                                                                    .background(MiuixTheme.colorScheme.surfaceContainerHigh),
+                                                                contentAlignment = Alignment.Center
+                                                            ) {
+                                                                Icon(
+                                                                    imageVector = LucideIcons.Smartphone,
+                                                                    contentDescription = appName,
+                                                                    modifier = Modifier.size(16.dp),
+                                                                    tint = MiuixTheme.colorScheme.primary
+                                                                )
+                                                            }
+                                                        }
+                                                        Spacer(Modifier.width(10.dp))
+                                                        Column(modifier = Modifier.weight(1f)) {
+                                                            Text(
+                                                                text = appName,
+                                                                fontSize = 13.sp,
+                                                                fontWeight = FontWeight.Medium,
+                                                                color = MiuixTheme.colorScheme.onSurface,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                            Text(
+                                                                text = pkg,
+                                                                fontSize = 11.sp,
+                                                                color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.7f),
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                        }
+                                                        IconButton(
+                                                            onClick = {
+                                                                SyncSettings.removeFilterPackage(context, pkg)
+                                                                filterPackages = SyncSettings.filterPackages(context)
+                                                            }
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = MiuixIcons.Normal.Delete,
+                                                                contentDescription = "移除",
+                                                                tint = MiuixTheme.colorScheme.error
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                                Spacer(Modifier.height(6.dp))
+                                                Button(
+                                                    onClick = {
+                                                        SyncSettings.clearFilterPackages(context)
+                                                        filterPackages = emptyList()
+                                                        scope.launch { snackbarHostState.showAppSnack("已清空应用黑名单", SnackType.Info) }
+                                                    },
+                                                    colors = ButtonDefaults.buttonColors(
+                                                        color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                                                        contentColor = MiuixTheme.colorScheme.error
+                                                    ),
+                                                    modifier = Modifier.fillMaxWidth()
+                                                ) {
+                                                    Text("清空全部忽略应用")
+                                                }
                                             }
                                         }
-                                    },
-                                    enabled = !generatingCode,
-                                    colors = ButtonDefaults.buttonColors(
-                                        color = MiuixTheme.colorScheme.surfaceContainerHigh,
-                                        contentColor = MiuixTheme.colorScheme.onSurface
-                                    ),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text(if (generatingCode) "生成中…" else "生成配对码")
+                                    }
                                 }
-                                Button(
-                                    onClick = { showPairDialog = true },
-                                    enabled = !pairing,
-                                    colors = ButtonDefaults.buttonColors(
-                                        color = MiuixTheme.colorScheme.surfaceContainerHigh,
-                                        contentColor = MiuixTheme.colorScheme.onSurface
-                                    ),
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text(if (pairing) "配对中…" else "输入配对码")
-                                }
-                            }
-                            if (pairing) {
-                                Spacer(Modifier.height(6.dp))
-                                Text(
-                                    text = "等待对方确认…",
-                                    fontSize = 13.sp,
-                                    color = MiuixTheme.colorScheme.onBackgroundVariant
-                                )
-                            }
-                        }
-                    }
 
-                    item {
-                        SectionBlock(
-                            title = "设备列表",
-                            trailing = {
-                                if (SyncSettings.isPaired(context) && SyncSettings.deviceToken(context).isNotBlank()) {
-                                    Text(
-                                        text = if (devicesLoading && devices.isEmpty()) "加载中…"
-                                        else "${devices.count { it.online }} / ${devices.size} 在线",
-                                        fontSize = 13.sp,
-                                        color = MiuixTheme.colorScheme.onBackgroundVariant
-                                    )
-                                    Spacer(Modifier.width(6.dp))
-                                    IconButton(onClick = { devicesManual = true; devicesReload++ }) {
-                                        Icon(
-                                            imageVector = LucideIcons.RefreshCw,
-                                            contentDescription = "刷新",
-                                            tint = MiuixTheme.colorScheme.onBackgroundVariant,
-                                            modifier = Modifier.size(16.dp)
+                                // 2. 内容关键词黑名单
+                                item {
+                                    SectionBlock(title = "内容关键词黑名单") {
+                                        Text(
+                                            text = "复制包含以下关键词的内容时，应用将自动跳过记录与同步。",
+                                            fontSize = 13.sp,
+                                            lineHeight = 18.sp,
+                                            color = MiuixTheme.colorScheme.onBackgroundVariant
                                         )
-                                    }
-                                }
-                            },
-                        ) {
-                            if (!SyncSettings.isPaired(context) || SyncSettings.deviceToken(context).isBlank()) {
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    text = "当前未加入任何设备组。请点击上方「生成配对码」或「输入配对码」接入。",
-                                    fontSize = 13.sp,
-                                    color = MiuixTheme.colorScheme.onBackgroundVariant
-                                )
-                            } else if (devices.isEmpty() && !devicesLoading && devicesError == null) {
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    text = "设备组中暂无其他设备。",
-                                    fontSize = 13.sp,
-                                    color = MiuixTheme.colorScheme.onBackgroundVariant
-                                )
-                            }
-                            val sortedDevices = remember(devices, selfDeviceId) {
-                                devices.sortedWith(
-                                    compareByDescending<DeviceInfo> { it.id == selfDeviceId }
-                                        .thenByDescending { it.online }
-                                        .thenByDescending { it.lastSeenAt }
-                                )
-                            }
-                            sortedDevices.forEach { device ->
-                                Spacer(Modifier.height(10.dp))
-                                DeviceCard(
-                                    device = device,
-                                    isSelf = device.id == selfDeviceId,
-                                    onDeleteClick = { deleteTargetDevice = it },
-                                    onCopyId = { id ->
-                                        copyPairingCode(context, id)
-                                        scope.launch { snackbarHostState.showAppSnack("设备 ID 已复制", SnackType.Success) }
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
+                                        Spacer(Modifier.height(12.dp))
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            TextField(
+                                                state = addKeywordState,
+                                                label = "输入要忽略的关键词",
+                                                useLabelAsPlaceholder = true,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            Button(
+                                                onClick = {
+                                                    val text = addKeywordState.text.toString().trim()
+                                                    if (text.isNotBlank()) {
+                                                        SyncSettings.addFilterKeyword(context, text)
+                                                        filterKeywords = SyncSettings.filterKeywords(context)
+                                                        addKeywordState.clearText()
+                                                        scope.launch { snackbarHostState.showAppSnack("已添加规则", SnackType.Success) }
+                                                    }
+                                                },
+                                                colors = ButtonDefaults.buttonColorsPrimary()
+                                            ) {
+                                                Text("添加")
+                                            }
+                                        }
+                                        Spacer(Modifier.height(12.dp))
 
-        SettingsSubPage.Filter -> {
-                // ---- 二级页面 3: 过滤规则 ----
-                PageShell(
-                    title = "过滤规则",
-                    bottomInnerPadding = bottomInnerPadding,
-                    navigationIcon = {
-                        IconButton(onClick = { closeSubPage() }) {
-                            Icon(
-                                imageVector = MiuixIcons.Normal.Back,
-                                contentDescription = "返回"
-                            )
-                        }
-                    }
-                ) { scrollBehavior, topPadding ->
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .overScrollVertical()
-                            .nestedScroll(scrollBehavior.nestedScrollConnection),
-                        contentPadding = PaddingValues(
-                            start = 16.dp,
-                            end = 16.dp,
-                            top = topPadding + 8.dp,
-                            bottom = bottomInnerPadding + 16.dp
-                        ),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                    item {
-                        SectionBlock(title = "内容过滤黑名单") {
-                            Text(
-                                text = "复制包含以下关键词的内容时，应用将自动跳过记录与同步。",
-                                fontSize = 13.sp,
-                                lineHeight = 18.sp,
-                                color = MiuixTheme.colorScheme.onBackgroundVariant
-                            )
-                            Spacer(Modifier.height(12.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                TextField(
-                                    state = addKeywordState,
-                                    label = "输入要忽略的关键词",
-                                    useLabelAsPlaceholder = true,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Button(
-                                    onClick = {
-                                        val text = addKeywordState.text.toString().trim()
-                                        if (text.isNotBlank()) {
-                                            SyncSettings.addFilterKeyword(context, text)
-                                            filterKeywords = SyncSettings.filterKeywords(context)
-                                            addKeywordState.edit { replace(0, length, "") }
-                                            scope.launch { snackbarHostState.showAppSnack("已添加规则", SnackType.Success) }
+                                        if (filterKeywords.isEmpty()) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 16.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = "暂无关键词规则",
+                                                    fontSize = 13.sp,
+                                                    color = MiuixTheme.colorScheme.onBackgroundVariant
+                                                )
+                                            }
+                                        } else {
+                                            Column(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                filterKeywords.forEach { kw ->
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .clip(RoundedCornerShape(8.dp))
+                                                            .background(MiuixTheme.colorScheme.surfaceContainer)
+                                                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Text(
+                                                            text = kw,
+                                                            modifier = Modifier.weight(1f),
+                                                            fontSize = 14.sp
+                                                        )
+                                                        IconButton(
+                                                            onClick = {
+                                                                SyncSettings.removeFilterKeyword(context, kw)
+                                                                filterKeywords = SyncSettings.filterKeywords(context)
+                                                            }
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = MiuixIcons.Normal.Delete,
+                                                                contentDescription = "删除",
+                                                                tint = MiuixTheme.colorScheme.error
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                                Spacer(Modifier.height(6.dp))
+                                                Button(
+                                                    onClick = {
+                                                        SyncSettings.clearFilterKeywords(context)
+                                                        filterKeywords = emptyList()
+                                                        scope.launch { snackbarHostState.showAppSnack("已清空关键词规则", SnackType.Info) }
+                                                    },
+                                                    colors = ButtonDefaults.buttonColors(
+                                                        color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                                                        contentColor = MiuixTheme.colorScheme.error
+                                                    ),
+                                                    modifier = Modifier.fillMaxWidth()
+                                                ) {
+                                                    Text("清空全部关键词")
+                                                }
+                                            }
                                         }
                                     }
-                                ) {
-                                    Text("添加")
                                 }
                             }
-                            Spacer(Modifier.height(12.dp))
+                        }
+                    }
 
-                            if (filterKeywords.isEmpty()) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 16.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = "暂无黑名单规则",
-                                        fontSize = 13.sp,
-                                        color = MiuixTheme.colorScheme.onBackgroundVariant
+                    SettingsSubPage.About -> {
+                        // ---- 二级页面 3: 关于与开源致谢 ----
+                        val openUrl: (String) -> Unit = { targetUrl ->
+                            runCatching {
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(intent)
+                            }.onFailure {
+                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                cm.setPrimaryClip(ClipData.newPlainText("Link", targetUrl))
+                                scope.launch { snackbarHostState.showAppSnack("链接已复制", SnackType.Success) }
+                            }
+                        }
+
+                        PageShell(
+                            title = "关于",
+                            bottomInnerPadding = bottomInnerPadding,
+                            navigationIcon = {
+                                IconButton(onClick = { closeSubPage() }) {
+                                    Icon(
+                                        imageVector = MiuixIcons.Normal.Back,
+                                        contentDescription = "返回"
                                     )
                                 }
-                            } else {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    filterKeywords.forEach { kw ->
+                            }
+                        ) { scrollBehavior, topPadding ->
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .overScrollVertical()
+                                    .nestedScroll(scrollBehavior.nestedScrollConnection),
+                                contentPadding = PaddingValues(
+                                    start = 16.dp,
+                                    end = 16.dp,
+                                    top = topPadding + 8.dp,
+                                    bottom = bottomInnerPadding + 16.dp
+                                ),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                // 1. 应用品牌头部
+                                item {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 12.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        val icon = remember { appIconBitmap(context) }
+                                        Image(
+                                            bitmap = icon,
+                                            contentDescription = "NexClip 图标",
+                                            modifier = Modifier
+                                                .size(68.dp)
+                                                .clip(RoundedCornerShape(18.dp))
+                                        )
+                                        Spacer(Modifier.height(10.dp))
+                                        Text(
+                                            text = "NexClip",
+                                            fontSize = 22.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MiuixTheme.colorScheme.onSurface
+                                        )
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            text = "轻量高效的跨设备剪贴板同步与管理",
+                                            fontSize = 13.sp,
+                                            color = MiuixTheme.colorScheme.onBackgroundVariant
+                                        )
+                                        Spacer(Modifier.height(8.dp))
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
+                                                .padding(horizontal = 10.dp, vertical = 3.dp)
+                                        ) {
+                                            Text(
+                                                text = "版本 v" + appVersion(context),
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MiuixTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // 2. 项目信息
+                                item {
+                                    SectionBlock(title = "项目信息", insideMargin = PaddingValues()) {
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(MiuixTheme.colorScheme.surfaceContainer)
-                                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                                                .clickable { openUrl("https://github.com/yixing233/easy-clip") }
+                                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text(
-                                                text = kw,
-                                                modifier = Modifier.weight(1f),
-                                                fontSize = 14.sp
-                                            )
-                                            IconButton(
-                                                onClick = {
-                                                    SyncSettings.removeFilterKeyword(context, kw)
-                                                    filterKeywords = SyncSettings.filterKeywords(context)
-                                                }
-                                            ) {
+                                            Text("开源项目仓库", fontSize = 15.sp, color = MiuixTheme.colorScheme.onSurface)
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = "yixing233/easy-clip",
+                                                    color = MiuixTheme.colorScheme.primary,
+                                                    fontSize = 13.sp,
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                                Spacer(Modifier.width(4.dp))
                                                 Icon(
-                                                    imageVector = MiuixIcons.Normal.Delete,
-                                                    contentDescription = "删除",
-                                                    tint = MiuixTheme.colorScheme.error
+                                                    imageVector = LucideIcons.ExternalLink,
+                                                    contentDescription = "前往",
+                                                    tint = MiuixTheme.colorScheme.primary.copy(alpha = 0.6f),
+                                                    modifier = Modifier.size(13.dp)
                                                 )
                                             }
                                         }
-                                    }
-                                    Spacer(Modifier.height(6.dp))
-                                    Button(
-                                        onClick = {
-                                            SyncSettings.clearFilterKeywords(context)
-                                            filterKeywords = emptyList()
-                                            scope.launch { snackbarHostState.showAppSnack("已清空黑名单规则", SnackType.Info) }
-                                        },
-                                        colors = ButtonDefaults.buttonColors(
-                                            color = MiuixTheme.colorScheme.surfaceContainerHigh,
-                                            contentColor = MiuixTheme.colorScheme.error
-                                        ),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Text("清空全部规则")
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    item {
-                        SectionBlock(title = "敏感内容保护", insideMargin = PaddingValues()) {
-                            SwitchPreference(
-                                checked = ignoreSensitive,
-                                onCheckedChange = { checked ->
-                                    ignoreSensitive = checked
-                                    SyncSettings.setIgnoreSensitive(context, checked)
-                                },
-                                title = "忽略敏感/密码标记",
-                                summary = "自动跳过密码管理器或标记为 sensitive 的剪贴板"
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        SettingsSubPage.Data -> {
-                // ---- 二级页面 4: 数据管理 ----
-                PageShell(
-                    title = "数据管理",
-                    bottomInnerPadding = bottomInnerPadding,
-                    navigationIcon = {
-                        IconButton(onClick = { closeSubPage() }) {
-                            Icon(
-                                imageVector = MiuixIcons.Normal.Back,
-                                contentDescription = "返回"
-                            )
-                        }
-                    }
-                ) { scrollBehavior, topPadding ->
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .overScrollVertical()
-                            .nestedScroll(scrollBehavior.nestedScrollConnection),
-                        contentPadding = PaddingValues(
-                            start = 16.dp,
-                            end = 16.dp,
-                            top = topPadding + 8.dp,
-                            bottom = bottomInnerPadding + 16.dp
-                        ),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                    item {
-                        SectionBlock(title = "备份与迁移", insideMargin = PaddingValues()) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        val timeStr = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-                                        exportLauncher.launch("sync_clipboard_backup_$timeStr.json")
-                                    }
-                                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "导出记录备份",
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Spacer(Modifier.height(2.dp))
-                                    Text(
-                                        text = "将全部捕获历史导出为 JSON 备份文件",
-                                        fontSize = 13.sp,
-                                        color = MiuixTheme.colorScheme.onBackgroundVariant
-                                    )
-                                }
-                                Icon(
-                                    imageVector = LucideIcons.Upload,
-                                    contentDescription = "导出",
-                                    tint = MiuixTheme.colorScheme.primary
-                                )
-                            }
-
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        importLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
-                                    }
-                                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "导入记录备份",
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Spacer(Modifier.height(2.dp))
-                                    Text(
-                                        text = "从 JSON 文件导入并合并历史记录",
-                                        fontSize = 13.sp,
-                                        color = MiuixTheme.colorScheme.onBackgroundVariant
-                                    )
-                                }
-                                Icon(
-                                    imageVector = LucideIcons.Download,
-                                    contentDescription = "导入",
-                                    tint = MiuixTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                    }
-
-                    item {
-                        SectionBlock(title = "存储空间", insideMargin = PaddingValues()) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "应用缓存与临时存储",
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Spacer(Modifier.height(2.dp))
-                                    Text(
-                                        text = "已占用 $cacheSizeText",
-                                        fontSize = 13.sp,
-                                        color = MiuixTheme.colorScheme.onBackgroundVariant
-                                    )
-                                }
-                                Button(
-                                    onClick = {
-                                        scope.launch(Dispatchers.IO) {
-                                            deleteFolderContents(context.cacheDir)
-                                            deleteFolderContents(context.codeCacheDir)
-                                            refreshCacheSize()
-                                            snackbarHostState.showAppSnack("缓存已清理", SnackType.Success)
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("开源许可证", fontSize = 15.sp, color = MiuixTheme.colorScheme.onSurface)
+                                            Text("MIT License", fontSize = 13.sp, color = MiuixTheme.colorScheme.onBackgroundVariant)
+                                        }
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("应用包名", fontSize = 15.sp, color = MiuixTheme.colorScheme.onSurface)
+                                            Text(context.packageName ?: "-", fontSize = 13.sp, color = MiuixTheme.colorScheme.onBackgroundVariant)
                                         }
                                     }
-                                ) {
-                                    Text("一键清理")
                                 }
-                            }
-                        }
-                    }
-                }
-            }
-        }
 
-        SettingsSubPage.Permission -> {
-                // ---- 二级页面 5: 权限管理 ----
-                PageShell(
-                    title = "权限管理",
-                    bottomInnerPadding = bottomInnerPadding,
-                    navigationIcon = {
-                        IconButton(onClick = { closeSubPage() }) {
-                            Icon(
-                                imageVector = MiuixIcons.Normal.Back,
-                                contentDescription = "返回"
-                            )
-                        }
-                    }
-                ) { scrollBehavior, topPadding ->
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .overScrollVertical()
-                            .nestedScroll(scrollBehavior.nestedScrollConnection),
-                        contentPadding = PaddingValues(
-                            start = 16.dp,
-                            end = 16.dp,
-                            top = topPadding + 8.dp,
-                            bottom = bottomInnerPadding + 16.dp
-                        ),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                    item {
-                        SectionBlock(title = "系统权限", insideMargin = PaddingValues()) {
-                            // 通知权限
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        if (Build.VERSION.SDK_INT >= 33 && !isNotificationGranted) {
-                                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                        } else {
-                                            val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
-                                                putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
-                                            }
-                                            runCatching { context.startActivity(intent) }
+                                // 3. 开源依赖致谢
+                                item {
+                                    SectionBlock(title = "开源致谢与技术组件", insideMargin = PaddingValues()) {
+                                        val libs = listOf(
+                                            OpenSourceLib(
+                                                name = "Miuix-KMP",
+                                                license = "Apache-2.0",
+                                                desc = "现代优雅的 MIUI / HyperOS 风格跨平台组件库",
+                                                url = "https://github.com/miuix-kmp/miuix"
+                                            ),
+                                            OpenSourceLib(
+                                                name = "LSPosed Framework",
+                                                license = "GPL-3.0",
+                                                desc = "Android 系统级 Xposed 模块框架与运行时 Hook",
+                                                url = "https://github.com/LSPosed/LSPosed"
+                                            ),
+                                            OpenSourceLib(
+                                                name = "Google ML Kit",
+                                                license = "Apache-2.0",
+                                                desc = "端侧离线高精度二维码与条形码识别套件",
+                                                url = "https://developers.google.com/ml-kit/vision/barcode-scanning"
+                                            ),
+                                            OpenSourceLib(
+                                                name = "Ktor Client",
+                                                license = "Apache-2.0",
+                                                desc = "JetBrains 异步协程网络通信与 WebSocket 客户端",
+                                                url = "https://github.com/ktorio/ktor"
+                                            ),
+                                            OpenSourceLib(
+                                                name = "Lucide Icons",
+                                                license = "ISC",
+                                                desc = "清晰规整的现代开源矢量图标规范与图形集",
+                                                url = "https://github.com/lucide-icons/lucide"
+                                            ),
+                                            OpenSourceLib(
+                                                name = "SyncClipboard",
+                                                license = "MIT",
+                                                desc = "跨设备多平台剪贴板数据同步协议与生态灵感",
+                                                url = "https://github.com/Dupdate/SyncClipboard"
+                                            )
+                                        )
+
+                                        libs.forEach { lib ->
+                                            OpenSourceCreditRow(
+                                                lib = lib,
+                                                onClick = { openUrl(lib.url) }
+                                            )
                                         }
                                     }
-                                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "通知权限",
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Spacer(Modifier.height(2.dp))
-                                    Text(
-                                        text = if (isNotificationGranted) "已授权（用于前台常驻与推送提示）" else "未授权，点击前往开启",
-                                        fontSize = 13.sp,
-                                        color = if (isNotificationGranted) Color(0xFF34C759) else MiuixTheme.colorScheme.error
-                                    )
-                                }
-                                Icon(
-                                    imageVector = MiuixIcons.Normal.ChevronForward,
-                                    contentDescription = "前往设置",
-                                    tint = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.45f)
-                                )
-                            }
-
-                            // 电池优化白名单
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                                                data = Uri.parse("package:${context.packageName}")
-                                            }
-                                            runCatching { context.startActivity(intent) }.onFailure {
-                                                runCatching {
-                                                    context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-                                                }
-                                            }
-                                        }
-                                    }
-                                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "忽略电池优化 (防杀后台)",
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Spacer(Modifier.height(2.dp))
-                                    Text(
-                                        text = if (isBatteryOptIgnored) "已加入白名单（后台保活更稳定）" else "未加入白名单，点击前往开启",
-                                        fontSize = 13.sp,
-                                        color = if (isBatteryOptIgnored) Color(0xFF34C759) else MiuixTheme.colorScheme.error
-                                    )
-                                }
-                                Icon(
-                                    imageVector = MiuixIcons.Normal.ChevronForward,
-                                    contentDescription = "前往设置",
-                                    tint = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.45f)
-                                )
-                            }
-
-                            // 系统应用详情与自启动
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                            data = Uri.parse("package:${context.packageName}")
-                                        }
-                                        runCatching { context.startActivity(intent) }
-                                    }
-                                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "系统应用详情与自启动",
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Spacer(Modifier.height(2.dp))
-                                    Text(
-                                        text = "配置系统自启动权限、省电策略及后台弹出界面",
-                                        fontSize = 13.sp,
-                                        color = MiuixTheme.colorScheme.onBackgroundVariant
-                                    )
-                                }
-                                Icon(
-                                    imageVector = MiuixIcons.Normal.ChevronForward,
-                                    contentDescription = "前往设置",
-                                    tint = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.45f)
-                                )
-                            }
-                        }
-                    }
-
-                    item {
-                        SectionBlock(title = "LSPosed 模块配置说明") {
-                            Text(
-                                text = "1. 打开 LSPosed 管理器并勾选「NexClip」\n" +
-                                    "2. 作用域必须包含「系统框架」和「NexClip」应用本身\n" +
-                                    "3. 完成配置后重启系统即可生效",
-                                fontSize = 13.sp,
-                                lineHeight = 19.sp,
-                                color = MiuixTheme.colorScheme.onBackgroundVariant
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        SettingsSubPage.About -> {
-            // ---- 二级页面 6: 关于 ----
-            PageShell(
-                title = "关于",
-                bottomInnerPadding = bottomInnerPadding,
-                navigationIcon = {
-                    IconButton(onClick = { closeSubPage() }) {
-                        Icon(
-                            imageVector = MiuixIcons.Normal.Back,
-                            contentDescription = "返回"
-                        )
-                    }
-                }
-            ) { scrollBehavior, topPadding ->
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .overScrollVertical()
-                        .nestedScroll(scrollBehavior.nestedScrollConnection),
-                    contentPadding = PaddingValues(
-                        start = 16.dp,
-                        end = 16.dp,
-                        top = topPadding + 8.dp,
-                        bottom = bottomInnerPadding + 16.dp
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    item {
-                        SectionBlock(title = "应用信息") {
-                            Column(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                val icon = remember { appIconBitmap(context) }
-                                Image(
-                                    bitmap = icon,
-                                    contentDescription = "NexClip 图标",
-                                    modifier = Modifier
-                                        .size(64.dp)
-                                        .clip(RoundedCornerShape(16.dp))
-                                )
-                                Spacer(Modifier.height(10.dp))
-                                Text(
-                                    text = "NexClip",
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    text = "轻量高效的跨设备剪贴板同步与管理",
-                                    fontSize = 13.sp,
-                                    color = MiuixTheme.colorScheme.onBackgroundVariant
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    text = "版本 v" + appVersion(context),
-                                    fontSize = 13.sp,
-                                    color = MiuixTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                            Spacer(Modifier.height(14.dp))
-                            StatusRow(label = "应用包名", value = context.packageName ?: "-")
-                            Spacer(Modifier.height(8.dp))
-                            StatusRow(label = "开源协议", value = "MIT License")
-                            Spacer(Modifier.height(8.dp))
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        val repoUrl = "https://github.com/yixing233/easy-clip"
-                                        runCatching {
-                                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(repoUrl))
-                                            context.startActivity(intent)
-                                        }.onFailure {
-                                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                            cm.setPrimaryClip(ClipData.newPlainText("GitHub Repository", repoUrl))
-                                            scope.launch { snackbarHostState.showAppSnack("仓库链接已复制", SnackType.Success) }
-                                        }
-                                    }
-                                    .padding(vertical = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("项目仓库", color = MiuixTheme.colorScheme.onBackgroundVariant, fontSize = 14.sp)
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = "github.com/yixing233/easy-clip",
-                                        color = MiuixTheme.colorScheme.primary,
-                                        fontSize = 13.sp
-                                    )
-                                    Spacer(Modifier.width(4.dp))
-                                    Icon(
-                                        imageVector = MiuixIcons.Normal.ChevronForward,
-                                        contentDescription = "前往",
-                                        tint = MiuixTheme.colorScheme.primary.copy(alpha = 0.6f),
-                                        modifier = Modifier.size(14.dp)
-                                    )
                                 }
                             }
-                        }
-                    }
-
-                    item {
-                        SectionBlock(title = "开源致谢") {
-                            Text(
-                                text = "NexClip 依托并致谢以下优秀开源项目与技术规范：",
-                                fontSize = 13.sp,
-                                color = MiuixTheme.colorScheme.onBackgroundVariant
-                            )
-                            Spacer(Modifier.height(10.dp))
-                            StatusRow(label = "Miuix-KMP", value = "现代优雅的跨平台设计组件库")
-                            Spacer(Modifier.height(8.dp))
-                            StatusRow(label = "LSPosed", value = "Android 系统级剪贴板感知框架")
-                            Spacer(Modifier.height(8.dp))
-                            StatusRow(label = "ML Kit", value = "Google 离线高精度二维码识别套件")
-                            Spacer(Modifier.height(8.dp))
-                            StatusRow(label = "Lucide Icons", value = "清晰规整的矢量图标集")
-                            Spacer(Modifier.height(8.dp))
-                            StatusRow(label = "SyncClipboard", value = "跨设备多端剪贴板同步协议启发")
                         }
                     }
                 }
             }
         }
     }
-}
-}
 
     // ---- 对话框与弹层 ----
 
-    // 配对对话框 (6 位纯数字配对码单向即入)
-    OverlayDialog(
+    // 配对对话框 (6 位纯数字配对码或扫码接入)
+    WindowDialog(
         show = showPairDialog,
-        title = "加入设备组",
-        summary = "输入其他设备屏幕上显示的 6 位配对码即可直接接入",
+        title = "开始配对",
+        summary = "输入 6 位配对码或点击下方「扫一扫」快速接入设备组",
         onDismissRequest = { showPairDialog = false }
     ) {
         TextField(
@@ -1629,7 +1673,7 @@ internal fun SettingsPage(
                             prefs.edit().putString(SyncSettings.KEY_SERVER_URL, url).apply()
                             SyncSettings.setDeviceToken(context, token)
                             SyncSettings.setPaired(context, true)
-                            dialogCodeState.edit { replace(0, length, "") }
+                            dialogCodeState.clearText()
                             snackbarHostState.showAppSnack("配对成功！已加入设备组", SnackType.Success)
                             devicesReload++
                             autoRefreshUntil = System.currentTimeMillis() + 60_000L
@@ -1644,6 +1688,7 @@ internal fun SettingsPage(
                     }
                 },
                 enabled = !pairing,
+                colors = ButtonDefaults.buttonColorsPrimary(),
                 modifier = Modifier.weight(1f)
             ) {
                 Text(if (pairing) "连接中…" else "立即连接")
@@ -1652,7 +1697,7 @@ internal fun SettingsPage(
     }
 
     // 生成的配对码用对话框展示(关闭后立即失效)
-    OverlayDialog(
+    WindowDialog(
         show = showCodeSheet,
         title = "设备配对码",
         onDismissRequest = {
@@ -1741,7 +1786,7 @@ internal fun SettingsPage(
     }
 
     // 修改设备名称对话框
-    OverlayDialog(
+    WindowDialog(
         show = showNameDialog,
         title = "修改设备名称",
         onDismissRequest = { showNameDialog = false }
@@ -1778,6 +1823,7 @@ internal fun SettingsPage(
                             scope.launch { snackbarHostState.showAppSnack("已保存设备名称", SnackType.Success) }
                         }
                     },
+                    colors = ButtonDefaults.buttonColorsPrimary(),
                     modifier = Modifier.weight(1f)
                 ) {
                     Text("保存")
@@ -1786,57 +1832,9 @@ internal fun SettingsPage(
         }
     }
 
-    // 重置设备 ID 对话框
-    OverlayDialog(
-        show = showResetIdDialog,
-        title = "重置设备标识",
-        onDismissRequest = { showResetIdDialog = false }
-    ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-            Text(
-                text = "确定要重新生成本机 Device ID 吗？\n重置后该设备在服务端将被视为新设备，需要重新登记或配对。",
-                color = MiuixTheme.colorScheme.onBackgroundVariant,
-                fontSize = 13.sp,
-                lineHeight = 18.sp
-            )
-            Spacer(Modifier.height(16.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Button(
-                    onClick = { showResetIdDialog = false },
-                    colors = ButtonDefaults.buttonColors(
-                        color = MiuixTheme.colorScheme.surfaceContainerHigh,
-                        contentColor = MiuixTheme.colorScheme.onSurface
-                    ),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("取消")
-                }
-                Button(
-                    onClick = {
-                        val newId = SyncSettings.resetDeviceId(context)
-                        selfDeviceId = newId
-                        showResetIdDialog = false
-                        devicesReload++
-                        scope.launch { snackbarHostState.showAppSnack("已重置 Device ID", SnackType.Success) }
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        color = MiuixTheme.colorScheme.error,
-                        contentColor = Color.White
-                    ),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("确定重置")
-                }
-            }
-        }
-    }
-
     // 移除其他设备确认对话框
     val targetDev = deleteTargetDevice
-    OverlayDialog(
+    WindowDialog(
         show = targetDev != null,
         title = "移除设备",
         onDismissRequest = { deleteTargetDevice = null }
@@ -1913,147 +1911,38 @@ internal fun SettingsPage(
         }
     }
 
-    // 通知展示样式选择弹窗
-    OverlayDialog(
-        show = showNotificationStyleDialog,
-        title = "选择通知展示样式",
-        summary = if (SyncSettings.isHyperOs()) "已检测到小米澎湃OS (HyperOS)，推荐使用超级岛" else "根据系统支持选择合适的通知交互模式",
-        onDismissRequest = { showNotificationStyleDialog = false }
-    ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
-            NotificationStyle.entries.forEach { style ->
-                val isSelected = notificationStyle == style
-                val isRecommended = style == NotificationStyle.HYPEROS_ISLAND && SyncSettings.isHyperOs()
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(
-                            if (isSelected) MiuixTheme.colorScheme.primary.copy(alpha = 0.12f)
-                            else Color.Transparent
-                        )
-                        .clickable {
-                            notificationStyle = style
-                            SyncSettings.setNotificationStyle(context, style)
-                            ClipboardMonitorService.updateNotification(context)
-                            showNotificationStyleDialog = false
-                            scope.launch {
-                                snackbarHostState.showAppSnack("已切换为 ${style.label}", SnackType.Success)
-                            }
-                        }
-                        .padding(horizontal = 12.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = style.label,
-                                fontSize = 16.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isSelected) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface
-                            )
-                            if (isRecommended) {
-                                Spacer(Modifier.width(6.dp))
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(MiuixTheme.colorScheme.primary)
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        text = "推荐",
-                                        color = Color.White,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-                        }
-                        Spacer(Modifier.height(3.dp))
-                        Text(
-                            text = style.summary,
-                            color = MiuixTheme.colorScheme.onBackgroundVariant,
-                            fontSize = 12.sp,
-                            lineHeight = 16.sp
-                        )
-                    }
-                    if (isSelected) {
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = "✓",
-                            color = MiuixTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp
-                        )
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
+    // 应用忽略黑名单选择弹窗
+    InstalledAppPickerDialog(
+        show = showAppPickerDialog,
+        blacklistedPackages = filterPackages,
+        onTogglePackage = { pkg ->
+            if (filterPackages.contains(pkg)) {
+                SyncSettings.removeFilterPackage(context, pkg)
+            } else {
+                SyncSettings.addFilterPackage(context, pkg)
             }
-        }
-    }
-}
-}
-
-/**
- * 一级设置分类导航行
- */
-@Composable
-private fun SettingsNavRow(
-    title: String,
-    summary: String,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Medium
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                text = summary,
-                color = MiuixTheme.colorScheme.onBackgroundVariant,
-                fontSize = 13.sp,
-                lineHeight = 17.sp
-            )
-        }
-        Spacer(Modifier.width(8.dp))
-        Icon(
-            imageVector = MiuixIcons.Normal.ChevronForward,
-            contentDescription = title,
-            tint = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.45f)
-        )
-    }
+            filterPackages = SyncSettings.filterPackages(context)
+        },
+        onDismissRequest = { showAppPickerDialog = false }
+    )
 }
 
-private fun platformIcon(platform: String): androidx.compose.ui.graphics.vector.ImageVector {
-    val p = platform.lowercase()
-    return when {
-        p.contains("android") || p.contains("phone") || p.contains("ios") -> LucideIcons.Smartphone
-        p.contains("win") || p.contains("windows") || p.contains("desktop") -> LucideIcons.Laptop
-        p.contains("mac") || p.contains("linux") -> LucideIcons.Monitor
-        p.contains("web") || p.contains("browser") -> LucideIcons.Globe
-        else -> LucideIcons.Monitor
-    }
+private fun platformIcon(name: String, platform: String): androidx.compose.ui.graphics.vector.ImageVector {
+    return resolveDeviceIcon(name, platform)
 }
 
 @Composable
 private fun DeviceCard(
     device: DeviceInfo,
     isSelf: Boolean,
+    isServerConnected: Boolean = false,
     onDeleteClick: (DeviceInfo) -> Unit,
     onCopyId: (String) -> Unit
 ) {
+    val isActuallyOnline = if (isSelf) (isServerConnected || device.online) else device.online
     val lastSeen = relativeTime(device.lastSeenAt)
-    val statusText = if (device.online) "在线" else if (lastSeen.isNotEmpty()) lastSeen else "离线"
-    val statusColor = if (device.online) Color(0xFF10B981) else MiuixTheme.colorScheme.onBackgroundVariant
+    val statusText = if (isActuallyOnline) "在线" else if (lastSeen.isNotEmpty()) lastSeen else "离线"
+    val statusColor = if (isActuallyOnline) Color(0xFF10B981) else MiuixTheme.colorScheme.onBackgroundVariant
 
     Row(
         modifier = Modifier
@@ -2073,7 +1962,7 @@ private fun DeviceCard(
             contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = platformIcon(device.platform),
+                imageVector = resolveDeviceIcon(device.name, device.platform),
                 contentDescription = device.platform,
                 tint = MiuixTheme.colorScheme.primary,
                 modifier = Modifier.size(20.dp)
@@ -2275,4 +2164,444 @@ private fun formatSize(bytes: Long): String {
     if (kb < 1024) return "%.1f KB".format(kb)
     val mb = kb / 1024.0
     return "%.1f MB".format(mb)
+}
+
+/** 尝试拉起 LSPosed / Xposed / 模块管理器与 Root 管理器应用 */
+private fun openLsposedManager(context: Context): Boolean {
+    val pm = context.packageManager
+
+    // 1. 优先尝试显式组件调用（可绕过部分 ROM 的隐式过滤器）
+    val explicitComponents = listOf(
+        ComponentName("org.lsposed.manager", "org.lsposed.manager.ui.activity.MainActivity"),
+        ComponentName("org.lsposed.manager", "org.lsposed.manager.ui.activity.ComposeActivity"),
+        ComponentName("org.lsposed.manager.v1", "org.lsposed.manager.ui.activity.MainActivity"),
+        ComponentName("io.github.lsposed.manager", "io.github.lsposed.manager.ui.activity.MainActivity"),
+        ComponentName("org.lsposed.manager.zygisk", "org.lsposed.manager.ui.activity.MainActivity"),
+        ComponentName("org.meowcat.edxposed.manager", "org.meowcat.edxposed.manager.ui.MainActivity"),
+        ComponentName("de.robv.android.xposed.installer", "de.robv.android.xposed.installer.WelcomeActivity"),
+        ComponentName("top.canyie.dreamland.manager", "top.canyie.dreamland.manager.ui.MainActivity"),
+        ComponentName("me.weishu.kernelsu", "me.weishu.kernelsu.ui.MainActivity"),
+        ComponentName("com.rifsxd.ksu", "me.weishu.kernelsu.ui.MainActivity"),
+        ComponentName("me.bmax.apatch", "me.bmax.apatch.ui.MainActivity"),
+        ComponentName("com.topjohnwu.magisk", "com.topjohnwu.magisk.ui.MainActivity"),
+        ComponentName("io.github.huskydg.magisk", "com.topjohnwu.magisk.ui.MainActivity")
+    )
+
+    for (comp in explicitComponents) {
+        try {
+            val intent = Intent(Intent.ACTION_MAIN).apply {
+                component = comp
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            return true
+        } catch (_: Exception) {
+            // 继续尝试下一个
+        }
+    }
+
+    // 2. 尝试根据包名获取 Launch Intent
+    val candidatePackages = listOf(
+        "org.lsposed.manager",
+        "org.lsposed.manager.v1",
+        "io.github.lsposed.manager",
+        "org.lsposed.manager.zygisk",
+        "org.meowcat.edxposed.manager",
+        "de.robv.android.xposed.installer",
+        "top.canyie.dreamland.manager",
+        "me.weishu.kernelsu",
+        "com.rifsxd.ksu",
+        "me.bmax.apatch",
+        "com.topjohnwu.magisk",
+        "io.github.huskydg.magisk"
+    )
+
+    for (pkg in candidatePackages) {
+        val launchIntent = pm.getLaunchIntentForPackage(pkg)
+        if (launchIntent != null) {
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val result = runCatching { context.startActivity(launchIntent) }
+            if (result.isSuccess) return true
+        }
+    }
+
+    // 3. 尝试通用 LSPosed 动作 / URI
+    val actionIntents = listOf(
+        Intent("org.lsposed.manager.LAUNCH").apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) },
+        Intent("android.intent.action.APPLICATION_PREFERENCES").apply {
+            `package` = "org.lsposed.manager"
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        },
+        Intent(Intent.ACTION_VIEW, Uri.parse("lsposed://manager")).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) },
+        Intent(Intent.ACTION_VIEW, Uri.parse("lsposed://module/${context.packageName}")).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+    )
+
+    for (intent in actionIntents) {
+        val result = runCatching { context.startActivity(intent) }
+        if (result.isSuccess) return true
+    }
+
+    return false
+}
+
+/** 开源依赖组件实体模型 */
+private data class OpenSourceLib(
+    val name: String,
+    val license: String,
+    val desc: String,
+    val url: String
+)
+
+/** 开源致谢单行列表条目组件 */
+@Composable
+private fun OpenSourceCreditRow(
+    lib: OpenSourceLib,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = lib.name,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MiuixTheme.colorScheme.onSurface
+                )
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                        .padding(horizontal = 6.dp, vertical = 1.dp)
+                ) {
+                    Text(
+                        text = lib.license,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant
+                    )
+                }
+            }
+            Spacer(Modifier.height(3.dp))
+            Text(
+                text = lib.desc,
+                fontSize = 12.sp,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                lineHeight = 16.sp
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Icon(
+            imageVector = LucideIcons.ExternalLink,
+            contentDescription = "查看项目主页",
+            tint = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.45f),
+            modifier = Modifier.size(14.dp)
+        )
+    }
+}
+
+/**
+ * 超级岛流光呼吸灯横向彩色小色块选择胶囊栏
+ */
+@Composable
+private fun GlowColorPaletteChips(
+    selectedColor: String,
+    onColorSelected: (String) -> Unit
+) {
+    val glowColors = remember { SyncSettings.GLOW_COLORS }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "流光呼吸灯颜色",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                color = MiuixTheme.colorScheme.onSurface
+            )
+            val currentLabel = glowColors.firstOrNull { it.first.equals(selectedColor, ignoreCase = true) }?.second ?: "自定义"
+            Text(
+                text = currentLabel,
+                fontSize = 13.sp,
+                color = MiuixTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            glowColors.forEach { (colorHex, colorName) ->
+                val parsedColor = remember(colorHex) {
+                    try {
+                        Color(android.graphics.Color.parseColor(colorHex))
+                    } catch (_: Exception) {
+                        Color(0xFF006EFF)
+                    }
+                }
+                val isSelected = selectedColor.equals(colorHex, ignoreCase = true)
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(parsedColor)
+                        .border(
+                            width = if (isSelected) 3.dp else 1.5.dp,
+                            color = if (isSelected) MiuixTheme.colorScheme.onSurface.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.35f),
+                            shape = CircleShape
+                        )
+                        .clickable { onColorSelected(colorHex) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isSelected) {
+                        Icon(
+                            imageVector = LucideIcons.Check,
+                            contentDescription = colorName,
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 已安装应用条目模型 */
+private data class InstalledAppItem(
+    val name: String,
+    val packageName: String,
+    val iconBitmap: androidx.compose.ui.graphics.ImageBitmap?
+)
+
+/** 加载已安装桌面启动应用列表 */
+private fun loadInstalledApps(context: Context): List<InstalledAppItem> {
+    val pm = context.packageManager
+    val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+    val list = pm.queryIntentActivities(intent, 0)
+    return list.mapNotNull { resolveInfo ->
+        try {
+            val pkg = resolveInfo.activityInfo.packageName
+            val label = resolveInfo.loadLabel(pm).toString()
+            val drawable = resolveInfo.loadIcon(pm)
+            val bmp = if (drawable != null) {
+                val width = drawable.intrinsicWidth.coerceAtLeast(1).coerceAtMost(96)
+                val height = drawable.intrinsicHeight.coerceAtLeast(1).coerceAtMost(96)
+                val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+                val canvas = android.graphics.Canvas(bitmap)
+                drawable.setBounds(0, 0, canvas.width, canvas.height)
+                drawable.draw(canvas)
+                bitmap.asImageBitmap()
+            } else null
+            InstalledAppItem(name = label, packageName = pkg, iconBitmap = bmp)
+        } catch (_: Exception) {
+            null
+        }
+    }.distinctBy { it.packageName }.sortedBy { it.name.lowercase() }
+}
+
+/** 从已安装应用中挑选忽略黑名单弹窗 */
+@Composable
+private fun InstalledAppPickerDialog(
+    show: Boolean,
+    blacklistedPackages: List<String>,
+    onTogglePackage: (String) -> Unit,
+    onDismissRequest: () -> Unit
+) {
+    if (!show) return
+    val context = LocalContext.current
+    var searchQuery by remember { mutableStateOf("") }
+    var installedApps by remember { mutableStateOf<List<InstalledAppItem>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            installedApps = loadInstalledApps(context)
+            isLoading = false
+        }
+    }
+
+    val filteredApps = remember(installedApps, searchQuery) {
+        if (searchQuery.isBlank()) installedApps
+        else installedApps.filter {
+            it.name.contains(searchQuery, ignoreCase = true) ||
+            it.packageName.contains(searchQuery, ignoreCase = true)
+        }
+    }
+
+    WindowDialog(
+        show = show,
+        title = "选择要忽略的应用",
+        onDismissRequest = onDismissRequest
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+        ) {
+            Text(
+                text = "已勾选的应用在产生剪贴板复制时，将被自动跳过捕获与多端同步。",
+                fontSize = 12.sp,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                lineHeight = 16.sp
+            )
+            Spacer(Modifier.height(10.dp))
+
+            // 搜索框
+            val searchState = remember { TextFieldState() }
+            LaunchedEffect(searchState.text) {
+                searchQuery = searchState.text.toString().trim()
+            }
+            TextField(
+                state = searchState,
+                label = "搜索应用名称或包名…",
+                useLabelAsPlaceholder = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(Modifier.height(10.dp))
+
+            if (isLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "正在读取已安装应用列表…",
+                        fontSize = 13.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant
+                    )
+                }
+            } else if (filteredApps.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(160.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (searchQuery.isBlank()) "未检测到已安装应用" else "未找到匹配应用",
+                        fontSize = 13.sp,
+                        color = MiuixTheme.colorScheme.onBackgroundVariant
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 300.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(filteredApps, key = { it.packageName }) { app ->
+                        val isChecked = blacklistedPackages.contains(app.packageName)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (isChecked) MiuixTheme.colorScheme.primary.copy(alpha = 0.10f)
+                                    else MiuixTheme.colorScheme.surfaceContainer
+                                )
+                                .clickable { onTogglePackage(app.packageName) }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (app.iconBitmap != null) {
+                                Image(
+                                    bitmap = app.iconBitmap,
+                                    contentDescription = app.name,
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(MiuixTheme.colorScheme.surfaceContainerHigh),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = LucideIcons.Smartphone,
+                                        contentDescription = app.name,
+                                        modifier = Modifier.size(20.dp),
+                                        tint = MiuixTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = app.name,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MiuixTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = app.packageName,
+                                    fontSize = 11.sp,
+                                    color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.7f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (isChecked) MiuixTheme.colorScheme.primary
+                                        else MiuixTheme.colorScheme.surfaceContainerHigh
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (isChecked) {
+                                    Icon(
+                                        imageVector = LucideIcons.Check,
+                                        contentDescription = "已勾选",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+            Button(
+                onClick = onDismissRequest,
+                colors = ButtonDefaults.buttonColorsPrimary(),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("完成")
+            }
+        }
+    }
 }
