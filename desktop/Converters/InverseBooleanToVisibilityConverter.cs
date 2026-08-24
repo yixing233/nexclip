@@ -1,7 +1,7 @@
-using Microsoft.UI.Xaml;
+﻿using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Data;
 
-namespace SyncClipboard.Desktop.Converters;
+namespace NexClip.Desktop.Converters;
 
 /// <summary>bool → Visibility(WinUI 3 无内置,自实现)。</summary>
 public sealed class BooleanToVisibilityConverter : IValueConverter

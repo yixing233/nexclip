@@ -3,7 +3,8 @@
     <TargetFramework>net9.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>SyncClipboardServer</RootNamespace>
+    <RootNamespace>NexClipServer</RootNamespace>
+    <AssemblyName>NexClipServer</AssemblyName>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
   <ItemGroup>

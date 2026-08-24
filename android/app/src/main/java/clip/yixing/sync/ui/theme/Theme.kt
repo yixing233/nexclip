@@ -13,7 +13,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.ThemeController
 
 @Composable
-fun SyncClipboardTheme(content: @Composable () -> Unit) {
+fun NexClipTheme(content: @Composable () -> Unit) {
     val controller = remember { ThemeController(ColorSchemeMode.System) }
     val context = LocalContext.current
     // 在组合上下文中读取实际配色,主题切换时随重组自动更新

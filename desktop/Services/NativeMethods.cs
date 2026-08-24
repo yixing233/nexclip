@@ -1,4 +1,4 @@
-namespace SyncClipboard.Desktop.Services;
+﻿namespace NexClip.Desktop.Services;
 
 using System.Runtime.InteropServices;
 

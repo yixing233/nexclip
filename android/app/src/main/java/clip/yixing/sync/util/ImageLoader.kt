@@ -162,7 +162,7 @@ object ImageLoader {
 
         withContext(Dispatchers.Main) {
             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = ClipData.newUri(context.contentResolver, "SyncClipboard Image", uri)
+            val clip = ClipData.newUri(context.contentResolver, "NexClip Image", uri)
             cm.setPrimaryClip(clip)
         }
         true
@@ -190,6 +190,40 @@ object ImageLoader {
             context.startActivity(Intent.createChooser(intent, "分享图片").apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             })
+        }
+        true
+    }
+
+    /** 使用其他应用打开图片 (ACTION_VIEW 弹起应用选择器) */
+    suspend fun openImageWithOtherApp(context: Context, imageRef: String?, rawText: String?): Boolean = withContext(Dispatchers.IO) {
+        val bytes = getImageBytes(context, imageRef, rawText) ?: return@withContext false
+        val key = imageRef?.takeIf { it.isNotBlank() } ?: "view_${System.currentTimeMillis()}"
+        val file = getCachedFile(context, key)
+        if (!file.exists()) {
+            saveBytesToDisk(context, key, bytes)
+        }
+        val uri = runCatching {
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        }.getOrNull() ?: return@withContext false
+
+        withContext(Dispatchers.Main) {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "image/*")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                val chooser = Intent.createChooser(intent, "使用其他应用打开图片").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(chooser)
+            } catch (_: Exception) {
+                try {
+                    context.startActivity(intent)
+                } catch (_: Exception) {
+                    return@withContext false
+                }
+            }
         }
         true
     }

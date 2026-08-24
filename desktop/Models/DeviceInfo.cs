@@ -1,4 +1,4 @@
-namespace SyncClipboard.Desktop.Models;
+﻿namespace NexClip.Desktop.Models;
 
 /// <summary>设备列表项(GET /api/devices)。</summary>
 public sealed class DeviceInfo

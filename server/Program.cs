@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
-using SyncClipboardServer;
+using NexClipServer;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -8,8 +8,8 @@ var builder = WebApplication.CreateBuilder(args);
 var options = builder.Configuration.GetSection("AppSettings").Get<AppOptions>() ?? new AppOptions();
 var dbPath = Path.GetFullPath(options.DatabasePath);
 Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-Directory.CreateDirectory(Path.GetFullPath(options.ImageStoragePath));
 
+builder.Services.AddMemoryCache();
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton<LatencyTracker>();
 builder.Services.AddDbContext<AppDbContext>(o => o.UseSqlite($"Data Source={dbPath}"));
@@ -61,5 +61,5 @@ if (staticRoot is not null)
 app.MapControllers();
 app.MapHub<ClipboardHub>("/hubs/clipboard");
 
-app.Logger.LogInformation("SyncClipboard Server 启动, 端口 {Port}, 令牌已配置: {HasToken}", "5033", !string.IsNullOrEmpty(options.AuthToken) && options.AuthToken != "change-me");
+app.Logger.LogInformation("NexClip Server 启动, 端口 {Port}, 令牌已配置: {HasToken}", "5033", !string.IsNullOrEmpty(options.AuthToken) && options.AuthToken != "change-me");
 app.Run();

@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Page
-    x:Class="SyncClipboard.Desktop.Views.SettingsPage"
+    x:Class="NexClip.Desktop.Views.SettingsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:converters="using:SyncClipboard.Desktop.Converters"
-    xmlns:models="using:SyncClipboard.Desktop.Models"
-    xmlns:services="using:SyncClipboard.Desktop.Services"
-    xmlns:vm="using:SyncClipboard.Desktop.ViewModels"
+    xmlns:converters="using:NexClip.Desktop.Converters"
+    xmlns:models="using:NexClip.Desktop.Models"
+    xmlns:services="using:NexClip.Desktop.Services"
+    xmlns:vm="using:NexClip.Desktop.ViewModels"
     x:Name="SettingsRoot">
     <Page.Resources>
         <converters:BoolToBrushConverter x:Key="BoolToBrush" />
@@ -50,11 +50,29 @@
 
         <!-- ========== 内容区 ========== -->
         <Grid>
+            <VisualStateManager.VisualStateGroups>
+                <VisualStateGroup x:Name="LayoutStates">
+                    <VisualState x:Name="WideLayout">
+                        <VisualState.StateTriggers>
+                            <AdaptiveTrigger MinWindowWidth="560" />
+                        </VisualState.StateTriggers>
+                    </VisualState>
+                    <VisualState x:Name="NarrowLayout">
+                        <VisualState.StateTriggers>
+                            <AdaptiveTrigger MinWindowWidth="0" />
+                        </VisualState.StateTriggers>
+                        <VisualState.Setters>
+                            <Setter Target="SettingsContentPanel.Padding" Value="14,16,14,24" />
+                        </VisualState.Setters>
+                    </VisualState>
+                </VisualStateGroup>
+            </VisualStateManager.VisualStateGroups>
+
             <ScrollViewer
                 x:Name="ContentScroller"
-                HorizontalScrollBarVisibility="Hidden"
+                HorizontalScrollBarVisibility="Disabled"
                 HorizontalScrollMode="Disabled">
-                <StackPanel Padding="28,24,28,32" Spacing="20">
+                <StackPanel x:Name="SettingsContentPanel" Padding="28,24,28,32" Spacing="20">
 
                     <!-- ====== 同步:服务端连接 + 设备列表 ====== -->
                     <StackPanel x:Name="GroupServer" Spacing="20">
@@ -680,12 +698,17 @@
                                         <TextBlock Text="剪贴板热键" Style="{ThemeResource BodyStrongTextBlockStyle}" />
                                         <TextBlock Text="呼出 / 隐藏剪贴板窗口" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                     </StackPanel>
-                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                        <TextBox x:Name="HotKeyBox" Width="150" IsReadOnly="True"
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                        <TextBox x:Name="HotKeyBox" Width="140" IsReadOnly="True"
                                             PlaceholderText="点击后按组合键"
                                             Text="{Binding Hotkey, Mode=OneWay}"
+                                            GotFocus="HotKeyBox_GotFocus"
+                                            LostFocus="HotKeyBox_LostFocus"
                                             PreviewKeyDown="HotKeyBox_PreviewKeyDown" HorizontalAlignment="Right" />
-                                        <Button Content="重置" Command="{Binding ResetHotkeyCommand}" ToolTipService.ToolTip="恢复默认 Ctrl+Alt+S" />
+                                        <Button Command="{Binding ClearHotkeyCommand}" Padding="6" Background="Transparent" BorderThickness="0" CornerRadius="4" ToolTipService.ToolTip="清空热键">
+                                            <Image Source="{x:Bind services:Lucide.Trash}" Width="14" Height="14" />
+                                        </Button>
+                                        <Button Content="重置" Command="{Binding ResetHotkeyCommand}" ToolTipService.ToolTip="恢复默认 Alt+V" />
                                     </StackPanel>
                                 </Grid>
                                 <!-- 长久态错误(热键被占用):常驻显示,不自动消失 -->
@@ -703,12 +726,17 @@
                                         <TextBlock Text="设置热键" Style="{ThemeResource BodyStrongTextBlockStyle}" />
                                         <TextBlock Text="打开 NexClip 设置窗口" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                     </StackPanel>
-                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                        <TextBox x:Name="HotKeySettingsBox" Width="150" IsReadOnly="True"
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                        <TextBox x:Name="HotKeySettingsBox" Width="140" IsReadOnly="True"
                                             PlaceholderText="点击后按组合键"
                                             Text="{Binding HotkeySettings, Mode=OneWay}"
+                                            GotFocus="HotKeyBox_GotFocus"
+                                            LostFocus="HotKeyBox_LostFocus"
                                             PreviewKeyDown="HotKeySettingsBox_PreviewKeyDown" HorizontalAlignment="Right" />
-                                        <Button Content="重置" Command="{Binding ResetHotkeySettingsCommand}" ToolTipService.ToolTip="恢复默认 Ctrl+Alt+X" />
+                                        <Button Command="{Binding ClearHotkeySettingsCommand}" Padding="6" Background="Transparent" BorderThickness="0" CornerRadius="4" ToolTipService.ToolTip="清空热键">
+                                            <Image Source="{x:Bind services:Lucide.Trash}" Width="14" Height="14" />
+                                        </Button>
+                                        <Button Content="重置" Command="{Binding ResetHotkeySettingsCommand}" ToolTipService.ToolTip="恢复默认 Alt+X" />
                                     </StackPanel>
                                 </Grid>
                                 <!-- 长久态错误(热键被占用):常驻显示,不自动消失 -->
@@ -726,11 +754,16 @@
                                         <TextBlock Text="打开链接热键" Style="{ThemeResource BodyStrongTextBlockStyle}" />
                                         <TextBlock Text="在浏览器中打开最近复制的网址" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                     </StackPanel>
-                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                        <TextBox x:Name="HotKeyOpenUrlBox" Width="150" IsReadOnly="True"
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                        <TextBox x:Name="HotKeyOpenUrlBox" Width="140" IsReadOnly="True"
                                             PlaceholderText="点击后按组合键"
                                             Text="{Binding HotkeyOpenUrl, Mode=OneWay}"
+                                            GotFocus="HotKeyBox_GotFocus"
+                                            LostFocus="HotKeyBox_LostFocus"
                                             PreviewKeyDown="HotKeyOpenUrlBox_PreviewKeyDown" HorizontalAlignment="Right" />
+                                        <Button Command="{Binding ClearHotkeyOpenUrlCommand}" Padding="6" Background="Transparent" BorderThickness="0" CornerRadius="4" ToolTipService.ToolTip="清空热键">
+                                            <Image Source="{x:Bind services:Lucide.Trash}" Width="14" Height="14" />
+                                        </Button>
                                         <Button Content="重置" Command="{Binding ResetHotkeyOpenUrlCommand}" ToolTipService.ToolTip="恢复默认 Ctrl+Alt+O" />
                                     </StackPanel>
                                 </Grid>
@@ -747,6 +780,21 @@
                             CornerRadius="8"
                             Padding="20">
                             <StackPanel Spacing="8">
+                                <Border
+                                    Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="16,12">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Ctrl + 1 ~ 9" FontFamily="Consolas" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                        <TextBlock Grid.Column="1" Text="快速选定并直接粘贴前 9 项历史记录" Margin="16,0,0,0" VerticalAlignment="Center" />
+                                    </Grid>
+                                </Border>
                                 <Border
                                     Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
                                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
@@ -962,31 +1010,31 @@
 
                                 <!-- 信息行:标签 | 值 -->
                                 <StackPanel Spacing="14">
-                                    <Grid ColumnSpacing="32">
+                                    <Grid ColumnSpacing="24">
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="88" />
+                                            <ColumnDefinition Width="90" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Text="框架" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
                                         <StackPanel Grid.Column="1" Spacing="2">
-                                            <TextBlock Text="WinUI 3 · .NET 9" FontSize="13" />
-                                            <TextBlock Text="自包含 x64 桌面应用" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                            <TextBlock Text="WinUI 3 · .NET 9" FontSize="13" TextWrapping="Wrap" />
+                                            <TextBlock Text="自包含 x64 桌面应用" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" TextWrapping="Wrap" />
                                         </StackPanel>
                                     </Grid>
-                                    <Grid ColumnSpacing="32">
+                                    <Grid ColumnSpacing="24">
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="88" />
+                                            <ColumnDefinition Width="90" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Text="服务端" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
                                         <StackPanel Grid.Column="1" Spacing="2">
-                                            <TextBlock Text="NexClip Server (node)" FontSize="13" />
-                                            <TextBlock Text="SignalR 实时同步 · REST 接口" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                                            <TextBlock Text="NexClip Server (node)" FontSize="13" TextWrapping="Wrap" />
+                                            <TextBlock Text="SignalR 实时同步 · REST 接口" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" TextWrapping="Wrap" />
                                         </StackPanel>
                                     </Grid>
-                                    <Grid ColumnSpacing="32">
+                                    <Grid ColumnSpacing="24">
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="88" />
+                                            <ColumnDefinition Width="90" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Text="数据位置" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
@@ -997,14 +1045,14 @@
                                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                             TextWrapping="Wrap" />
                                     </Grid>
-                                    <Grid ColumnSpacing="32">
+                                    <Grid ColumnSpacing="24">
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="88" />
+                                            <ColumnDefinition Width="90" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Text="项目地址" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
-                                        <HyperlinkButton Click="OpenProject_Click" HorizontalAlignment="Left" Padding="0">
-                                            <TextBlock Text="github.com/yixing233/easy-clip" FontSize="13" />
+                                        <HyperlinkButton Grid.Column="1" Click="OpenProject_Click" HorizontalAlignment="Left" Padding="0">
+                                            <TextBlock Text="github.com/yixing233/easy-clip" FontSize="13" TextWrapping="Wrap" />
                                         </HyperlinkButton>
                                     </Grid>
                                 </StackPanel>
@@ -1013,7 +1061,7 @@
 
                                 <!-- 简介 -->
                                 <TextBlock
-                                    Text="开源跨平台剪贴板同步工具:复制内容后自动同步到多台设备,支持文本与图片,本机保留历史记录可随时检索与粘贴。"
+                                    Text="开源跨平台剪贴板同步工具：复制内容后自动同步到多台设备，支持文本与图片，本机保留历史记录可随时检索与粘贴。"
                                     Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                     TextWrapping="Wrap"
                                     LineHeight="20" />

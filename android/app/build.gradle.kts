@@ -63,7 +63,7 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.signalr)
     implementation(libs.kotlinx.coroutines.android)
-    implementation("io.github.d4viddf:hyperisland_kit:0.4.4")
+    implementation("com.xzakota.hyper.notification:focus-api:1.4")
 
     // Miuix
     implementation(libs.miuix.ui)

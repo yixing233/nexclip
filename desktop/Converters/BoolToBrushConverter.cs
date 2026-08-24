@@ -1,9 +1,9 @@
-using Microsoft.UI;
+﻿using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Data;
 using Microsoft.UI.Xaml.Media;
 
-namespace SyncClipboard.Desktop.Converters;
+namespace NexClip.Desktop.Converters;
 
 /// <summary>在线状态 → 颜色:在线=绿,离线=灰。</summary>
 public sealed class BoolToBrushConverter : IValueConverter

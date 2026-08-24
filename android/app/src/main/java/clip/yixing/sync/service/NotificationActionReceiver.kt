@@ -1,4 +1,4 @@
-package clip.yixing.sync.service
+﻿package clip.yixing.sync.service
 
 import android.content.BroadcastReceiver
 import android.content.ClipData
@@ -27,7 +27,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
                 if (!text.isNullOrBlank()) {
                     runCatching {
                         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cm.setPrimaryClip(ClipData.newPlainText("SyncClipboard", text))
+                        cm.setPrimaryClip(ClipData.newPlainText("NexClip", text))
                         Toast.makeText(context, "已复制最新内容", Toast.LENGTH_SHORT).show()
                     }
                 }

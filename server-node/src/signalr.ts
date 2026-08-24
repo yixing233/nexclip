@@ -169,8 +169,9 @@ export class SignalRHub {
   /** 定向推送:只通知指定 deviceId 的在线连接 */
   broadcastUpdatedTo(entry: unknown, deviceIds: ReadonlySet<string>): void {
     const msg = { type: 1, target: 'ClipboardUpdated', arguments: [entry] };
+    const lowerTargets = new Set([...deviceIds].map(id => id.toLowerCase()));
     for (const conn of this.conns.values()) {
-      if (conn.deviceId && deviceIds.has(conn.deviceId)) this.sendJson(conn.ws, msg);
+      if (conn.deviceId && lowerTargets.has(conn.deviceId.toLowerCase())) this.sendJson(conn.ws, msg);
     }
   }
 

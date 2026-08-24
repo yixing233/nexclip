@@ -18,6 +18,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import kotlinx.coroutines.delay
@@ -45,6 +46,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 @Composable
 fun BarBlurSurface(
     backdrop: LayerBackdrop,
+    modifier: Modifier = Modifier,
+    shape: Shape = RectangleShape,
     refreshKey: Any? = Unit,
     content: @Composable () -> Unit
 ) {
@@ -57,14 +60,14 @@ fun BarBlurSurface(
     }
     val barSurface = MiuixTheme.colorScheme.surface
     Box(
-        modifier = Modifier
+        modifier = modifier
             .graphicsLayer {
                 val t = tick
                 alpha = if (t % 2 == 0) 1f else 1f
             }
             .textureBlur(
                 backdrop = backdrop,
-                shape = RectangleShape,
+                shape = shape,
                 blurRadius = BlurDefaults.BlurRadius,
                 colors = BlurDefaults.blurColors(
                     blendColors = listOf(
@@ -88,6 +91,7 @@ fun BarBlurSurface(
 fun PageShell(
     title: String,
     modifier: Modifier = Modifier,
+    backdrop: LayerBackdrop? = null,
     bottomInnerPadding: Dp = Dp.Unspecified,
     navigationIcon: @Composable () -> Unit = {},
     actions: @Composable RowScope.() -> Unit = {},
@@ -95,12 +99,13 @@ fun PageShell(
 ) {
     val scrollBehavior = MiuixScrollBehavior()
     val barSurface = MiuixTheme.colorScheme.surface
-    val pageBackdrop = rememberLayerBackdrop(
+    val internalBackdrop = rememberLayerBackdrop(
         onDraw = {
             drawRect(barSurface)
             drawContent()
         }
     )
+    val pageBackdrop = backdrop ?: internalBackdrop
     Scaffold(
         modifier = modifier,
         topBar = {

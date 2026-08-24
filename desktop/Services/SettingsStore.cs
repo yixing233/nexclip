@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-namespace SyncClipboard.Desktop.Services;
+namespace NexClip.Desktop.Services;
 
 /// <summary>
 /// 设置存储:%APPDATA%/SyncClipboard/settings.json。
@@ -42,21 +42,51 @@ public sealed class SettingsStore
     public int RetentionDays { get; set; } = 0;
     /// <summary>普通应用粘贴键:CtrlV(默认) | ShiftInsert;Chromium/Electron 固定使用 CtrlV。</summary>
     public string PasteKey { get; set; } = "CtrlV";
-    /// <summary>数据储存目录(空=默认 %LOCALAPPDATA%/SyncClipboard)。</summary>
+    /// <summary>数据储存目录(空=默认 %LOCALAPPDATA%/NexClip)。</summary>
     public string StorageDir { get; set; } = "";
     /// <summary>剪贴板窗口尺寸记忆(0=未记忆,首次显示用默认宽度=最小宽度)。</summary>
     public double WindowWidth { get; set; }
     public double WindowHeight { get; set; }
 
-    private static readonly string Dir = Path.Combine(
+    private static readonly string LegacyDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "SyncClipboard");
+    private static readonly string Dir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "NexClip");
     private static readonly string FilePath = Path.Combine(Dir, "settings.json");
 
-    /// <summary>默认数据目录:%LOCALAPPDATA%/SyncClipboard。</summary>
+    /// <summary>默认数据目录:%LOCALAPPDATA%/NexClip。</summary>
     public static string DefaultStorageDir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "NexClip");
+
+    private static readonly string LegacyDefaultStorageDir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "SyncClipboard");
+
+    public static void TryMigrateLegacyDirectories()
+    {
+        try
+        {
+            // 迁移 Roaming 配置 (settings.json)
+            if (Directory.Exists(LegacyDir) && !Directory.Exists(Dir))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(Dir)!);
+                Directory.Move(LegacyDir, Dir);
+            }
+            // 迁移 LocalAppData (history.db, app_icons, images)
+            if (Directory.Exists(LegacyDefaultStorageDir) && !Directory.Exists(DefaultStorageDir))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(DefaultStorageDir)!);
+                Directory.Move(LegacyDefaultStorageDir, DefaultStorageDir);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"迁移旧数据目录失败: {ex.Message}");
+        }
+    }
 
     /// <summary>实际使用的数据目录:设置项优先,为空则用默认目录。</summary>
     public string ResolveStorageDir()
@@ -84,6 +114,7 @@ public sealed class SettingsStore
 
     public void Load()
     {
+        TryMigrateLegacyDirectories();
         var saveMigratedSettings = false;
         try
         {
@@ -123,10 +154,10 @@ public sealed class SettingsStore
             else
             {
                 PasteKey = dto.PasteKey ?? PasteKey;
+            }
             StorageDir = dto.StorageDir ?? StorageDir;
             WindowWidth = dto.WindowWidth ?? WindowWidth;
             WindowHeight = dto.WindowHeight ?? WindowHeight;
-            }
         }
         catch (Exception ex)
         {

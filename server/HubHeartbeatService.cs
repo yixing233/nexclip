@@ -1,6 +1,6 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 
-namespace SyncClipboardServer;
+namespace NexClipServer;
 
 /// 定时刷新在线设备心跳:hub 连接存续期间设备保持 online
 public class HubHeartbeatService(IServiceScopeFactory scopeFactory, ILogger<HubHeartbeatService> log) : BackgroundService

@@ -18,5 +18,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "SyncClipboard"
+rootProject.name = "NexClip"
 include(":app")

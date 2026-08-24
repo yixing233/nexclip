@@ -4,10 +4,10 @@ using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
-using SyncClipboard.Desktop.Models;
-using SyncClipboard.Desktop.Services;
+using NexClip.Desktop.Models;
+using NexClip.Desktop.Services;
 
-namespace SyncClipboard.Desktop.ViewModels;
+namespace NexClip.Desktop.ViewModels;
 
 /// <summary>历史条目卡片 VM(参考设计:元信息行 + 预览 + 选中态操作)。</summary>
 public partial class HistoryItemViewModel : ObservableObject
@@ -26,6 +26,18 @@ public partial class HistoryItemViewModel : ObservableObject
 
     [ObservableProperty]
     private bool starred;
+
+    [ObservableProperty]
+    private int indexInList;
+
+    public string? ShortcutHint => IndexInList is >= 1 and <= 9 ? $"Ctrl+{IndexInList}" : null;
+    public bool HasShortcutHint => IndexInList is >= 1 and <= 9;
+
+    partial void OnIndexInListChanged(int value)
+    {
+        OnPropertyChanged(nameof(ShortcutHint));
+        OnPropertyChanged(nameof(HasShortcutHint));
+    }
 
     public IRelayCommand CopyCommand { get; }
     public IRelayCommand DeleteCommand { get; }

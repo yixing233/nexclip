@@ -1,17 +1,19 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 
-namespace SyncClipboardServer;
+namespace NexClipServer;
 
 public class AppOptions
 {
     public string AuthToken { get; set; } = "change-me";
-    public int MaxHistoryCount { get; set; } = 1000;
-    public string DatabasePath { get; set; } = "data/syncclipboard.db";
+    public int MaxHistoryCount { get; set; } = 1;
+    public string DatabasePath { get; set; } = "data/nexclip.db";
     public string ImageStoragePath { get; set; } = "data/images";
     public long MaxImageSizeBytes { get; set; } = 10 * 1024 * 1024;
+    public int ImageCacheTtlMinutes { get; set; } = 15;
     public int OnlineThresholdSeconds { get; set; } = 120;
     public DateTime StartedAt { get; } = DateTime.UtcNow;
 }
@@ -71,6 +73,7 @@ public static class IpUtil
 public class ClipboardService(
     AppDbContext db,
     IHubContext<ClipboardHub> hub,
+    IMemoryCache cache,
     AppOptions options,
     ILogger<ClipboardService> log)
 {
@@ -81,7 +84,7 @@ public class ClipboardService(
     public AppOptions Options => _opt;
 
     /// 文本上传:内容 hash 去重,返回 (entry, unchanged);broadcast=false 时不广播,由调用方决定通知范围
-    public async Task<(ClipboardEntry? entry, bool unchanged)> UploadTextAsync(string text, string deviceId, string deviceName, string? platform, string? version, string? ip, bool broadcast = true)
+    public async Task<(ClipboardEntry? entry, bool unchanged)> UploadTextAsync(string text, string deviceId, string deviceName, string? platform, string? version, string? ip, bool broadcast = true, bool isManual = false)
     {
         var hash = Hash(text);
         var current = await GetCurrentAsync();
@@ -95,28 +98,36 @@ public class ClipboardService(
             ContentHash = hash,
             DeviceId = deviceId,
             DeviceName = deviceName,
+            IsManual = isManual,
             CreatedAt = DateTime.UtcNow,
         };
         db.Entries.Add(entry);
         await TouchDeviceAsync(deviceId, deviceName, platform, version, ip);
-        db.Activities.Add(new ActivityLog { Action = "push", DeviceName = deviceName, Content = Truncate(text, 120), CreatedAt = DateTime.UtcNow });
+        db.Activities.Add(new ActivityLog { Action = isManual ? "transfer" : "push", DeviceName = deviceName, Content = Truncate(text, 120), CreatedAt = DateTime.UtcNow });
         await db.SaveChangesAsync();
         await TrimHistoryAsync();
         if (broadcast) await BroadcastAsync(entry);
         return (entry, false);
     }
 
-    /// 图片上传:文件落盘 + 元数据入库
-    public async Task<ClipboardEntry> UploadImageAsync(Stream file, string fileName, string deviceId, string deviceName, string? ip)
+    /// 图片上传:纯内存短时中转(零磁盘写入) + 元数据入库
+    public async Task<ClipboardEntry> UploadImageAsync(Stream file, string fileName, string deviceId, string deviceName, string? ip, bool isManual = false)
     {
         var ext = Path.GetExtension(fileName);
         if (string.IsNullOrEmpty(ext)) ext = ".png";
-        var dir = Path.Combine(_opt.ImageStoragePath, DateTime.UtcNow.ToString("yyyyMMdd"));
-        Directory.CreateDirectory(dir);
         var rel = $"{DateTime.UtcNow:yyyyMMdd}/{Guid.NewGuid():N}{ext.ToLowerInvariant()}";
-        var full = Path.Combine(_opt.ImageStoragePath, rel);
-        await using (var fsOut = File.Create(full))
-            await file.CopyToAsync(fsOut);
+
+        using var ms = new MemoryStream();
+        await file.CopyToAsync(ms);
+        var bytes = ms.ToArray();
+
+        // 写入短时内存缓存,到期后自动由 GC 释放(零磁盘写入)
+        var cacheOptions = new MemoryCacheEntryOptions
+        {
+            AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(_opt.ImageCacheTtlMinutes > 0 ? _opt.ImageCacheTtlMinutes : 15),
+            Size = bytes.Length
+        };
+        cache.Set($"img:{rel}", bytes, cacheOptions);
 
         var entry = new ClipboardEntry
         {
@@ -126,11 +137,12 @@ public class ClipboardService(
             ContentHash = Hash(rel),
             DeviceId = deviceId,
             DeviceName = deviceName,
+            IsManual = isManual,
             CreatedAt = DateTime.UtcNow,
         };
         db.Entries.Add(entry);
         await TouchDeviceAsync(deviceId, deviceName, null, null, ip);
-        db.Activities.Add(new ActivityLog { Action = "push", DeviceName = deviceName, Content = Truncate(fileName, 120), CreatedAt = DateTime.UtcNow });
+        db.Activities.Add(new ActivityLog { Action = isManual ? "transfer" : "push", DeviceName = deviceName, Content = Truncate(fileName, 120), CreatedAt = DateTime.UtcNow });
         await db.SaveChangesAsync();
         await TrimHistoryAsync();
         await BroadcastAsync(entry);
@@ -182,8 +194,46 @@ public class ClipboardService(
         await db.SaveChangesAsync();
     }
 
+    /// 从内存读取图片(纯内存中转,零磁盘 I/O,兼容历史本地文件兜底)
+    public (byte[] bytes, string contentType)? GetImage(string rel)
+    {
+        if (cache.TryGetValue($"img:{rel}", out byte[]? cached) && cached is not null)
+        {
+            return (cached, GetContentType(rel));
+        }
+
+        // 旧磁盘文件向后兼容兜底
+        var root = Path.GetFullPath(_opt.ImageStoragePath);
+        var full = Path.GetFullPath(Path.Combine(root, rel));
+        if (full.StartsWith(root, StringComparison.OrdinalIgnoreCase) && File.Exists(full))
+        {
+            try
+            {
+                var bytes = File.ReadAllBytes(full);
+                return (bytes, GetContentType(full));
+            }
+            catch { }
+        }
+        return null;
+    }
+
+    public static string GetContentType(string path)
+    {
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext switch
+        {
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            ".bmp" => "image/bmp",
+            _ => "application/octet-stream",
+        };
+    }
+
     private void TryDeleteImage(string rel)
     {
+        cache.Remove($"img:{rel}");
         try
         {
             var full = Path.GetFullPath(Path.Combine(_opt.ImageStoragePath, rel));
@@ -221,8 +271,9 @@ public class ClipboardService(
             await hub.Clients.All.SendAsync("ClipboardUpdated", entry);
             return;
         }
+        var targets = targetDeviceIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var connectionIds = ClipboardHub.ActiveDevices
-            .Where(kv => targetDeviceIds.Contains(kv.Value))
+            .Where(kv => targets.Contains(kv.Value))
             .Select(kv => kv.Key)
             .ToList();
         if (connectionIds.Count > 0)

@@ -1,10 +1,10 @@
-using CommunityToolkit.Mvvm.ComponentModel;
+﻿using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.UI.Xaml.Media.Imaging;
-using SyncClipboard.Desktop.Models;
-using SyncClipboard.Desktop.Services;
+using NexClip.Desktop.Models;
+using NexClip.Desktop.Services;
 
-namespace SyncClipboard.Desktop.ViewModels;
+namespace NexClip.Desktop.ViewModels;
 
 /// <summary>剪贴板页 VM:连接状态 + 当前剪贴板 + 快速同步 + 手动同步当前剪贴板。</summary>
 public partial class MainViewModel : ObservableObject

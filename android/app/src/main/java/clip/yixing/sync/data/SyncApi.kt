@@ -17,6 +17,7 @@ data class ClipboardEntry(
     val deviceId: String,
     val deviceName: String?,
     val createdAt: String,
+    val isManual: Boolean = false,
 ) {
     val isImage: Boolean get() = type == "Image"
 }
@@ -69,6 +70,7 @@ class SyncApi(
         deviceId = o.optString("deviceId"),
         deviceName = if (o.isNull("deviceName")) null else o.optString("deviceName"),
         createdAt = o.optString("createdAt"),
+        isManual = o.optBoolean("isManual", false),
     )
 
     private fun execute(req: Request): okhttp3.Response = try {
@@ -131,15 +133,39 @@ class SyncApi(
         deviceName: String,
         platform: String = "Android",
         version: String = android.os.Build.VERSION.RELEASE,
+        isManual: Boolean = false,
     ): ClipboardEntry {
         val json = JSONObject().apply {
             put("type", "Text"); put("text", text)
             put("deviceId", deviceId); put("deviceName", deviceName)
             put("platform", platform); put("version", version)
+            put("isManual", isManual)
         }.toString()
         val req = builder("PUT", "/api/clipboard")
             .header("Content-Type", "application/json")
             .put(json.toRequestBody("application/json".toMediaType()))
+            .build()
+        val resp = execute(req)
+        resp.use { return parseEntry(JSONObject(it.body?.string() ?: "{}")) }
+    }
+
+    /** POST /api/clipboard/send → 发送给指定目标设备 */
+    fun sendToDevices(
+        text: String,
+        deviceId: String,
+        deviceName: String,
+        targetDeviceIds: List<String>,
+    ): ClipboardEntry {
+        val json = JSONObject().apply {
+            put("text", text)
+            put("deviceId", deviceId)
+            put("deviceName", deviceName)
+            put("deviceIds", JSONArray(targetDeviceIds))
+            put("isManual", true)
+        }.toString()
+        val req = builder("POST", "/api/clipboard/send")
+            .header("Content-Type", "application/json")
+            .post(json.toRequestBody("application/json".toMediaType()))
             .build()
         val resp = execute(req)
         resp.use { return parseEntry(JSONObject(it.body?.string() ?: "{}")) }
@@ -254,15 +280,17 @@ class SyncApi(
         = pair(code, deviceId, deviceName, platform)
 
     /** POST /api/clipboard/image(multipart) */
-    fun uploadImage(pngBytes: ByteArray, deviceId: String, deviceName: String): ClipboardEntry {
-        val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+    fun uploadImage(pngBytes: ByteArray, deviceId: String, deviceName: String, isManual: Boolean = false): ClipboardEntry {
+        val builder = MultipartBody.Builder().setType(MultipartBody.FORM)
             .addFormDataPart("file", "clipboard.png", pngBytes.toRequestBody("image/png".toMediaType()))
             .addFormDataPart("deviceId", deviceId)
             .addFormDataPart("deviceName", deviceName)
             .addFormDataPart("platform", "Android")
             .addFormDataPart("version", android.os.Build.VERSION.RELEASE)
-            .build()
-        val req = builder("POST", "/api/clipboard/image").post(body).build()
+        if (isManual) {
+            builder.addFormDataPart("isManual", "true")
+        }
+        val req = builder("POST", "/api/clipboard/image").post(builder.build()).build()
         val resp = execute(req)
         resp.use { return parseEntry(JSONObject(it.body?.string() ?: "{}")) }
     }

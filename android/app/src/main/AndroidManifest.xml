@@ -12,6 +12,28 @@
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- 包可见性声明：允许检测与拉起 LSPosed / Xposed / 模块管理器与 Root 管理器 -->
+    <queries>
+        <package android:name="org.lsposed.manager" />
+        <package android:name="org.lsposed.manager.v1" />
+        <package android:name="io.github.lsposed.manager" />
+        <package android:name="org.lsposed.manager.zygisk" />
+        <package android:name="org.meowcat.edxposed.manager" />
+        <package android:name="de.robv.android.xposed.installer" />
+        <package android:name="top.canyie.dreamland.manager" />
+        <package android:name="me.weishu.kernelsu" />
+        <package android:name="com.rifsxd.ksu" />
+        <package android:name="me.bmax.apatch" />
+        <package android:name="com.topjohnwu.magisk" />
+        <package android:name="io.github.huskydg.magisk" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.APPLICATION_PREFERENCES" />
+        </intent>
+    </queries>
+
     <application
         android:name=".SyncApp"
         android:label="@string/app_name"

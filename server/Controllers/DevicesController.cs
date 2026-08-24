@@ -1,7 +1,7 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
-namespace SyncClipboardServer;
+namespace NexClipServer;
 
 [ApiController]
 [Route("api/devices")]

@@ -8,7 +8,7 @@ import type { SignalRHub } from './signalr.js';
 
 export interface EntryDto {
   id: number; type: string; text: string | null; imageRef: string | null;
-  deviceId: string; deviceName: string | null; createdAt: string;
+  deviceId: string; deviceName: string | null; isManual: boolean; createdAt: string;
 }
 
 /** 配对业务错误(status + 中文提示,与设计文档错误码一致) */
@@ -112,7 +112,7 @@ export class SyncService {
   private toDto(e: EntryRow): EntryDto {
     return {
       id: e.Id, type: e.Type, text: e.Text, imageRef: e.ImageRef,
-      deviceId: e.DeviceId, deviceName: e.DeviceName, createdAt: toIso(e.CreatedAt),
+      deviceId: e.DeviceId, deviceName: e.DeviceName, isManual: Boolean(e.IsManual), createdAt: toIso(e.CreatedAt),
     };
   }
 
@@ -179,6 +179,7 @@ export class SyncService {
     text: string, deviceId: string, deviceName: string,
     platform: string | null, version: string | null, ip: string | null,
     broadcast: boolean,
+    isManual: boolean = false,
   ): { entry: EntryDto; unchanged: boolean } {
     const hash = sha256Hex(text);
     const current = this.getCurrent();
@@ -186,11 +187,11 @@ export class SyncService {
       return { entry: this.toDto(current), unchanged: true };
     }
     const now = dbNow();
-    this.db.prepare(`INSERT INTO "Entries" ("Type","Text","ImageRef","ContentHash","DeviceId","DeviceName","CreatedAt") VALUES ('Text', ?, NULL, ?, ?, ?, ?)`)
-      .run(text, hash, deviceId, deviceName, now);
+    this.db.prepare(`INSERT INTO "Entries" ("Type","Text","ImageRef","ContentHash","DeviceId","DeviceName","IsManual","CreatedAt") VALUES ('Text', ?, NULL, ?, ?, ?, ?, ?)`)
+      .run(text, hash, deviceId, deviceName, isManual ? 1 : 0, now);
     const entry = this.getById(this.lastInsertId())!;
     this.touchDevice(deviceId, deviceName, platform, version, ip);
-    this.addActivity('push', deviceName, truncate(text, 120), now, deviceId);
+    this.addActivity(isManual ? 'transfer' : 'push', deviceName, truncate(text, 120), now, deviceId);
     this.trimHistory();
     if (broadcast) this.hub.broadcastUpdated(this.toDto(entry));
     return { entry: this.toDto(entry), unchanged: false };
@@ -202,7 +203,7 @@ export class SyncService {
   }
 
   // ---------- 图片上传 ----------
-  uploadImage(fileName: string, data: Buffer, deviceId: string, deviceName: string, ip: string | null, platform: string | null = null, version: string | null = null): EntryDto {
+  uploadImage(fileName: string, data: Buffer, deviceId: string, deviceName: string, ip: string | null, platform: string | null = null, version: string | null = null, isManual: boolean = false): EntryDto {
     const hash = sha256Bytes(data);
     const current = this.getCurrent();
     if (current && current.Type === 'Image' && current.ContentHash === hash) {
@@ -218,11 +219,11 @@ export class SyncService {
     const full = join(this.getImageStoragePath(), rel);
     writeFileSync(full, data);
     const now = dbNow();
-    this.db.prepare(`INSERT INTO "Entries" ("Type","Text","ImageRef","ContentHash","DeviceId","DeviceName","CreatedAt") VALUES ('Image', ?, ?, ?, ?, ?, ?)`)
-      .run(fileName, rel, hash, deviceId, deviceName, now);
+    this.db.prepare(`INSERT INTO "Entries" ("Type","Text","ImageRef","ContentHash","DeviceId","DeviceName","IsManual","CreatedAt") VALUES ('Image', ?, ?, ?, ?, ?, ?, ?)`)
+      .run(fileName, rel, hash, deviceId, deviceName, isManual ? 1 : 0, now);
     const entry = this.getById(this.lastInsertId())!;
     this.touchDevice(deviceId, deviceName, platform, version, ip);
-    this.addActivity('push', deviceName, truncate(fileName, 120), now, deviceId);
+    this.addActivity(isManual ? 'transfer' : 'push', deviceName, truncate(fileName, 120), now, deviceId);
     this.trimHistory();
     this.hub.broadcastUpdated(this.toDto(entry));
     return this.toDto(entry);

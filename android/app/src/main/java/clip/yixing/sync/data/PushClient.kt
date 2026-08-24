@@ -136,6 +136,7 @@ class PushClient(
             deviceId = map["deviceId"] as? String ?: "",
             deviceName = map["deviceName"] as? String,
             createdAt = map["createdAt"] as? String ?: "",
+            isManual = (map["isManual"] as? Boolean) ?: false,
         )
     } catch (_: Exception) {
         null

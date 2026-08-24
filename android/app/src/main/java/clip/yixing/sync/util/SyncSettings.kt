@@ -24,7 +24,20 @@ object SyncSettings {
     const val KEY_SEARCH_HISTORY = "search_history"
 
     const val KEY_FILTER_KEYWORDS = "filter_keywords"
+    const val KEY_FILTER_PACKAGES = "filter_packages"
     const val KEY_IGNORE_SENSITIVE = "ignore_sensitive"
+
+    const val KEY_HYPEROS_OUTER_GLOW = "hyperos_outer_glow"
+    const val KEY_HYPEROS_GLOW_COLOR = "hyperos_glow_color"
+
+    val GLOW_COLORS = listOf(
+        "#006EFF" to "经典科技蓝",
+        "#10B981" to "灵动翡翠绿",
+        "#8B5CF6" to "暗夜魅影紫",
+        "#F59E0B" to "活力耀阳橙",
+        "#EF4444" to "极光珊瑚红",
+        "#EC4899" to "流光樱花粉"
+    )
 
     const val DEFAULT_MAX_HISTORY = 50
     val MAX_HISTORY_OPTIONS = intArrayOf(20, 50, 100, 200)
@@ -54,6 +67,20 @@ object SyncSettings {
 
     fun setNotificationStyle(context: Context, style: NotificationStyle) {
         prefs(context).edit().putString(KEY_NOTIFICATION_STYLE, style.key).apply()
+    }
+
+    fun isHyperOsOuterGlow(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_HYPEROS_OUTER_GLOW, true)
+
+    fun setHyperOsOuterGlow(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_HYPEROS_OUTER_GLOW, enabled).apply()
+    }
+
+    fun hyperOsGlowColor(context: Context): String =
+        prefs(context).getString(KEY_HYPEROS_GLOW_COLOR, "#006EFF") ?: "#006EFF"
+
+    fun setHyperOsGlowColor(context: Context, color: String) {
+        prefs(context).edit().putString(KEY_HYPEROS_GLOW_COLOR, color).apply()
     }
 
     fun prefs(context: Context): SharedPreferences =
@@ -101,8 +128,23 @@ object SyncSettings {
         return id
     }
 
-    fun deviceName(context: Context): String =
-        prefs(context).getString(KEY_DEVICE_NAME, null) ?: android.os.Build.MODEL
+    fun deviceName(context: Context): String {
+        val custom = prefs(context).getString(KEY_DEVICE_NAME, null)
+        if (!custom.isNullOrBlank()) return custom
+        val model = android.os.Build.MODEL.orEmpty()
+        val brand = android.os.Build.BRAND.orEmpty()
+        return when {
+            model.startsWith("23127") -> "小米 14"
+            model.startsWith("23116") -> "小米 14 Pro"
+            model.startsWith("24031") -> "小米 14 Ultra"
+            model.startsWith("24129") -> "小米 15"
+            model.startsWith("2210132") -> "小米 13"
+            model.startsWith("2201123") -> "小米 12"
+            brand.isNotBlank() && !model.startsWith(brand, ignoreCase = true) -> "$brand $model"
+            model.isNotBlank() -> model
+            else -> "Android 手机"
+        }
+    }
 
     fun setDeviceName(context: Context, name: String) {
         prefs(context).edit().putString(KEY_DEVICE_NAME, name.trim()).apply()
@@ -162,6 +204,34 @@ object SyncSettings {
         prefs(context).edit().remove(KEY_FILTER_KEYWORDS).apply()
     }
 
+    fun filterPackages(context: Context): List<String> {
+        val raw = prefs(context).getString(KEY_FILTER_PACKAGES, null) ?: return emptyList()
+        return raw.split('\n').filter { it.isNotBlank() }
+    }
+
+    fun addFilterPackage(context: Context, packageName: String) {
+        val p = packageName.trim()
+        if (p.isEmpty()) return
+        val current = filterPackages(context).filter { it != p }
+        val updated = listOf(p) + current
+        prefs(context).edit().putString(KEY_FILTER_PACKAGES, updated.joinToString("\n")).apply()
+    }
+
+    fun removeFilterPackage(context: Context, packageName: String) {
+        val updated = filterPackages(context).filter { it != packageName.trim() }
+        prefs(context).edit().putString(KEY_FILTER_PACKAGES, updated.joinToString("\n")).apply()
+    }
+
+    fun clearFilterPackages(context: Context) {
+        prefs(context).edit().remove(KEY_FILTER_PACKAGES).apply()
+    }
+
+    fun isPackageFiltered(context: Context, packageName: String?): Boolean {
+        if (packageName.isNullOrBlank()) return false
+        val packages = filterPackages(context)
+        return packages.any { it.equals(packageName, ignoreCase = true) }
+    }
+
     fun ignoreSensitive(context: Context): Boolean =
         prefs(context).getBoolean(KEY_IGNORE_SENSITIVE, false)
 
@@ -169,8 +239,9 @@ object SyncSettings {
         prefs(context).edit().putBoolean(KEY_IGNORE_SENSITIVE, enabled).apply()
     }
 
-    /** 检查内容是否命中黑名单规则 */
-    fun isContentFiltered(context: Context, text: String): Boolean {
+    /** 检查内容是否命中黑名单规则 (包括关键词与来源包名) */
+    fun isContentFiltered(context: Context, text: String, packageName: String? = null): Boolean {
+        if (isPackageFiltered(context, packageName)) return true
         if (text.isBlank()) return false
         val keywords = filterKeywords(context)
         for (kw in keywords) {

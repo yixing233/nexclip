@@ -1,6 +1,6 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 
-namespace SyncClipboardServer;
+namespace NexClipServer;
 
 /// 兼容旧协议:GET/PUT /SyncClipboard.json(仅文本,过渡用)
 [ApiController]

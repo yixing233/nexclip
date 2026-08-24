@@ -1,4 +1,4 @@
-// API 类型与请求封装(与 SyncClipboard Server 契约一致)
+// API 类型与请求封装(与 NexClip Server 契约一致)
 // 请求走同源 /api,由服务端静态托管或 Vite 代理转发;Bearer 令牌鉴权
 
 export type ClipType = 'Text' | 'Image';

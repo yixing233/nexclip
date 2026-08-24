@@ -1,7 +1,7 @@
-using System;
+﻿using System;
 using Microsoft.UI.Xaml.Data;
 
-namespace SyncClipboard.Desktop.Converters;
+namespace NexClip.Desktop.Converters;
 
 /// <summary>把 0~1 的 double 格式化为百分比文本(如 0.85 -&gt; 85%)。</summary>
 public sealed class PercentConverter : IValueConverter

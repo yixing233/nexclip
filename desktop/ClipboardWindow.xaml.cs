@@ -1,13 +1,13 @@
-using Microsoft.UI.Dispatching;
+﻿using Microsoft.UI.Dispatching;
 using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
-using SyncClipboard.Desktop.Services;
+using NexClip.Desktop.Services;
 using System.Windows.Automation;
 using Windows.Foundation;
 using Windows.Graphics;
 
-namespace SyncClipboard.Desktop;
+namespace NexClip.Desktop;
 
 /// <summary>
 /// 剪贴板主窗口:轻量工具窗——无标题栏/无窗口按钮/不占任务栏(WS_EX_TOOLWINDOW);
@@ -154,11 +154,12 @@ public sealed partial class ClipboardWindow : Window
     {
         if (_hideTimer is not null) return;
         _hideTimer = DispatcherQueue.GetForCurrentThread().CreateTimer();
-        _hideTimer.Interval = TimeSpan.FromMilliseconds(200);
+        _hideTimer.Interval = TimeSpan.FromMilliseconds(50);
         _hideTimer.Tick += (_, _) =>
         {
             _hidePending = false;
-            if (!App.IsExiting && AppWindow.IsVisible)
+            _hideTimer?.Stop();
+            if (!App.IsExiting)
             {
                 PersistWindowSize();
                 AppWindow.Hide();
@@ -205,8 +206,12 @@ public sealed partial class ClipboardWindow : Window
         try
         {
             var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-            // 外部点击后的延迟隐藏尚未执行:快捷键语义应为“重新呼出”,而不是再次隐藏。
-            var shouldShow = hidePending || !NativeMethods.IsWindowVisible(hwnd);
+            var isVisible = NativeMethods.IsWindowVisible(hwnd);
+            var isForeground = NativeMethods.GetForegroundWindow() == hwnd;
+
+            // 只有当窗口已可见且处于当前前台获得焦点时，按热键才是“收起/隐藏”；
+            // 若窗口已隐藏、或处于失焦/待隐藏/后台状态，按热键一律直接“呼出并激活”。
+            var shouldShow = !isVisible || !isForeground || hidePending;
             if (!shouldShow)
             {
                 PersistWindowSize();
@@ -217,14 +222,13 @@ public sealed partial class ClipboardWindow : Window
             }
             else
             {
-                // 显示保护期:窗口从隐藏恢复时会有焦点竞争,忽略随后短时间内的假 Deactivated
-                _showGuardUntil = DateTime.UtcNow.AddMilliseconds(600);
+                // 显示保护期:窗口从隐藏恢复时会有瞬时焦点竞争,忽略随后极短时间内的假 Deactivated (150ms 足够)
+                _showGuardUntil = DateTime.UtcNow.AddMilliseconds(150);
                 CapturePasteTarget();
                 PositionAtShow();
                 AppWindow.Show();
                 Activate();
                 // 热键/托盘回调上下文里 Activate 可能被"前台锁定"拒绝;
-                // 窗口未获得焦点则失焦自动隐藏不会触发(窗口会一直挂着,再按热键变成隐藏,用户感觉"失效")。
                 // 此处强制置顶前台(无按键注入,避免 Alt 模拟破坏 Chromium 页面焦点)。
                 if (NativeMethods.GetForegroundWindow() != hwnd)
                 {
@@ -248,7 +252,7 @@ public sealed partial class ClipboardWindow : Window
         try
         {
             var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-            _showGuardUntil = DateTime.UtcNow.AddMilliseconds(2000);
+            _showGuardUntil = DateTime.UtcNow.AddMilliseconds(150);
             CapturePasteTarget();
             PositionAtShow();
             AppWindow.Show();

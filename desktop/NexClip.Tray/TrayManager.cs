@@ -1,7 +1,7 @@
-using System.Drawing;
+﻿using System.Drawing;
 using System.Windows.Forms;
 
-namespace SyncClipboard.Tray;
+namespace NexClip.Tray;
 
 public sealed class TrayManager : IDisposable
 {

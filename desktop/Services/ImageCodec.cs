@@ -3,7 +3,7 @@ using Windows.Graphics.Imaging;
 using Windows.Storage;
 using Windows.Storage.Streams;
 
-namespace SyncClipboard.Desktop.Services;
+namespace NexClip.Desktop.Services;
 
 /// <summary>
 /// 剪贴板图片编解码(WIC)。所有方法须在 UI 线程调用(剪贴板 API 要求)。
@@ -16,7 +16,7 @@ public static class ImageCodec
 
     private static string _cacheDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "SyncClipboard", "images");
+        "NexClip", "images");
 
     /// <summary>图片缓存目录(随数据储存目录初始化)。</summary>
     public static string CacheDir => _cacheDir;
@@ -41,40 +41,69 @@ public static class ImageCodec
         if (!content.Contains(StandardDataFormats.Bitmap)) return null;
         var streamRef = await content.GetBitmapAsync();
         using var stream = await streamRef.OpenReadAsync();
-        var decoder = await BitmapDecoder.CreateAsync(stream);
+        return await CompressAndEncodePngAsync(stream);
+    }
 
-        var w = decoder.PixelWidth;
-        var h = decoder.PixelHeight;
-        var longest = Math.Max(w, h);
-        uint sw = w, sh = h;
-        if (longest > MaxLongSide)
-        {
-            var scale = (double)MaxLongSide / longest;
-            sw = (uint)Math.Max(1, w * scale);
-            sh = (uint)Math.Max(1, h * scale);
-        }
+    /// <summary>写文本到系统剪贴板;标有 SelfOriginProperty 避免循环触发同步。</summary>
+    public static void WriteClipboardText(string text)
+    {
+        var pkg = new DataPackage();
+        pkg.SetText(text);
+        pkg.Properties[SelfOriginProperty] = "1";
+        Clipboard.SetContent(pkg);
+        Clipboard.Flush();
+    }
 
-        var transform = new BitmapTransform
-        {
-            ScaledWidth = sw,
-            ScaledHeight = sh,
-            InterpolationMode = BitmapInterpolationMode.Fant,
-        };
-        var pixels = await decoder.GetPixelDataAsync(
-            BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied, transform,
-            ExifOrientationMode.IgnoreExifOrientation, ColorManagementMode.DoNotColorManage);
+    /// <summary>写图片到系统剪贴板;标有 SelfOriginProperty 避免循环触发同步。</summary>
+    public static void WriteClipboardImage(string localImagePath)
+    {
+        var file = StorageFile.GetFileFromPathAsync(localImagePath).AsTask().GetAwaiter().GetResult();
+        var pkg = new DataPackage();
+        pkg.SetBitmap(RandomAccessStreamReference.CreateFromFile(file));
+        pkg.Properties[SelfOriginProperty] = "1";
+        Clipboard.SetContent(pkg);
+        Clipboard.Flush();
+    }
+
+    private static async Task<byte[]?> CompressAndEncodePngAsync(IRandomAccessStream inStream)
+    {
+        var decoder = await BitmapDecoder.CreateAsync(inStream);
+        var origW = decoder.PixelWidth;
+        var origH = decoder.PixelHeight;
+
+        // 等比缩放到最长边 <= 4096
+        var scale = 1.0;
+        var maxSide = Math.Max(origW, origH);
+        if (maxSide > MaxLongSide) scale = (double)MaxLongSide / maxSide;
+        var targetW = (uint)Math.Max(1, Math.Round(origW * scale));
+        var targetH = (uint)Math.Max(1, Math.Round(origH * scale));
+
+        var transform = new BitmapTransform { ScaledWidth = targetW, ScaledHeight = targetH };
+        var pixelData = await decoder.GetPixelDataAsync(
+            BitmapPixelFormat.Bgra8,
+            BitmapAlphaMode.Premultiplied,
+            transform,
+            ExifOrientationMode.RespectExifOrientation,
+            ColorManagementMode.ColorManageToSRgb);
 
         var outStream = new InMemoryRandomAccessStream();
         try
         {
             var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, outStream);
-            encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
-                sw, sh, 96, 96, pixels.DetachPixelData());
+            encoder.SetPixelData(
+                BitmapPixelFormat.Bgra8,
+                BitmapAlphaMode.Premultiplied,
+                targetW, targetH,
+                decoder.DpiX, decoder.DpiY,
+                pixelData.DetachPixelData());
             await encoder.FlushAsync();
+            if (outStream.Size > MaxImageBytes) return null;
 
-            using var ms = new MemoryStream();
-            await outStream.AsStreamForRead().CopyToAsync(ms);
-            return ms.ToArray();
+            var bytes = new byte[outStream.Size];
+            using var reader = new DataReader(outStream.GetInputStreamAt(0));
+            await reader.LoadAsync((uint)outStream.Size);
+            reader.ReadBytes(bytes);
+            return bytes;
         }
         finally
         {
@@ -82,7 +111,7 @@ public static class ImageCodec
         }
     }
 
-    public const string SelfOriginProperty = "SyncClipboard_Self";
+    public const string SelfOriginProperty = "NexClip_Self";
 
     /// <summary>检查当前剪贴板是否由本应用自身写回(远端同步/历史列表复制)。</summary>
     public static bool IsSelfWrittenClipboard()

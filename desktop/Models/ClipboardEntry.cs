@@ -1,4 +1,4 @@
-namespace SyncClipboard.Desktop.Models;
+﻿namespace NexClip.Desktop.Models;
 
 /// <summary>与服务端条目 JSON 一一对应(GET/PUT /api/clipboard)。</summary>
 public sealed class ClipboardEntry
@@ -9,6 +9,7 @@ public sealed class ClipboardEntry
     public string? ImageRef { get; set; }
     public string DeviceId { get; set; } = "";
     public string? DeviceName { get; set; }
+    public bool IsManual { get; set; }
     public DateTime CreatedAt { get; set; }          // UTC
 
     /// <summary>相对时间展示("刚刚 / 3 分钟前 / 昨天 / 2026/08/15")。</summary>

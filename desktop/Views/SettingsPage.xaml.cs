@@ -6,17 +6,18 @@ using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using QRCoder;
-using SyncClipboard.Desktop.Services;
-using SyncClipboard.Desktop.ViewModels;
+using NexClip.Desktop.Services;
+using NexClip.Desktop.ViewModels;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage.Pickers;
 using Windows.Storage.Streams;
 using Windows.System;
 using Windows.UI.Core;
 
-namespace SyncClipboard.Desktop.Views;
+namespace NexClip.Desktop.Views;
 
 public sealed partial class SettingsPage : Page
 {
@@ -456,13 +457,28 @@ public sealed partial class SettingsPage : Page
         }
     }
 
-    /// <summary>清空历史前二次确认(含图片缓存,不可恢复)。</summary>
+    /// <summary>清空历史前二次确认(含图片缓存,不可恢复,支持保留收藏项)。</summary>
     private async void ClearHistoryButton_Click(object sender, RoutedEventArgs e)
     {
+        var starredCount = App.Services.History.CountStarred();
+        var checkBox = new CheckBox
+        {
+            Content = $"保留已收藏记录{(starredCount > 0 ? $" ({starredCount} 条)" : "")}",
+            IsChecked = true,
+            Margin = new Thickness(0, 10, 0, 0),
+        };
+        var panel = new StackPanel { Spacing = 6 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "确定要清空本地历史与图片缓存吗？此操作不可恢复。",
+            TextWrapping = TextWrapping.Wrap
+        });
+        panel.Children.Add(checkBox);
+
         var dialog = new ContentDialog
         {
             Title = "清空历史",
-            Content = "确定要清空全部本地历史与图片缓存吗?此操作不可恢复。",
+            Content = panel,
             PrimaryButtonText = "清空",
             CloseButtonText = "取消",
             DefaultButton = ContentDialogButton.Close,
@@ -470,7 +486,8 @@ public sealed partial class SettingsPage : Page
         };
         if (await dialog.ShowAsync() == ContentDialogResult.Primary)
         {
-            _vm.ClearHistory();
+            var keepStarred = checkBox.IsChecked == true;
+            _vm.ClearHistory(keepStarred);
         }
     }
 
@@ -498,6 +515,26 @@ public sealed partial class SettingsPage : Page
         var combo = CaptureCombo(e);
         if (combo is null) return;
         _vm.HotkeyOpenUrl = combo;   // 输入框文字由 OneWay 绑定自动更新
+    }
+
+    private void HotKeyBox_GotFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox tb)
+        {
+            tb.BorderBrush = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 37, 99, 235));
+            tb.Background = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(25, 37, 99, 235));
+            tb.PlaceholderText = "请直接按下组合键…";
+        }
+    }
+
+    private void HotKeyBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox tb)
+        {
+            tb.ClearValue(TextBox.BorderBrushProperty);
+            tb.ClearValue(TextBox.BackgroundProperty);
+            tb.PlaceholderText = "点击后按组合键";
+        }
     }
 
     private static string? CaptureCombo(KeyRoutedEventArgs e)
@@ -547,7 +584,7 @@ public sealed partial class SettingsPage : Page
     /// <summary>移除指定外部设备 (带确认弹窗)。</summary>
     private async void RemoveDevice_Click(object sender, RoutedEventArgs e)
     {
-        if ((sender as FrameworkElement)?.DataContext is SyncClipboard.Desktop.Models.DeviceInfo device)
+        if ((sender as FrameworkElement)?.DataContext is NexClip.Desktop.Models.DeviceInfo device)
         {
             if (device.IsCurrent) return;
 

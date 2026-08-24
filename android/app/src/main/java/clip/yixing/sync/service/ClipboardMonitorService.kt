@@ -18,6 +18,8 @@ import clip.yixing.sync.MainActivity
 import clip.yixing.sync.R
 import clip.yixing.sync.data.PushClient
 import clip.yixing.sync.data.SyncApi
+import clip.yixing.sync.util.AppSourceHelper
+import clip.yixing.sync.util.ImageLoader
 import clip.yixing.sync.util.NotificationStyle
 import clip.yixing.sync.util.SyncSettings
 import kotlinx.coroutines.CoroutineScope
@@ -26,6 +28,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -44,6 +47,7 @@ class ClipboardMonitorService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var uploadJob: Job? = null
+    private var heartbeatJob: Job? = null
     private var legacyMigrationJob: Job? = null
     private var lastUploadHash: String? = null
     private lateinit var clipboard: ClipboardManager
@@ -83,6 +87,8 @@ class ClipboardMonitorService : Service() {
 
     override fun onDestroy() {
         uploadJob?.cancel()
+        heartbeatJob?.cancel()
+        heartbeatJob = null
         push?.disconnect()
         push = null
         clipboard.removePrimaryClipChangedListener(listener)
@@ -118,16 +124,17 @@ class ClipboardMonitorService : Service() {
             }
             val text = entry.text
             val imgRef = entry.imageRef
+            val isManual = entry.isManual
             if (!imgRef.isNullOrBlank()) {
-                addCaptured(ctx, "[图片]", imgRef, sourceDevice = entry.deviceName ?: "其他设备")
+                addCaptured(ctx, "[图片]", imgRef, sourceDevice = entry.deviceName ?: "其他设备", isManual = isManual)
                 notifyPush(entry.deviceName ?: "其他设备", "[图片]")
             } else if (!text.isNullOrBlank()) {
                 val hash = sha256(text)
                 lastUploadHash = hash
-                addCaptured(ctx, text, null, sourceDevice = entry.deviceName ?: "其他设备")
+                addCaptured(ctx, text, null, sourceDevice = entry.deviceName ?: "其他设备", isManual = isManual)
                 isApplyingRemote = true
                 try {
-                    clipboard.setPrimaryClip(ClipData.newPlainText("SyncClipboard", text))
+                    clipboard.setPrimaryClip(ClipData.newPlainText("NexClip", text))
                 } finally {
                     scope.launch {
                         delay(350)
@@ -145,10 +152,30 @@ class ClipboardMonitorService : Service() {
             } else {
                 ServerConnectionState.DISCONNECTED
             }
+            if (connected) {
+                heartbeatJob?.cancel()
+                heartbeatJob = scope.launch(Dispatchers.IO) {
+                    while (isActive) {
+                        delay(45_000)
+                        try {
+                            if (SyncSettings.isPaired(ctx) && SyncSettings.deviceToken(ctx).isNotBlank()) {
+                                val api = SyncApi(SyncSettings.serverUrl(ctx), SyncSettings.ensureDeviceId(ctx), SyncSettings.deviceToken(ctx))
+                                api.getDevices()
+                            }
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+            } else {
+                heartbeatJob?.cancel()
+                heartbeatJob = null
+            }
         }
         client.onAuthFailure = {
             isServerConnected.value = false
             serverConnectionState.value = ServerConnectionState.DISCONNECTED
+            heartbeatJob?.cancel()
+            heartbeatJob = null
             // 服务端通知凭证失效或设备已被移除,清空配对状态并断开,绝不私自重新注册建档
             SyncSettings.clearPairing(ctx)
             scope.launch {
@@ -160,6 +187,27 @@ class ClipboardMonitorService : Service() {
         client.connect()
     }
 
+    private fun isFreshEntry(createdAtStr: String?, maxAgeMs: Long = 5 * 60 * 1000L): Boolean {
+        if (createdAtStr.isNullOrBlank()) return false
+        return try {
+            val instant = java.time.Instant.parse(createdAtStr)
+            val now = java.time.Instant.now()
+            val diffMs = java.time.Duration.between(instant, now).abs().toMillis()
+            diffMs <= maxAgeMs
+        } catch (_: Exception) {
+            try {
+                val format = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
+                format.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                val clean = createdAtStr.substringBefore('.').substringBefore('Z')
+                val date = format.parse(clean)
+                val diffMs = Math.abs(System.currentTimeMillis() - (date?.time ?: 0L))
+                diffMs <= maxAgeMs
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
     private fun pullAndApply() {
         try {
             if (!SyncSettings.isPaired(this) || SyncSettings.deviceToken(this).isBlank()) return
@@ -168,18 +216,25 @@ class ClipboardMonitorService : Service() {
             val cur = api.getCurrent() ?: return
             if (cur.deviceId == localDeviceId) return
 
+            // 严格时效性校验: 仅同步距今 5 分钟以内的“新鲜”剪贴板条目，禁止自动同步陈旧历史条目覆写本机剪贴板
+            if (!isFreshEntry(cur.createdAt, maxAgeMs = 5 * 60 * 1000L)) {
+                android.util.Log.i("NexClip", "pullAndApply ignored: remote entry is stale (${cur.createdAt})")
+                return
+            }
+
+            val remoteDevName = cur.deviceName?.ifBlank { null } ?: "其他设备"
             if (!cur.imageRef.isNullOrBlank() && captured.value.firstOrNull()?.imageRef != cur.imageRef) {
-                addCaptured(this, "[图片]", cur.imageRef)
+                addCaptured(this, "[图片]", cur.imageRef, sourceDevice = remoteDevName, sourceApp = remoteDevName)
             } else if (!cur.text.isNullOrBlank() && captured.value.firstOrNull()?.text != cur.text) {
                 val hash = sha256(cur.text)
                 lastUploadHash = hash
-                addCaptured(this, cur.text)
+                addCaptured(this, cur.text, null, sourceDevice = remoteDevName, sourceApp = remoteDevName)
                 isApplyingRemote = true
                 try {
-                    clipboard.setPrimaryClip(ClipData.newPlainText("SyncClipboard", cur.text))
+                    clipboard.setPrimaryClip(ClipData.newPlainText("NexClip", cur.text))
                 } finally {
                     scope.launch {
-                        delay(350)
+                        delay(1000)
                         isApplyingRemote = false
                     }
                 }
@@ -197,18 +252,30 @@ class ClipboardMonitorService : Service() {
 
     private val listener = ClipboardManager.OnPrimaryClipChangedListener {
         if (isApplyingRemote) {
-            android.util.Log.i("SyncClipboard", "OnPrimaryClipChangedListener ignored (applying remote push)")
+            android.util.Log.i("NexClip", "OnPrimaryClipChangedListener ignored (applying remote push)")
             return@OnPrimaryClipChangedListener
         }
-        android.util.Log.i("SyncClipboard", "OnPrimaryClipChangedListener triggered")
         val clipData = runCatching { clipboard.primaryClip }.getOrNull() ?: return@OnPrimaryClipChangedListener
         val item = clipData.getItemAt(0) ?: return@OnPrimaryClipChangedListener
+
+        val sourcePkg = AppSourceHelper.resolvePackageName(this, clipData)
+        // 关键防护: 若剪贴板内容由 NexClip 自身写入(如应用云端推送、在 App 内点击复制), 不作为新的本机记录重复捕获
+        if (sourcePkg == packageName) {
+            android.util.Log.i("NexClip", "OnPrimaryClipChangedListener ignored (source is self app)")
+            return@OnPrimaryClipChangedListener
+        }
+        if (SyncSettings.isPackageFiltered(this, sourcePkg)) {
+            android.util.Log.i("NexClip", "OnPrimaryClipChangedListener ignored (source package $sourcePkg is blacklisted)")
+            return@OnPrimaryClipChangedListener
+        }
 
         // 1. 检查是否复制了图片 (Uri / MIME 类型为 image/*)
         val uri = item.uri
         val mimeType = clipData.description?.let { desc ->
             (0 until desc.mimeTypeCount).map { desc.getMimeType(it) }.firstOrNull { it.startsWith("image/") }
         } ?: uri?.let { contentResolver.getType(it) }
+
+        val sourceApp = AppSourceHelper.resolveAppName(this, sourcePkg)
 
         if (uri != null && mimeType?.startsWith("image/") == true) {
             val bytes = runCatching {
@@ -219,10 +286,22 @@ class ClipboardMonitorService : Service() {
                 val hash = sha256Bytes(bytes)
                 if (hash == lastUploadHash) return@OnPrimaryClipChangedListener
                 lastUploadHash = hash
-                addCaptured(this, "[图片]", null)
 
-                val clip = CapturedClip(text = "[图片]", time = System.currentTimeMillis())
-                SyncNotificationManager.notifyNewClip(this, clip, "本机", isPush = false)
+                // 关键修复: 1. 持久化缓存图片到本地磁盘
+                ImageLoader.saveBytesToDisk(this, hash, bytes)
+
+                // 关键修复: 2. 存入捕获历史并携带 imageRef = hash
+                addCaptured(this, "[图片]", hash, sourceDevice = "本机", sourcePackage = sourcePkg, sourceApp = sourceApp)
+
+                val clip = CapturedClip(
+                    text = "[图片]",
+                    time = System.currentTimeMillis(),
+                    imageRef = hash,
+                    sourceDevice = "本机",
+                    sourcePackage = sourcePkg,
+                    sourceApp = sourceApp
+                )
+                SyncNotificationManager.notifyNewClip(this, clip, sourceApp ?: "本机", isPush = false)
                 refreshForegroundNotification()
 
                 uploadJob?.cancel()
@@ -245,18 +324,33 @@ class ClipboardMonitorService : Service() {
             }
         }
 
-        // 2. 纯文本处理
-        val text = item.coerceToText(this)?.toString()
-        android.util.Log.i("SyncClipboard", "primaryClip read: hasClip=${clipData != null}, textLen=${text?.length ?: 0}")
+        // 2. 纯文本处理 (安全提取纯文本，杜绝读取二进制 URI 造成 EXIF 乱码)
+        val hasTextMime = clipData.description?.hasMimeType("text/*") == true
+        val text = if (item.text != null) {
+            item.text.toString()
+        } else if (uri == null && hasTextMime) {
+            item.coerceToText(this)?.toString()
+        } else if (uri != null && hasTextMime && (mimeType == null || mimeType.startsWith("text/"))) {
+            item.coerceToText(this)?.toString()
+        } else {
+            null
+        }
+        android.util.Log.i("NexClip", "primaryClip read: hasClip=${clipData != null}, textLen=${text?.length ?: 0}, srcPkg=$sourcePkg, srcApp=$sourceApp")
         if (text.isNullOrBlank() || text.length > 500_000) return@OnPrimaryClipChangedListener
         if (SyncSettings.isContentFiltered(this, text)) return@OnPrimaryClipChangedListener
         val hash = sha256(text)
         if (hash == lastUploadHash) return@OnPrimaryClipChangedListener
         lastUploadHash = hash
-        addCaptured(this, text)
+        addCaptured(this, text, null, sourceDevice = "本机", sourcePackage = sourcePkg, sourceApp = sourceApp)
 
-        val clip = CapturedClip(text = text, time = System.currentTimeMillis())
-        SyncNotificationManager.notifyNewClip(this, clip, "本机", isPush = false)
+        val clip = CapturedClip(
+            text = text,
+            time = System.currentTimeMillis(),
+            sourceDevice = "本机",
+            sourcePackage = sourcePkg,
+            sourceApp = sourceApp
+        )
+        SyncNotificationManager.notifyNewClip(this, clip, sourceApp ?: "本机", isPush = false)
         refreshForegroundNotification()
 
         uploadJob?.cancel()
@@ -279,7 +373,12 @@ class ClipboardMonitorService : Service() {
     }
 
     private fun notifyPush(deviceName: String, text: String) {
-        val clip = CapturedClip(text = text, time = System.currentTimeMillis())
+        val clip = CapturedClip(
+            text = text,
+            time = System.currentTimeMillis(),
+            sourceDevice = deviceName,
+            sourceApp = "来自 $deviceName"
+        )
         SyncNotificationManager.notifyNewClip(this, clip, deviceName, isPush = true)
     }
 
@@ -356,13 +455,32 @@ class ClipboardMonitorService : Service() {
             }
         }
 
-        fun addCaptured(context: Context, text: String, imageRef: String? = null, sourceDevice: String? = null) {
+        fun addCaptured(
+            context: Context,
+            text: String,
+            imageRef: String? = null,
+            sourceDevice: String? = null,
+            sourcePackage: String? = null,
+            sourceApp: String? = null,
+            isManual: Boolean = false
+        ) {
             val first = captured.value.firstOrNull()
             if (first != null) {
                 if (!imageRef.isNullOrBlank() && first.imageRef == imageRef) return
                 if (imageRef.isNullOrBlank() && first.imageRef.isNullOrBlank() && first.text == text) return
             }
-            val list = listOf(CapturedClip(text = text, time = System.currentTimeMillis(), imageRef = imageRef, sourceDevice = sourceDevice)) + captured.value
+            val resolvedApp = sourceApp ?: AppSourceHelper.resolveAppName(context, sourcePackage)
+            val list = listOf(
+                CapturedClip(
+                    text = text,
+                    time = System.currentTimeMillis(),
+                    imageRef = imageRef,
+                    sourceDevice = sourceDevice,
+                    sourcePackage = sourcePackage,
+                    sourceApp = resolvedApp,
+                    isManual = isManual
+                )
+            ) + captured.value
             persist(context, list)
             captured.value = list
         }
@@ -423,7 +541,7 @@ class ClipboardMonitorService : Service() {
         fun restoreAt(context: Context, index: Int, clip: CapturedClip) {
             runCatching {
                 val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("SyncClipboard", clip.text))
+                cm.setPrimaryClip(ClipData.newPlainText("NexClip", clip.text))
             }
             val list = captured.value.toMutableList()
             val safeIndex = index.coerceIn(0, list.size)
@@ -448,6 +566,9 @@ class ClipboardMonitorService : Service() {
                             put("fav", c.isFavorite)
                             if (c.imageRef != null) put("img", c.imageRef)
                             if (c.sourceDevice != null) put("src", c.sourceDevice)
+                            if (c.sourcePackage != null) put("pkg", c.sourcePackage)
+                            if (c.sourceApp != null) put("app", c.sourceApp)
+                            put("man", c.isManual)
                         }
                     )
                 }
@@ -471,7 +592,10 @@ class ClipboardMonitorService : Service() {
                             time = o.optLong("m", System.currentTimeMillis()),
                             isFavorite = o.optBoolean("fav", false),
                             imageRef = if (o.isNull("img")) null else o.optString("img"),
-                            sourceDevice = if (o.isNull("src")) null else o.optString("src")
+                            sourceDevice = if (o.isNull("src")) null else o.optString("src"),
+                            sourcePackage = if (o.isNull("pkg")) null else o.optString("pkg"),
+                            sourceApp = if (o.isNull("app")) null else o.optString("app"),
+                            isManual = o.optBoolean("man", false)
                         )
                     )
                 }
@@ -500,7 +624,10 @@ class ClipboardMonitorService : Service() {
                             time = o.optLong("m"),
                             isFavorite = o.optBoolean("fav", false),
                             imageRef = if (o.isNull("img")) null else o.optString("img"),
-                            sourceDevice = if (o.isNull("src")) null else o.optString("src")
+                            sourceDevice = if (o.isNull("src")) null else o.optString("src"),
+                            sourcePackage = if (o.isNull("pkg")) null else o.optString("pkg"),
+                            sourceApp = if (o.isNull("app")) null else o.optString("app"),
+                            isManual = o.optBoolean("man", false)
                         )
                     )
                 }
@@ -524,6 +651,9 @@ class ClipboardMonitorService : Service() {
                         put("fav", c.isFavorite)
                         if (c.imageRef != null) put("img", c.imageRef)
                         if (c.sourceDevice != null) put("src", c.sourceDevice)
+                        if (c.sourcePackage != null) put("pkg", c.sourcePackage)
+                        if (c.sourceApp != null) put("app", c.sourceApp)
+                        put("man", c.isManual)
                     }
                 )
             }

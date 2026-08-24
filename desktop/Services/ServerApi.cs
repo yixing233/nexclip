@@ -1,10 +1,10 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Sockets;
 using System.Net.Http.Json;
 using System.Text.Json;
-using SyncClipboard.Desktop.Models;
+using NexClip.Desktop.Models;
 
-namespace SyncClipboard.Desktop.Services;
+namespace NexClip.Desktop.Services;
 
 /// <summary>服务器地址格式非法等本地错误。</summary>
 public sealed class ApiException : Exception
@@ -148,9 +148,9 @@ public sealed class ServerApi
     public async Task<ClipboardEntry?> PutTextAsync(
         string serverUrl, string token, string text,
         string deviceId, string deviceName,
-        string? platform = null, string? version = null, CancellationToken ct = default)
+        string? platform = null, string? version = null, bool isManual = false, CancellationToken ct = default)
     {
-        var payload = new { type = "Text", text, deviceId, deviceName, platform, version };
+        var payload = new { type = "Text", text, deviceId, deviceName, platform, version, isManual };
         using var request = new HttpRequestMessage(HttpMethod.Put, Endpoint(serverUrl, "/api/clipboard"))
         {
             Content = JsonContent.Create(payload),
@@ -164,16 +164,37 @@ public sealed class ServerApi
         return json.Deserialize<ClipboardEntry>(new JsonSerializerOptions(JsonSerializerDefaults.Web));
     }
 
+    /// <summary>POST /api/clipboard/send: 发送文本给指定的一批目标设备。</summary>
+    public async Task<ClipboardEntry?> SendToDevicesAsync(
+        string serverUrl, string token, string text, string deviceId, string deviceName, string[] targetDeviceIds, CancellationToken ct = default)
+    {
+        var payload = new
+        {
+            text,
+            deviceId,
+            deviceName,
+            deviceIds = targetDeviceIds,
+            isManual = true,
+        };
+        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(serverUrl, "/api/clipboard/send"))
+        {
+            Content = JsonContent.Create(payload),
+        };
+        var json = await SendAsync<JsonElement>(request, deviceId, token, ct);
+        return json.Deserialize<ClipboardEntry>(new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    }
+
     /// <summary>POST /api/clipboard/image:上传图片(multipart),返回新条目。</summary>
     public async Task<ClipboardEntry?> UploadImageAsync(
         string serverUrl, string token, byte[] pngBytes,
         string deviceId, string deviceName,
-        string? platform = null, string? version = null, CancellationToken ct = default)
+        string? platform = null, string? version = null, bool isManual = false, CancellationToken ct = default)
     {
         using var form = new MultipartFormDataContent();
         form.Add(new ByteArrayContent(pngBytes), "file", "clipboard.png");
         form.Add(new StringContent(deviceId), "deviceId");
         form.Add(new StringContent(deviceName), "deviceName");
+        if (isManual) form.Add(new StringContent("true"), "isManual");
         if (!string.IsNullOrWhiteSpace(platform)) form.Add(new StringContent(platform), "platform");
         if (!string.IsNullOrWhiteSpace(version)) form.Add(new StringContent(version), "version");
         using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(serverUrl, "/api/clipboard/image"))

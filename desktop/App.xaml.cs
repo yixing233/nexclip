@@ -1,8 +1,8 @@
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
-using SyncClipboard.Desktop.Services;
+using NexClip.Desktop.Services;
 
-namespace SyncClipboard.Desktop;
+namespace NexClip.Desktop;
 
 public partial class App : Application
 {
@@ -151,8 +151,9 @@ public partial class App : Application
         Services.History.MaxEntries = Services.Settings.MaxHistory;
         Services.History.PruneOlderThan(Services.Settings.RetentionDays);
         Services.Main.AttachEngine(Services.Engine);
-        // 历史列表 VM 在窗口构造时可能早于 Engine 创建,这里补挂接并首刷
+        // 历史列表 VM 与 互传 VM 在窗口构造时可能早于 Engine 创建,这里补挂接并首刷
         Services.HistoryVm.AttachEngine(Services.Engine);
+        Services.ChatVm.AttachEngine(Services.Engine);
         _ = Services.HistoryVm.RefreshAsync();
         WireTrayState(Services);
 
