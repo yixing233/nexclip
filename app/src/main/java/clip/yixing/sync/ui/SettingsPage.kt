@@ -206,6 +206,8 @@ internal fun SettingsPage(
 
     var bootStart by remember { mutableStateOf(SyncSettings.bootStartEnabled(context)) }
     var autoCheckUpdate by remember { mutableStateOf(SyncSettings.autoCheckUpdate(context)) }
+    var updateSourceIndex by remember { mutableStateOf(SyncSettings.updateSource(context)) }
+    val updateSourceLabels = remember { listOf("GitHub Releases (默认)", "服务端直连加速") }
     var notificationStyle by remember { mutableStateOf(SyncSettings.notificationStyle(context)) }
     val notificationStyles = remember { NotificationStyle.entries }
     val notificationStyleLabels = remember { notificationStyles.map { it.label } }
@@ -627,6 +629,16 @@ internal fun SettingsPage(
                                     SyncSettings.setAutoCheckUpdate(context, checked)
                                 },
                                 title = "启动检查新版本"
+                            )
+                            WindowDropdownPreference(
+                                items = updateSourceLabels,
+                                selectedIndex = updateSourceIndex,
+                                onSelectedIndexChange = { index ->
+                                    updateSourceIndex = index
+                                    SyncSettings.setUpdateSource(context, index)
+                                },
+                                onExpandedChange = { isDropdownExpanded = it },
+                                title = "更新下载来源"
                             )
                             SwitchPreference(
                                 checked = floatingBarEnabled,
@@ -1667,7 +1679,11 @@ internal fun SettingsPage(
                                                         scope.launch {
                                                             checkingUpdate = true
                                                             val curVer = appVersion(context)
-                                                            val res = clip.yixing.sync.util.UpdateChecker.check(curVer)
+                                                            val res = clip.yixing.sync.util.UpdateChecker.check(
+                                                                currentVersion = curVer,
+                                                                updateSource = updateSourceIndex,
+                                                                serverUrl = SyncSettings.serverUrl(context)
+                                                            )
                                                             checkingUpdate = false
                                                             res.onSuccess { info ->
                                                                 if (info.hasUpdate) {
@@ -1712,6 +1728,16 @@ internal fun SettingsPage(
                                             },
                                             title = "启动检查新版本"
                                         )
+                                        WindowDropdownPreference(
+                                            items = updateSourceLabels,
+                                            selectedIndex = updateSourceIndex,
+                                            onSelectedIndexChange = { index ->
+                                                updateSourceIndex = index
+                                                SyncSettings.setUpdateSource(context, index)
+                                            },
+                                            onExpandedChange = { isDropdownExpanded = it },
+                                            title = "更新下载来源"
+                                        )
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -1719,7 +1745,11 @@ internal fun SettingsPage(
                                                     scope.launch {
                                                         checkingUpdate = true
                                                         val curVer = appVersion(context)
-                                                        val res = clip.yixing.sync.util.UpdateChecker.check(curVer)
+                                                        val res = clip.yixing.sync.util.UpdateChecker.check(
+                                                            currentVersion = curVer,
+                                                            updateSource = updateSourceIndex,
+                                                            serverUrl = SyncSettings.serverUrl(context)
+                                                        )
                                                         checkingUpdate = false
                                                         res.onSuccess { info ->
                                                             if (info.hasUpdate) {

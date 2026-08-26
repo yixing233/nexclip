@@ -17,6 +17,9 @@ object SyncSettings {
     const val KEY_DEVICE_NAME = "device_name"
     const val KEY_BOOT_START_ENABLED = "boot_start_enabled"
     const val KEY_AUTO_CHECK_UPDATE = "auto_check_update"
+    const val KEY_UPDATE_SOURCE = "update_source"
+    const val UPDATE_SOURCE_GITHUB = 0
+    const val UPDATE_SOURCE_DIRECT = 1
     const val KEY_FLOATING_BOTTOM_BAR = "floating_bottom_bar"
     const val KEY_PREDICTIVE_BACK = "predictive_back"
     const val KEY_HIDE_FROM_RECENTS = "hide_from_recents"
@@ -197,6 +200,14 @@ object SyncSettings {
 
     fun setAutoCheckUpdate(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTO_CHECK_UPDATE, enabled).apply()
+    }
+
+    /** 更新下载来源: 0=GitHub Releases (默认), 1=服务端直连加速 */
+    fun updateSource(context: Context): Int =
+        prefs(context).getInt(KEY_UPDATE_SOURCE, UPDATE_SOURCE_GITHUB)
+
+    fun setUpdateSource(context: Context, source: Int) {
+        prefs(context).edit().putInt(KEY_UPDATE_SOURCE, source).apply()
     }
 
     /** 悬浮底栏(液态玻璃)开关,默认开启 */

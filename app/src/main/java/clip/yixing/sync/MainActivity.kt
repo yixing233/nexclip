@@ -271,7 +271,11 @@ private fun MainScreen() {
                 } catch (_: Exception) {
                     "20260825.01"
                 }
-                clip.yixing.sync.util.UpdateChecker.check(curVer).getOrNull()
+                clip.yixing.sync.util.UpdateChecker.check(
+                    currentVersion = curVer,
+                    updateSource = SyncSettings.updateSource(appContext),
+                    serverUrl = SyncSettings.serverUrl(appContext)
+                ).getOrNull()
             }.getOrNull()
             if (info != null && info.hasUpdate) {
                 val res = snackbarHostState.showAppSnack(

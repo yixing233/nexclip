@@ -62,10 +62,13 @@ fun AppUpdateDialog(
         }
     }
 
+    val sourceText = if (info.isDirectSource) "直连加速通道" else "GitHub 官方源"
+    val baseSummary = if (info.releaseTitle.isNotBlank() && info.releaseTitle != "v${info.latestVersion}") info.releaseTitle else "有新的版本可用，建议更新体验"
+
     WindowDialog(
         show = true,
         title = "发现新版本 v${info.latestVersion}",
-        summary = if (info.releaseTitle.isNotBlank() && info.releaseTitle != "v${info.latestVersion}") info.releaseTitle else "有新的版本可用，建议更新体验",
+        summary = "$baseSummary · $sourceText",
         onDismissRequest = onDismiss
     ) {
         if (info.releaseNotes.isNotBlank()) {
