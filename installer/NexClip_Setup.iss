@@ -1,6 +1,6 @@
 ; NexClip Windows 正式安装程序 (轻量框架依赖版，自动检测并在线下载 .NET 9 与 Windows App SDK 依赖)
 #define MyAppName "NexClip"
-#define MyAppVersion "20260825.01"
+#define MyAppVersion "20260825.02"
 #define MyAppPublisher "NexClip"
 #define MyAppURL "https://github.com/yixing233/nexclip"
 #define MyAppExeName "NexClip.exe"
