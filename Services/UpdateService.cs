@@ -27,7 +27,7 @@ public class UpdateService
     {
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/yixing233/easy-clip/releases/latest");
+            using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/yixing233/nexclip/releases/latest");
             request.Headers.UserAgent.Add(new ProductInfoHeaderValue("NexClip-Windows", "1.0"));
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github.v3+json"));
 
@@ -47,9 +47,10 @@ public class UpdateService
 
             var title = root.TryGetProperty("name", out var nameElem) ? nameElem.GetString() ?? "" : "";
             var body = root.TryGetProperty("body", out var bodyElem) ? bodyElem.GetString() ?? "" : "";
-            var htmlUrl = root.TryGetProperty("html_url", out var urlElem) ? urlElem.GetString() ?? "https://github.com/yixing233/easy-clip/releases" : "https://github.com/yixing233/easy-clip/releases";
+            var htmlUrl = root.TryGetProperty("html_url", out var urlElem) ? urlElem.GetString() ?? "https://github.com/yixing233/nexclip/releases" : "https://github.com/yixing233/nexclip/releases";
 
             string? downloadUrl = null;
+            string? fallbackExeUrl = null;
             if (root.TryGetProperty("assets", out var assetsElem) && assetsElem.ValueKind == JsonValueKind.Array)
             {
                 foreach (var asset in assetsElem.EnumerateArray())
@@ -58,14 +59,19 @@ public class UpdateService
                         asset.TryGetProperty("browser_download_url", out var downloadElem))
                     {
                         var assetName = assetNameElem.GetString() ?? "";
-                        if (assetName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
-                            assetName.Contains("Setup", StringComparison.OrdinalIgnoreCase))
+                        if (assetName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
                         {
-                            downloadUrl = downloadElem.GetString();
-                            break;
+                            if (assetName.Contains("Setup", StringComparison.OrdinalIgnoreCase) ||
+                                assetName.Contains("Installer", StringComparison.OrdinalIgnoreCase))
+                            {
+                                downloadUrl = downloadElem.GetString();
+                                break;
+                            }
+                            fallbackExeUrl ??= downloadElem.GetString();
                         }
                     }
                 }
+                downloadUrl ??= fallbackExeUrl;
             }
 
             bool hasUpdate = CompareVersions(cleanLatest, cleanCurrent) > 0;
