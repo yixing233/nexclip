@@ -290,7 +290,7 @@ public sealed partial class SettingsPage : Page
     {
         try
         {
-            Process.Start(new ProcessStartInfo("https://github.com/yixing233/easy-clip") { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo("https://github.com/yixing233/nexclip") { UseShellExecute = true });
         }
         catch (Exception ex)
         {
@@ -303,7 +303,7 @@ public sealed partial class SettingsPage : Page
     {
         try
         {
-            var info = $"NexClip {_vm.VersionText} | 框架: WinUI 3 / .NET 9 | 服务端: NexClip Server (node) | 数据位置: {_vm.ConfiguredStorageDir} | 项目: github.com/yixing233/easy-clip";
+            var info = $"NexClip {_vm.VersionText} | 框架: WinUI 3 / .NET 9 | 服务端: NexClip Server (node) | 数据位置: {_vm.ConfiguredStorageDir} | 项目: github.com/yixing233/nexclip";
             var pkg = new DataPackage();
             pkg.SetText(info);
             Clipboard.SetContent(pkg);
@@ -321,7 +321,7 @@ public sealed partial class SettingsPage : Page
         try
         {
             var url = string.IsNullOrWhiteSpace(_vm.UpdateReleaseUrl)
-                ? "https://github.com/yixing233/easy-clip/releases"
+                ? "https://github.com/yixing233/nexclip/releases"
                 : _vm.UpdateReleaseUrl;
             Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
         }

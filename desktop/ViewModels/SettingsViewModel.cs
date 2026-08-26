@@ -241,7 +241,7 @@ public partial class SettingsViewModel : ObservableObject
     private string updateReleaseNotes = "";
 
     [ObservableProperty]
-    private string updateReleaseUrl = "https://github.com/yixing233/easy-clip/releases";
+    private string updateReleaseUrl = "https://github.com/yixing233/nexclip/releases";
 
     [ObservableProperty]
     private string? updateDownloadUrl;
@@ -1146,7 +1146,7 @@ public partial class SettingsViewModel : ObservableObject
                     HasNewVersion = true;
                     LatestVersionText = $"v{result.LatestVersion}";
                     UpdateReleaseNotes = string.IsNullOrWhiteSpace(result.ReleaseNotes) ? "有新版本可用。" : result.ReleaseNotes;
-                    UpdateReleaseUrl = string.IsNullOrWhiteSpace(result.ReleaseUrl) ? "https://github.com/yixing233/easy-clip/releases" : result.ReleaseUrl;
+                    UpdateReleaseUrl = string.IsNullOrWhiteSpace(result.ReleaseUrl) ? "https://github.com/yixing233/nexclip/releases" : result.ReleaseUrl;
                     UpdateDownloadUrl = result.DownloadUrl;
                     UpdateStatusText = $"发现新版本 v{result.LatestVersion}";
                     ShowMessage($"发现新版本 v{result.LatestVersion}，可点击前往查看下载。", InfoBarSeverity.Informational);

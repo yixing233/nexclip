@@ -237,7 +237,7 @@ public partial class App : Application
                                 PrimaryButtonIcon = Lucide.DownloadAccent,
                                 PrimaryAction = () =>
                                 {
-                                    var url = result.DownloadUrl ?? result.ReleaseUrl ?? "https://github.com/yixing233/easy-clip/releases";
+                                    var url = result.DownloadUrl ?? result.ReleaseUrl ?? "https://github.com/yixing233/nexclip/releases";
                                     System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
                                 },
                                 SecondaryButtonText = "查看详情",

@@ -1229,7 +1229,7 @@
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Text="项目地址" FontSize="13" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
                                         <HyperlinkButton Grid.Column="1" Click="OpenProject_Click" HorizontalAlignment="Left" Padding="0">
-                                            <TextBlock Text="github.com/yixing233/easy-clip" FontSize="13" TextWrapping="Wrap" />
+                                            <TextBlock Text="github.com/yixing233/nexclip" FontSize="13" TextWrapping="Wrap" />
                                         </HyperlinkButton>
                                     </Grid>
                                 </StackPanel>

@@ -2,7 +2,7 @@
 #define MyAppName "NexClip"
 #define MyAppVersion "20260825.01"
 #define MyAppPublisher "NexClip"
-#define MyAppURL "https://github.com/yixing233/easy-clip"
+#define MyAppURL "https://github.com/yixing233/nexclip"
 #define MyAppExeName "NexClip.exe"
 #define MySourceDir "..\bin\Release\publish-dependent"
 

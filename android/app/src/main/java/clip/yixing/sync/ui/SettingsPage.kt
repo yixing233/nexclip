@@ -1757,7 +1757,7 @@ internal fun SettingsPage(
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .clickable { openUrl("https://github.com/yixing233/easy-clip") }
+                                                .clickable { openUrl("https://github.com/yixing233/nexclip") }
                                                 .padding(horizontal = 16.dp, vertical = 12.dp),
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
@@ -1765,7 +1765,7 @@ internal fun SettingsPage(
                                             Text("开源项目仓库", fontSize = 15.sp, color = MiuixTheme.colorScheme.onSurface)
                                             Row(verticalAlignment = Alignment.CenterVertically) {
                                                 Text(
-                                                    text = "yixing233/easy-clip",
+                                                    text = "yixing233/nexclip",
                                                     color = MiuixTheme.colorScheme.primary,
                                                     fontSize = 13.sp,
                                                     fontWeight = FontWeight.Medium

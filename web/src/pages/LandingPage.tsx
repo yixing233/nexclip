@@ -194,7 +194,7 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
           <Tooltip title="前往 GitHub 开源仓库">
             <Button
               type="text"
-              href="https://github.com/yixing233/easy-clip"
+              href="https://github.com/yixing233/nexclip"
               target="_blank"
               shape={isMobile ? 'circle' : undefined}
               style={{
@@ -758,7 +758,7 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
         </div>
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 14, marginBottom: 12, flexWrap: 'wrap' }}>
           <a
-            href="https://github.com/yixing233/easy-clip"
+            href="https://github.com/yixing233/nexclip"
             target="_blank"
             rel="noreferrer"
             style={{ color: c.textSecondary, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}
