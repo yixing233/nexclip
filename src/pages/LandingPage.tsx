@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button, Tooltip, message } from 'antd'
+import { Button, Tooltip, message, Dropdown, type MenuProps } from 'antd'
 import {
   Monitor,
   Smartphone,
@@ -21,6 +21,7 @@ import {
   Command,
   Copy,
   Server,
+  ChevronDown,
 } from 'lucide-react'
 
 const releaseInfo = {
@@ -89,6 +90,94 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
   const highlightShadow = isDark
     ? '0 0 0 1px rgba(68, 147, 248, 0.5), 0 8px 28px rgba(68, 147, 248, 0.15)'
     : '0 0 0 1px rgba(37, 99, 235, 0.35), 0 8px 28px rgba(37, 99, 235, 0.10)'
+
+  const windowsMenuItems: MenuProps['items'] = [
+    {
+      key: 'server-direct',
+      icon: <Zap size={15} color="#10B981" />,
+      label: (
+        <div style={{ display: 'flex', flexDirection: 'column', padding: '3px 0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontWeight: 600, fontSize: 13 }}>使用服务端直连下载</span>
+            <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: 'rgba(16, 185, 129, 0.15)', color: '#10B981', fontWeight: 600 }}>大陆加速</span>
+          </div>
+          <span style={{ fontSize: 11, color: c.textTertiary, marginTop: 2 }}>{releaseInfo.windows.filename} · {releaseInfo.windows.size}</span>
+        </div>
+      ),
+      onClick: () => {
+        const link = document.createElement('a')
+        link.href = releaseInfo.windows.serverUrl
+        link.download = releaseInfo.windows.filename
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+      },
+    },
+    {
+      type: 'divider',
+    },
+    {
+      key: 'github-release',
+      icon: <ExternalLink size={14} />,
+      label: '查看 GitHub Releases 发布页面',
+      onClick: () => {
+        window.open(`https://github.com/yixing233/nexclip/releases/tag/${releaseInfo.version}`, '_blank')
+      },
+    },
+    {
+      key: 'copy-hash',
+      icon: <Copy size={14} />,
+      label: '复制 SHA256 校验码',
+      onClick: () => {
+        navigator.clipboard.writeText(releaseInfo.windows.sha256)
+        message.success('Windows 安装包 SHA256 校验码已复制')
+      },
+    },
+  ]
+
+  const androidMenuItems: MenuProps['items'] = [
+    {
+      key: 'server-direct',
+      icon: <Zap size={15} color="#10B981" />,
+      label: (
+        <div style={{ display: 'flex', flexDirection: 'column', padding: '3px 0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontWeight: 600, fontSize: 13 }}>使用服务端直连下载</span>
+            <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 4, background: 'rgba(16, 185, 129, 0.15)', color: '#10B981', fontWeight: 600 }}>大陆加速</span>
+          </div>
+          <span style={{ fontSize: 11, color: c.textTertiary, marginTop: 2 }}>{releaseInfo.android.filename} · {releaseInfo.android.size}</span>
+        </div>
+      ),
+      onClick: () => {
+        const link = document.createElement('a')
+        link.href = releaseInfo.android.serverUrl
+        link.download = releaseInfo.android.filename
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+      },
+    },
+    {
+      type: 'divider',
+    },
+    {
+      key: 'github-release',
+      icon: <ExternalLink size={14} />,
+      label: '查看 GitHub Releases 发布页面',
+      onClick: () => {
+        window.open(`https://github.com/yixing233/nexclip/releases/tag/${releaseInfo.version}`, '_blank')
+      },
+    },
+    {
+      key: 'copy-hash',
+      icon: <Copy size={14} />,
+      label: '复制 SHA256 校验码',
+      onClick: () => {
+        navigator.clipboard.writeText(releaseInfo.android.sha256)
+        message.success('Android 安装包 SHA256 校验码已复制')
+      },
+    },
+  ]
 
   return (
     <div
@@ -655,66 +744,92 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
               </p>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {/* 主下载: 服务器直连 */}
-              <Button
-                type="primary"
-                size="large"
-                block
-                icon={<Zap size={16} />}
-                href={releaseInfo.windows.serverUrl}
-                download={releaseInfo.windows.filename}
+            <div>
+              {/* 组合下载按钮: 默认 GitHub 官方下载 + 下拉箭头选择服务端直连 */}
+              <div
                 style={{
-                  borderRadius: 10,
-                  height: 44,
-                  fontWeight: 600,
                   display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8,
+                  borderRadius: 10,
+                  overflow: 'hidden',
+                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.08)',
                 }}
               >
-                服务器直连下载 ({releaseInfo.windows.size})
-              </Button>
-
-              {/* 备用通道与校验信息行 */}
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <Button
-                  size="middle"
-                  icon={<ExternalLink size={14} />}
+                  type="primary"
+                  size="large"
+                  icon={<Download size={16} />}
                   href={releaseInfo.windows.githubUrl}
                   target="_blank"
                   rel="noreferrer"
                   style={{
                     flex: 1,
-                    borderRadius: 8,
-                    height: 36,
-                    fontSize: 12,
+                    height: 44,
+                    fontWeight: 600,
+                    borderTopRightRadius: 0,
+                    borderBottomRightRadius: 0,
+                    borderRight: '1px solid rgba(255, 255, 255, 0.25)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    gap: 6,
+                    gap: 8,
                   }}
                 >
-                  GitHub 源
+                  <span>下载 Windows 版</span>
+                  <span style={{ fontSize: 11, opacity: 0.85, fontWeight: 400 }}>({releaseInfo.windows.size})</span>
                 </Button>
-                <Tooltip title={`SHA256: ${releaseInfo.windows.sha256} (点击复制)`}>
+                <Dropdown menu={{ items: windowsMenuItems }} placement="bottomRight" trigger={['click']}>
                   <Button
-                    size="middle"
-                    icon={<Copy size={14} />}
-                    onClick={() => {
-                      navigator.clipboard.writeText(releaseInfo.windows.sha256)
-                      message.success('Windows 安装包 SHA256 已复制')
-                    }}
+                    type="primary"
+                    size="large"
                     style={{
-                      borderRadius: 8,
-                      height: 36,
-                      fontSize: 12,
+                      width: 44,
+                      height: 44,
+                      padding: 0,
+                      borderTopLeftRadius: 0,
+                      borderBottomLeftRadius: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                    title="更多下载通道 (服务端直连)"
+                  >
+                    <ChevronDown size={16} />
+                  </Button>
+                </Dropdown>
+              </div>
+
+              {/* 底部提示与直达通道 */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginTop: 8,
+                  padding: '0 2px',
+                  fontSize: 11,
+                  color: c.textTertiary,
+                }}
+              >
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <ExternalLink size={12} />
+                  <span>默认通道: GitHub Releases</span>
+                </span>
+                <Dropdown menu={{ items: windowsMenuItems }} placement="bottomRight" trigger={['click']}>
+                  <span
+                    style={{
+                      color: isDark ? '#58A6FF' : '#2563EB',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 2,
+                      fontWeight: 500,
                     }}
                   >
-                    校验码
-                  </Button>
-                </Tooltip>
+                    <Zap size={11} />
+                    <span>服务器直连下载</span>
+                    <ChevronDown size={11} />
+                  </span>
+                </Dropdown>
               </div>
             </div>
           </div>
@@ -770,68 +885,96 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
               </p>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {/* 主下载: 服务器直连 */}
-              <Button
-                type="primary"
-                size="large"
-                block
-                icon={<Zap size={16} />}
-                href={releaseInfo.android.serverUrl}
-                download={releaseInfo.android.filename}
+            <div>
+              {/* 组合下载按钮: 默认 GitHub 官方下载 + 下拉箭头选择服务端直连 */}
+              <div
                 style={{
-                  borderRadius: 10,
-                  height: 44,
-                  fontWeight: 600,
-                  background: '#10B981',
-                  borderColor: '#10B981',
                   display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8,
+                  borderRadius: 10,
+                  overflow: 'hidden',
+                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.08)',
                 }}
               >
-                服务器直连下载 ({releaseInfo.android.size})
-              </Button>
-
-              {/* 备用通道与校验信息行 */}
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <Button
-                  size="middle"
-                  icon={<ExternalLink size={14} />}
+                  type="primary"
+                  size="large"
+                  icon={<Download size={16} />}
                   href={releaseInfo.android.githubUrl}
                   target="_blank"
                   rel="noreferrer"
                   style={{
                     flex: 1,
-                    borderRadius: 8,
-                    height: 36,
-                    fontSize: 12,
+                    height: 44,
+                    fontWeight: 600,
+                    background: '#10B981',
+                    borderColor: '#10B981',
+                    borderTopRightRadius: 0,
+                    borderBottomRightRadius: 0,
+                    borderRight: '1px solid rgba(255, 255, 255, 0.25)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    gap: 6,
+                    gap: 8,
                   }}
                 >
-                  GitHub 源
+                  <span>下载 Android 版</span>
+                  <span style={{ fontSize: 11, opacity: 0.85, fontWeight: 400 }}>({releaseInfo.android.size})</span>
                 </Button>
-                <Tooltip title={`SHA256: ${releaseInfo.android.sha256} (点击复制)`}>
+                <Dropdown menu={{ items: androidMenuItems }} placement="bottomRight" trigger={['click']}>
                   <Button
-                    size="middle"
-                    icon={<Copy size={14} />}
-                    onClick={() => {
-                      navigator.clipboard.writeText(releaseInfo.android.sha256)
-                      message.success('Android 安装包 SHA256 已复制')
-                    }}
+                    type="primary"
+                    size="large"
                     style={{
-                      borderRadius: 8,
-                      height: 36,
-                      fontSize: 12,
+                      width: 44,
+                      height: 44,
+                      padding: 0,
+                      background: '#10B981',
+                      borderColor: '#10B981',
+                      borderTopLeftRadius: 0,
+                      borderBottomLeftRadius: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                    title="更多下载通道 (服务端直连)"
+                  >
+                    <ChevronDown size={16} />
+                  </Button>
+                </Dropdown>
+              </div>
+
+              {/* 底部提示与直达通道 */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginTop: 8,
+                  padding: '0 2px',
+                  fontSize: 11,
+                  color: c.textTertiary,
+                }}
+              >
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <ExternalLink size={12} />
+                  <span>默认通道: GitHub Releases</span>
+                </span>
+                <Dropdown menu={{ items: androidMenuItems }} placement="bottomRight" trigger={['click']}>
+                  <span
+                    style={{
+                      color: '#10B981',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 2,
+                      fontWeight: 500,
                     }}
                   >
-                    校验码
-                  </Button>
-                </Tooltip>
+                    <Zap size={11} />
+                    <span>服务器直连下载</span>
+                    <ChevronDown size={11} />
+                  </span>
+                </Dropdown>
               </div>
             </div>
           </div>
