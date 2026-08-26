@@ -10,8 +10,8 @@ NexClip 是一套专为多端设备打造的现代化、轻量高效跨平台剪
 - **低延迟双向实时流转**：基于 SignalR / WebSocket 长连接，实现剪贴板内容毫秒级无感双向推送，并具备多端防回环机制。
 - **深度意图识别 (SmartAction)**：双端内置智能动作引擎，精准识别剪贴板内容（链接、色值、路径、网盘、口令、验证码等）并提供直达操作。
 - **极致轻量安装包**：
-  - Windows 安装程序仅 **8.96 MB**；
-  - Android 安装包仅 **15.28 MB**。
+  - Windows 安装程序 **34.67 MB**（自包含 WinUI 3 原生渲染运行环境，开箱即用稳定运行）；
+  - Android 安装包 **15.28 MB**。
 
 ---
 
@@ -86,7 +86,7 @@ NexClip 是一套专为多端设备打造的现代化、轻量高效跨平台剪
 
 | 产物文件 | 适用平台 | 文件大小 | SHA256 校验码 |
 | :--- | :--- | :--- | :--- |
-| `NexClip_Setup_v20260825.01_x64.exe` | Windows 10 (1809+) / Windows 11 (x64) | 8.96 MB | `A2B5A57C66B4771163D7AF740A846AEEE81928BF0A23958030C8EE314DA11EE9` |
+| `NexClip_Setup_v20260825.01_x64.exe` | Windows 10 (1809+) / Windows 11 (x64) | 34.67 MB | `C5FE4EADB562418E665B8859D8FE2F7B4C8B6C7B31C9B7A9E564A3C788F8DF4C` |
 | `NexClip_v20260825.01_Android.apk` | Android 8.0+ (推荐 HyperOS / MIUI) | 15.28 MB | `F7E980505E831D765A52EEF84A8FC92DF7BC0B0C8F3CC9B04DDBD8F00CB09592` |
 
 ---
