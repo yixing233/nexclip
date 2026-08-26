@@ -29,8 +29,9 @@ SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
-CloseApplications=yes
+CloseApplications=no
 RestartApplications=no
+AppMutex=NexClip_SingleInstance
 
 [Languages]
 Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
@@ -53,6 +54,33 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChang
 [Code]
 var
   DownloadPage: TDownloadWizardPage;
+
+procedure KillRunningApp;
+var
+  ResultCode: Integer;
+begin
+  // 结束可能正在运行的 NexClip 进程，避免更新覆盖安装时文件被占用
+  Exec('taskkill.exe', '/f /im NexClip.exe /t', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(600);
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  KillRunningApp;
+  Result := True;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  KillRunningApp;
+  Result := '';
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  KillRunningApp;
+  Result := True;
+end;
 
 function IsDotNet9Installed: Boolean;
 var
