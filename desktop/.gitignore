@@ -1,0 +1,27 @@
+# Visual Studio / MSBuild 构建产物
+bin/
+obj/
+AppPackages/
+BundleArtifacts/
+Generated Files/
+GeneratedFiles/
+
+# IDE 与用户配置
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vscode/
+
+# 日志
+*.log
+*.tlog
+
+# Inno Setup 编译器输出
+installer/Output/
+Output/
+
+# 操作系统临时文件
+Thumbs.db
+.DS_Store

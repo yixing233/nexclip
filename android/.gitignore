@@ -1,13 +1,31 @@
-# Gradle
+# Gradle 缓存与构建产物
 .gradle/
 build/
-# IDE
+app/build/
+.cxx/
+captures/
+
+# IDE 配置
 .idea/
 *.iml
-# 本地配置
+.kotlin/
+.navigation/
+
+# 本地环境变量与签名凭据
 local.properties
+signing.properties
+*.keystore
+*.jks
+
 # 构建产物
 *.apk
 *.aab
-captures/
-.kotlin/
+*.ap_
+*.dex
+
+# 日志与临时文件
+*.log
+compile_err.txt
+Thumbs.db
+.DS_Store
+
