@@ -33,6 +33,8 @@ public sealed class SettingsStore
     public bool CloseToTray { get; set; } = true;
     /// <summary>启动时自动检查更新。</summary>
     public bool AutoCheckUpdate { get; set; } = true;
+    /// <summary>更新下载来源: github=GitHub Releases (默认) | direct=服务器直连加速。</summary>
+    public string UpdateSource { get; set; } = "github";
     public bool MonitorEnabled { get; set; } = true;
     public bool AutoPaste { get; set; } = true;
     public bool NotifyEnabled { get; set; } = true;
@@ -153,6 +155,7 @@ public sealed class SettingsStore
             StartMinimized = dto.StartMinimized ?? StartMinimized;
             CloseToTray = dto.CloseToTray ?? CloseToTray;
             AutoCheckUpdate = dto.AutoCheckUpdate ?? AutoCheckUpdate;
+            UpdateSource = dto.UpdateSource ?? UpdateSource;
             MonitorEnabled = dto.MonitorEnabled ?? MonitorEnabled;
             AutoPaste = dto.AutoPaste ?? AutoPaste;
             NotifyEnabled = dto.NotifyEnabled ?? NotifyEnabled;
@@ -209,6 +212,7 @@ public sealed class SettingsStore
                 StartMinimized = StartMinimized,
                 CloseToTray = CloseToTray,
                 AutoCheckUpdate = AutoCheckUpdate,
+                UpdateSource = UpdateSource,
                 MonitorEnabled = MonitorEnabled,
                 AutoPaste = AutoPaste,
                 NotifyEnabled = NotifyEnabled,
@@ -320,6 +324,7 @@ public sealed class SettingsStore
         public bool? StartMinimized { get; set; }
         public bool? CloseToTray { get; set; }
         public bool? AutoCheckUpdate { get; set; }
+        public string? UpdateSource { get; set; }
         public bool? MonitorEnabled { get; set; }
         public bool? AutoPaste { get; set; }
         public bool? NotifyEnabled { get; set; }

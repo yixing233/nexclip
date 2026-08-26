@@ -496,6 +496,24 @@
                                         VerticalAlignment="Center"
                                         AutomationProperties.Name="启动时自动检查更新" />
                                 </Grid>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="更新下载来源" VerticalAlignment="Center" />
+                                        <TextBlock Text="选择检查与下载新版本的通道 (国内网络推荐直连加速)" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <ComboBox
+                                        Grid.Column="1"
+                                        MinWidth="180"
+                                        SelectedIndex="{Binding UpdateSourceIndex, Mode=TwoWay}"
+                                        ItemsSource="{Binding UpdateSourceOptions}"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.Name="更新下载来源" />
+                                </Grid>
                             </StackPanel>
                         </Border>
                         <StackPanel Spacing="4" Margin="4,0,0,0">

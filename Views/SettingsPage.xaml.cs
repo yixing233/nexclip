@@ -320,9 +320,10 @@ public sealed partial class SettingsPage : Page
     {
         try
         {
-            var url = string.IsNullOrWhiteSpace(_vm.UpdateReleaseUrl)
-                ? "https://github.com/yixing233/nexclip/releases"
-                : _vm.UpdateReleaseUrl;
+            var isDirect = string.Equals(App.Services?.Settings?.UpdateSource, "direct", StringComparison.OrdinalIgnoreCase);
+            var url = (isDirect && !string.IsNullOrWhiteSpace(_vm.UpdateDownloadUrl))
+                ? _vm.UpdateDownloadUrl
+                : (!string.IsNullOrWhiteSpace(_vm.UpdateReleaseUrl) ? _vm.UpdateReleaseUrl : "https://github.com/yixing233/nexclip/releases");
             Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
         }
         catch (Exception ex)

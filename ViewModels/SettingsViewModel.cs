@@ -225,6 +225,11 @@ public partial class SettingsViewModel : ObservableObject
 
     private readonly UpdateService _updateService = new();
 
+    public string[] UpdateSourceOptions { get; } = { "GitHub Releases (默认)", "服务端直连加速" };
+
+    [ObservableProperty]
+    private int updateSourceIndex;
+
     [ObservableProperty]
     private bool isCheckingUpdate;
 
@@ -259,6 +264,7 @@ public partial class SettingsViewModel : ObservableObject
         StartMinimized = s.StartMinimized;
         CloseToTray = s.CloseToTray;
         AutoCheckUpdate = s.AutoCheckUpdate;
+        UpdateSourceIndex = string.Equals(s.UpdateSource, "direct", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
         MonitorEnabled = s.MonitorEnabled;
         AutoPaste = s.AutoPaste;
         NotifyEnabled = s.NotifyEnabled;
@@ -920,6 +926,7 @@ public partial class SettingsViewModel : ObservableObject
     partial void OnStartMinimizedChanged(bool value) { if (!_initialized) return; _svc.Settings.StartMinimized = value; _svc.Settings.Save(); }
     partial void OnCloseToTrayChanged(bool value) { if (!_initialized) return; _svc.Settings.CloseToTray = value; _svc.Settings.Save(); }
     partial void OnAutoCheckUpdateChanged(bool value) { if (!_initialized) return; _svc.Settings.AutoCheckUpdate = value; _svc.Settings.Save(); }
+    partial void OnUpdateSourceIndexChanged(int value) { if (!_initialized) return; _svc.Settings.UpdateSource = value == 1 ? "direct" : "github"; _svc.Settings.Save(); }
     partial void OnMonitorEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.MonitorEnabled = value; _svc.Settings.Save(); }
     partial void OnAutoPasteChanged(bool value) { if (!_initialized) return; _svc.Settings.AutoPaste = value; _svc.Settings.Save(); }
     partial void OnNotifyEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.NotifyEnabled = value; _svc.Settings.Save(); }
@@ -1138,7 +1145,7 @@ public partial class SettingsViewModel : ObservableObject
         try
         {
             var rawVersion = VersionText.TrimStart('v', 'V');
-            var result = await _updateService.CheckForUpdateAsync(rawVersion);
+            var result = await _updateService.CheckForUpdateAsync(rawVersion, _svc.Settings.UpdateSource, ServerUrl);
             if (result.Success)
             {
                 if (result.HasUpdate)
@@ -1148,8 +1155,10 @@ public partial class SettingsViewModel : ObservableObject
                     UpdateReleaseNotes = string.IsNullOrWhiteSpace(result.ReleaseNotes) ? "有新版本可用。" : result.ReleaseNotes;
                     UpdateReleaseUrl = string.IsNullOrWhiteSpace(result.ReleaseUrl) ? "https://github.com/yixing233/nexclip/releases" : result.ReleaseUrl;
                     UpdateDownloadUrl = result.DownloadUrl;
-                    UpdateStatusText = $"发现新版本 v{result.LatestVersion}";
-                    ShowMessage($"发现新版本 v{result.LatestVersion}，可点击前往查看下载。", InfoBarSeverity.Informational);
+                    var isDirect = string.Equals(_svc.Settings.UpdateSource, "direct", StringComparison.OrdinalIgnoreCase);
+                    var sourceLabel = isDirect ? "直连加速" : "GitHub";
+                    UpdateStatusText = $"发现新版本 v{result.LatestVersion} ({sourceLabel})";
+                    ShowMessage($"发现新版本 v{result.LatestVersion} ({sourceLabel})，可点击前往查看下载。", InfoBarSeverity.Informational);
                 }
                 else
                 {

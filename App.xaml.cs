@@ -222,7 +222,7 @@ public partial class App : Application
                 {
                     var rawVersion = (System.Attribute.GetCustomAttribute(typeof(App).Assembly, typeof(System.Reflection.AssemblyInformationalVersionAttribute)) as System.Reflection.AssemblyInformationalVersionAttribute)?.InformationalVersion?.Split('+')[0] ?? "20260825.01";
                     var updateService = new UpdateService();
-                    var result = await updateService.CheckForUpdateAsync(rawVersion);
+                    var result = await updateService.CheckForUpdateAsync(rawVersion, Services.Settings.UpdateSource, Services.Settings.ServerUrl);
                     if (result.Success && result.HasUpdate)
                     {
                         dispatcher?.TryEnqueue(() =>
