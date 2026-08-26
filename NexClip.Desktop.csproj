@@ -58,4 +58,7 @@
   <ItemGroup>
     <ProjectReference Include="NexClip.Tray\NexClip.Tray.csproj" />
   </ItemGroup>
+  <Target Name="GenerateResourcesPri" AfterTargets="Build">
+    <Copy SourceFiles="$(TargetDir)$(AssemblyName).pri" DestinationFiles="$(TargetDir)resources.pri" Condition="Exists('$(TargetDir)$(AssemblyName).pri')" />
+  </Target>
 </Project>

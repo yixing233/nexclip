@@ -4,7 +4,7 @@
 #define MyAppPublisher "NexClip"
 #define MyAppURL "https://github.com/yixing233/nexclip"
 #define MyAppExeName "NexClip.exe"
-#define MySourceDir "..\bin\Release\publish-dependent"
+#define MySourceDir "..\bin\Release\net9.0-windows10.0.19041.0\win-x64"
 
 [Setup]
 AppId={{C47F6A29-8C2A-4C2E-98BF-7D8E6C7598F1}
@@ -40,7 +40,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "startup"; Description: "开机自动启动 NexClip"; GroupDescription: "启动设置:"; Flags: unchecked
 
 [Files]
-Source: "{#MySourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.pdb,onnxruntime.dll,DirectML.dll,NPUDetect.dll,NpuDetect\*,Microsoft.Windows.Widgets.dll"
+Source: "{#MySourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.pdb,publish,publish\*,onnxruntime.dll,DirectML.dll,NPUDetect.dll,NpuDetect\*,Microsoft.Windows.Widgets.dll"
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
