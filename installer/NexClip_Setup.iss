@@ -33,7 +33,7 @@ CloseApplications=yes
 RestartApplications=no
 
 [Languages]
-Name: "chinesesimp"; MessagesFile: "compiler:Default.isl"
+Name: "chinesesimp"; MessagesFile: "ChineseSimplified.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
@@ -82,33 +82,6 @@ begin
   end;
 end;
 
-function IsWinAppSdkInstalled: Boolean;
-var
-  FindRec: TFindRec;
-begin
-  Result := False;
-  // 检查 Windows App SDK 运行时注册表与依赖项
-  if RegKeyExists(HKEY_LOCAL_MACHINE, 'SOFTWARE\Microsoft\WindowsAppRuntime') or
-     RegKeyExists(HKEY_CURRENT_USER, 'SOFTWARE\Microsoft\WindowsAppRuntime') or
-     RegKeyExists(HKEY_LOCAL_MACHINE, 'SOFTWARE\Classes\Installer\Dependencies\Microsoft.WindowsAppRuntime.1.8') or
-     RegKeyExists(HKEY_LOCAL_MACHINE, 'SOFTWARE\Classes\Installer\Dependencies\Microsoft.WindowsAppRuntime.1.7') or
-     RegKeyExists(HKEY_LOCAL_MACHINE, 'SOFTWARE\Classes\Installer\Dependencies\Microsoft.WindowsAppRuntime.1.6') then
-  begin
-    Result := True;
-  end;
-  if not Result then
-  begin
-    if FindFirst(ExpandConstant('{commonpf}\WindowsApps\Microsoft.WindowsAppRuntime.1.*'), FindRec) then
-    begin
-      try
-        Result := True;
-      finally
-        FindClose(FindRec);
-      end;
-    end;
-  end;
-end;
-
 function OnDownloadProgress(const Url, FileName: String; const Progress, ProgressMax: Int64): Boolean;
 begin
   if ProgressMax <> 0 then
@@ -120,33 +93,23 @@ end;
 
 procedure InitializeWizard;
 begin
-  DownloadPage := CreateDownloadPage(SetupMessage(msgWizardPreparing), '正在下载缺失的运行库依赖组件...', @OnDownloadProgress);
+  DownloadPage := CreateDownloadPage('环境检查', '正在下载缺失的 .NET 9 运行库组件...', @OnDownloadProgress);
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
   NeedsDotNet: Boolean;
-  NeedsWinAppSdk: Boolean;
   ResultCode: Integer;
 begin
   Result := True;
   if CurPageID = wpReady then
   begin
     NeedsDotNet := not IsDotNet9Installed();
-    NeedsWinAppSdk := not IsWinAppSdkInstalled();
 
-    if NeedsDotNet or NeedsWinAppSdk then
+    if NeedsDotNet then
     begin
       DownloadPage.Clear;
-      if NeedsDotNet then
-      begin
-        DownloadPage.Add('https://aka.ms/dotnet/9.0/windowsdesktop-runtime-win-x64.exe', 'dotnet9_desktop_runtime_x64.exe', '');
-      end;
-      if NeedsWinAppSdk then
-      begin
-        DownloadPage.Add('https://aka.ms/windowsappsdk/latest/windowsappruntimeinstall-x64.exe', 'windowsappruntimeinstall_x64.exe', '');
-      end;
-
+      DownloadPage.Add('https://aka.ms/dotnet/9.0/windowsdesktop-runtime-win-x64.exe', 'dotnet9_desktop_runtime_x64.exe', '');
       DownloadPage.Show;
       try
         try
@@ -155,33 +118,18 @@ begin
           if DownloadPage.AbortedByUser then
             Log('用户取消了运行库下载')
           else
-            SuppressibleMsgBox('下载运行库依赖失败，请检查网络连接后重试。' + #13#10 + GetExceptionMessage, mbError, MB_OK, IDOK);
+            SuppressibleMsgBox('下载 .NET 9 Desktop Runtime 失败，请检查网络连接后重试。' + #13#10 + GetExceptionMessage, mbError, MB_OK, IDOK);
           Result := False;
           Exit;
         end;
 
         // 安装 .NET 9 Desktop Runtime
-        if NeedsDotNet then
+        DownloadPage.SetText('正在安装 .NET 9 Desktop Runtime 运行时...', '');
+        DownloadPage.SetProgress(0, 0);
+        if not Exec(ExpandConstant('{tmp}\dotnet9_desktop_runtime_x64.exe'), '/install /quiet /norestart', '', SW_SHOW, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
         begin
-          DownloadPage.SetText('正在安装 .NET 9 Desktop Runtime...', '');
-          DownloadPage.SetProgress(0, 0);
-          if not Exec(ExpandConstant('{tmp}\dotnet9_desktop_runtime_x64.exe'), '/install /quiet /norestart', '', SW_SHOW, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
-          begin
-            Exec(ExpandConstant('{tmp}\dotnet9_desktop_runtime_x64.exe'), '', '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
-          end;
+          Exec(ExpandConstant('{tmp}\dotnet9_desktop_runtime_x64.exe'), '', '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
         end;
-
-        // 安装 Windows App SDK Runtime
-        if NeedsWinAppSdk then
-        begin
-          DownloadPage.SetText('正在安装 Windows App SDK Runtime...', '');
-          DownloadPage.SetProgress(0, 0);
-          if not Exec(ExpandConstant('{tmp}\windowsappruntimeinstall_x64.exe'), '--quiet', '', SW_SHOW, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
-          begin
-            Exec(ExpandConstant('{tmp}\windowsappruntimeinstall_x64.exe'), '', '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
-          end;
-        end;
-
       finally
         DownloadPage.Hide;
       end;
