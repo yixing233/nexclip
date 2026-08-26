@@ -2,6 +2,7 @@
 android/
 desktop/
 server/
+server-csharp/
 server-node/
 web/
 docs/
