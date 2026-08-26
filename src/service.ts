@@ -161,17 +161,21 @@ export class SyncService {
 
   listDevices(userId: string | null = null): Array<Record<string, unknown>> {
     const threshold = new Date(Date.now() - this.cfg.onlineThresholdSeconds * 1000).toISOString().replace('T', ' ').replace('Z', '');
+    const liveDeviceIds = this.hub.onlineDeviceIds();
     const rows = (userId
       ? this.db.prepare('SELECT * FROM "Devices" WHERE "RevokedAt" IS NULL AND "UserId" = ? ORDER BY "LastSeenAt" DESC').all(userId)
       : this.db.prepare('SELECT * FROM "Devices" WHERE "RevokedAt" IS NULL AND "UserId" IS NOT NULL ORDER BY "LastSeenAt" DESC').all()) as unknown as DeviceRow[];
-    return rows.map(d => ({
-      id: d.Id, name: d.Name, platform: d.Platform, ip: d.Ip, version: d.Version,
-      online: d.LastSeenAt >= threshold,
-      userId: d.UserId ?? null,
-      bound: d.UserId != null,
-      paired: d.Token != null,
-      lastSeenAt: toIso(d.LastSeenAt),
-    }));
+    return rows.map(d => {
+      const isLive = liveDeviceIds.has(d.Id);
+      return {
+        id: d.Id, name: d.Name, platform: d.Platform, ip: d.Ip, version: d.Version,
+        online: isLive || d.LastSeenAt >= threshold,
+        userId: d.UserId ?? null,
+        bound: d.UserId != null,
+        paired: d.Token != null,
+        lastSeenAt: isLive ? toIso(dbNow()) : toIso(d.LastSeenAt),
+      };
+    });
   }
 
   // ---------- 文本上传(含去重) ----------
