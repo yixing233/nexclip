@@ -31,7 +31,7 @@ const releaseInfo = {
     size: '22.0 MB',
     serverUrl: '/releases/NexClip_Setup_v20260825.02_x64.exe',
     githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260825.02/NexClip_Setup_v20260825.02_x64.exe',
-    sha256: '84097883987fb91614fb3ca2821aaa17faa04cd78021e16ce43b6ca5915174de',
+    sha256: '1a586a4873bedd3318a43f99ce7d138c5c4e0aa3bb3ebe1db02f7cabbfcfd264',
   },
   android: {
     filename: 'NexClip_v20260825.02_Android.apk',
