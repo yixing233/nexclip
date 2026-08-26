@@ -797,40 +797,6 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
                   </Button>
                 </Dropdown>
               </div>
-
-              {/* 底部提示与直达通道 */}
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  marginTop: 8,
-                  padding: '0 2px',
-                  fontSize: 11,
-                  color: c.textTertiary,
-                }}
-              >
-                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <ExternalLink size={12} />
-                  <span>默认通道: GitHub Releases</span>
-                </span>
-                <Dropdown menu={{ items: windowsMenuItems }} placement="bottomRight" trigger={['click']}>
-                  <span
-                    style={{
-                      color: isDark ? '#58A6FF' : '#2563EB',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 2,
-                      fontWeight: 500,
-                    }}
-                  >
-                    <Zap size={11} />
-                    <span>服务器直连下载</span>
-                    <ChevronDown size={11} />
-                  </span>
-                </Dropdown>
-              </div>
             </div>
           </div>
 
@@ -940,40 +906,6 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
                   >
                     <ChevronDown size={16} />
                   </Button>
-                </Dropdown>
-              </div>
-
-              {/* 底部提示与直达通道 */}
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  marginTop: 8,
-                  padding: '0 2px',
-                  fontSize: 11,
-                  color: c.textTertiary,
-                }}
-              >
-                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <ExternalLink size={12} />
-                  <span>默认通道: GitHub Releases</span>
-                </span>
-                <Dropdown menu={{ items: androidMenuItems }} placement="bottomRight" trigger={['click']}>
-                  <span
-                    style={{
-                      color: '#10B981',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 2,
-                      fontWeight: 500,
-                    }}
-                  >
-                    <Zap size={11} />
-                    <span>服务器直连下载</span>
-                    <ChevronDown size={11} />
-                  </span>
                 </Dropdown>
               </div>
             </div>
