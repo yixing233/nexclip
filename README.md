@@ -4,10 +4,37 @@ NexClip 是一套现代化、轻量高效的多端跨设备剪贴板同步与局
 
 ---
 
-## 核心特性
+## 客户端下载与版本发布 (Releases)
+
+您可以在 [GitHub Releases 页面](https://github.com/yixing233/nexclip/releases) 下载最新版本的客户端安装包与发行产物：
+
+| 平台 / 组件 | 产物类型 | 适用系统 | 下载直链 |
+| :--- | :--- | :--- | :--- |
+| **Windows 桌面端** | 安装包 (`.exe`) / 便携绿色版 | Windows 10 (1809+) / Windows 11 (x64) | [下载 Windows 最新版](https://github.com/yixing233/nexclip/releases/latest) |
+| **Android 移动端** | 安装包 (`.apk`) | Android 8.0+ (推荐 HyperOS / MIUI) | [下载 Android 最新版](https://github.com/yixing233/nexclip/releases/latest) |
+| **Node.js 服务端** | 源码包 / 容器镜像 | 全平台 (Node.js >= 22.5) | [查看 Release](https://github.com/yixing233/nexclip/releases) |
+| **.NET C# 服务端** | 单文件独立发布包 | Linux / Windows / macOS (.NET 9) | [查看 Release](https://github.com/yixing233/nexclip/releases) |
+
+---
+
+## 源码分支导航 (Source Code Branches)
+
+本项目采用多分支独立代码架构，主分支 (`master`) 专注于 Release 发布与聚合文档导航，各平台代码托管于独立分支：
+
+| 分支名称 | 平台 / 工程 | 技术栈 | 推荐 IDE / 环境 | 克隆指令 |
+| :--- | :--- | :--- | :--- | :--- |
+| **[`windows`](https://github.com/yixing233/nexclip/tree/windows)** | Windows 桌面端 | WinUI 3 + .NET 9 + Mica | Visual Studio 2022 | `git clone -b windows https://github.com/yixing233/nexclip.git` |
+| **[`android`](https://github.com/yixing233/nexclip/tree/android)** | Android 移动端 | Compose + Miuix + HyperOS | Android Studio | `git clone -b android https://github.com/yixing233/nexclip.git` |
+| **[`server`](https://github.com/yixing233/nexclip/tree/server)** | Node 服务端 | Node.js + TypeScript + ws | VSCode / Node.js | `git clone -b server https://github.com/yixing233/nexclip.git` |
+| **[`server-csharp`](https://github.com/yixing233/nexclip/tree/server-csharp)** | .NET 服务端 | ASP.NET Core 9 + EF Core | VS / Rider / .NET 9 | `git clone -b server-csharp https://github.com/yixing233/nexclip.git` |
+| **[`web`](https://github.com/yixing233/nexclip/tree/web)** | Web 控制台 | React 19 + Vite + Tailwind | VSCode / WebStorm | `git clone -b web https://github.com/yixing233/nexclip.git` |
+
+---
+
+## 核心特性矩阵
 
 - **多端全覆盖**：
-  - **Android 端**：基于 Jetpack Compose + Miuix 设计风格，深度适配 HyperOS 灵动超级岛通知，支持 Xposed 框架注入、Shizuku 免 Root 授权及前台常驻等多种后台监听机制。
+  - **Android 端**：基于 Jetpack Compose + Miuix 设计风格，深度适配 HyperOS 灵动超级岛通知，支持 Xposed 模块注入、Shizuku 免 Root 授权及前台常驻等多种后台监听机制。
   - **Windows 桌面端**：基于 WinUI 3 + .NET 9 原生构建，深度集成 Windows 系统托盘与全局快捷键呼出，支持富文本、高清图片及文件传输。
   - **服务端 (Server)**：提供 Node.js (TypeScript) 与 .NET 9 ASP.NET Core 双版本实现，基于 SignalR / WebSocket 实现毫秒级双向实时同步，内置 SQLite 数据库，开箱即用。
   - **Web 管理端**：现代响应式 React + Vite 控制台，支持免客户端快速查看、发送与管理剪贴板数据。
@@ -18,90 +45,31 @@ NexClip 是一套现代化、轻量高效的多端跨设备剪贴板同步与局
 
 ---
 
-## 仓库分支架构
+## 服务端快速部署
 
-为了便于各端开发者使用专属 IDE（Android Studio / Visual Studio / VSCode）进行独立开发与编译，本项目提供了单工程独立分支：
-
-| 分支名 | 适用平台 | 说明与建议 IDE |
-| :--- | :--- | :--- |
-| **`master`** | 全平台 Monorepo | 包含所有平台源码（Android、Desktop、Server、Web） |
-| **`android`** | Android 移动端 | 根目录为 Android 项目工程，推荐使用 **Android Studio** 直接打开 |
-| **`windows`** | Windows 桌面端 | 根目录为 WinUI 3 原生工程，推荐使用 **Visual Studio 2022** 打开 |
-| **`server`** | Node.js 服务端 | 根目录为 TypeScript 服务端，推荐使用 **VSCode / Node.js** 运行 |
-| **`server-csharp`** | .NET C# 服务端 | 根目录为 ASP.NET Core 服务端，推荐使用 **Visual Studio / Rider** 运行 |
-
-克隆特定分支示例：
+### 方案 A：Node.js 服务端 (推荐)
 ```bash
-# 仅克隆 Android 端
-git clone -b android https://github.com/yixing233/nexclip.git nexclip-android
-
-# 仅克隆 Windows 端
-git clone -b windows https://github.com/yixing233/nexclip.git nexclip-windows
-
-# 仅克隆服务端
+# 克隆服务端分支
 git clone -b server https://github.com/yixing233/nexclip.git nexclip-server
-```
+cd nexclip-server
 
----
-
-## 快速开始
-
-### 1. 部署服务端
-
-#### 方案 A：Node.js / TypeScript 服务端 (推荐)
-```bash
-cd server-node
+# 安装依赖并启动
 npm install
 npm run build
 npm start
 ```
-默认服务端口为 `5033`，可在 `server-node/config.json` 或通过环境变量自定义。
 
-#### 方案 B：.NET 9 ASP.NET Core 服务端
+### 方案 B：.NET C# 服务端
 ```bash
-cd server
+# 克隆 .NET 服务端分支
+git clone -b server-csharp https://github.com/yixing233/nexclip.git nexclip-server-csharp
+cd nexclip-server-csharp
+
+# 运行
 dotnet run --configuration Release
 ```
 
----
-
-### 2. 编译与运行 Windows 桌面端
-
-- **环境要求**：Windows 10/11, .NET 9 SDK, Visual Studio 2022 (包含 Windows App SDK 工作负荷)。
-- **编译命令**：
-```powershell
-cd desktop
-dotnet build NexClip.Desktop.csproj -c Release
-```
-*(注：编译产物位于 `desktop/bin/x64/Release/net9.0-windows10.0.19041.0/`)*
-
----
-
-### 3. 编译与安装 Android 端
-
-- **环境要求**：JDK 17+, Android SDK (API 35+), Android Studio Ladybug 或更高版本。
-- **编译 Debug APK**：
-```powershell
-cd android
-.\gradlew.bat assembleDebug
-```
-*(注：安装包生成于 `android/app/build/outputs/apk/debug/`)*
-
----
-
-### 4. 运行 Web 管理面板
-
-```bash
-cd web
-npm install
-npm run dev
-```
-
----
-
-## 服务端配置说明
-
-通过 `config.json` 或环境变量进行配置：
+### 常用环境变量配置
 
 | 配置字段 | 环境变量名称 | 默认值 | 描述 |
 | :--- | :--- | :--- | :--- |
@@ -111,14 +79,6 @@ npm run dev
 | `ImagePath` | `SC_IMAGE_PATH` | `data/images` | 剪贴板图片文件保存目录 |
 | `MaxHistoryItems` | `SC_MAX_HISTORY` | `200` | 剪贴板历史最大保留条数 |
 | `OnlineThresholdSeconds` | `SC_ONLINE_THRESHOLD_SECONDS` | `120` | 设备在线判定心跳超时时间 (秒) |
-
----
-
-## 项目规范与技术约定
-
-- **图标规范**：严格使用 Lucide / FontAwesome 矢量图标体系，Android 端使用 Compose ImageVector，桌面端使用 SVG 资源。
-- **UI 风格**：Android 端统一接入 Miuix 与 HyperOS 设计语言；Windows 端采用 WinUI 3 Mica 材质与 Fluent Design 规范。
-- **通信协议**：采用 ASP.NET Core SignalR 协议规范实现实时双向消息通信。
 
 ---
 

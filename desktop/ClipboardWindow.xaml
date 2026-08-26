@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<Window
-    x:Class="NexClip.Desktop.ClipboardWindow"
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="NexClip 剪贴板">
-    <views:ClipboardMainPage xmlns:views="using:NexClip.Desktop.Views" />
-</Window>

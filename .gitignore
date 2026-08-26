@@ -1,95 +1,24 @@
-# ==========================================
-# 通用构建产物与依赖 (General & Dependencies)
-# ==========================================
-node_modules/
-dist/
-build/
-bin/
-obj/
-AppPackages/
-BundleArtifacts/
-Generated\ Files/
-GeneratedFiles/
-.cxx/
-captures/
+# 本地各端目录（master 分支作为 Release 门户，不跟踪各端源码）
+android/
+desktop/
+server/
+server-node/
+web/
+docs/
+scripts/
+backup/
+tmp/
+syncclipboard-client/
+.artifacts/
 
-# ==========================================
-# 操作系统与 IDE 配置 (OS & IDEs)
-# ==========================================
+# 操作系统与通用配置
 .DS_Store
 Thumbs.db
 desktop.ini
 $RECYCLE.BIN/
 
+# IDE 与临时文件
 .idea/
-*.iml
 .vscode/
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
-*.suo
-*.user
-*.userosscache
-*.sln.docstates
-.vs/
-.kotlin/
-.gradle/
-
-# ==========================================
-# Android 构建与本地环境 (Android)
-# ==========================================
-local.properties
-signing.properties
-*.keystore
-*.jks
-*.apk
-*.aab
-*.ap_
-*.dex
-
-# ==========================================
-# Node.js & TypeScript 构建与环境 (Node.js)
-# ==========================================
-.env
-.env.local
-.env.*.local
-*.tsbuildinfo
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
-# ==========================================
-# 运行时数据与数据库 (Runtime Data & DB)
-# ==========================================
-server/data/
-server-node/data/
-*.db
-*.db-shm
-*.db-wal
-*.sqlite
-*.sqlite3
-uploads/
-
-# ==========================================
-# 日志文件 (Logs)
-# ==========================================
-*.log
-compile_err.txt
-*.tlog
-
-# ==========================================
-# 安装包构建产物 (Installer Output)
-# ==========================================
-desktop/installer/Output/
-installer/Output/
-
-# ==========================================
-# 本地临时文件与备份 (Temporary & Backups)
-# ==========================================
-tmp/
-backup/
-syncclipboard-client/
-.artifacts/
-
+*.swp
+*.tmp

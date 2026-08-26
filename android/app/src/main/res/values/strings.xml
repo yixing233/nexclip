@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">NexClip</string>
-    <string name="module_description">解锁后台剪贴板读取,并支持跨设备同步(Xposed 模块)</string>
-    <string name="notification_channel_name">剪贴板监听</string>
-    <string name="notification_title">NexClip</string>
-    <string name="notification_text">正在持续监听剪贴板变化</string>
-</resources>

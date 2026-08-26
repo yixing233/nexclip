@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">剪贴板同步</string>
-    <string name="module_description">解锁后台剪贴板读取,并支持跨设备同步(Xposed 模块)</string>
-</resources>

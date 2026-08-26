@@ -1,1 +1,0 @@
-$patch = "*** Begin Patch`n*** Delete File: E:\Code\syncclipboard\tmp\__patch_probe.txt`n*** End Patch`n"; $tmp = "$env:TEMP\probe_patch.txt"; [System.IO.File]::WriteAllText($tmp, $patch, [System.Text.UTF8Encoding]::new($false)); cmd /c "apply_patch < `"$tmp`""; "exit=$LASTEXITCODE"

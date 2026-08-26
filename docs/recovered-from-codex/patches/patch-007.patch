@@ -1,1 +1,0 @@
-"*** Begin Patch`n*** Delete File: E:\Code\syncclipboard\tmp\__patch_probe.txt`n*** End Patch" | apply_patch; "exit=$LASTEXITCODE"
