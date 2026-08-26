@@ -6,6 +6,7 @@
     <RootNamespace>NexClipServer</RootNamespace>
     <AssemblyName>NexClipServer</AssemblyName>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <DefaultItemExcludes>$(DefaultItemExcludes);tmp\**;backup\**;android\**;web\**;desktop\**;server\**;server-node\**;NexClip.Tray\**;syncclipboard-client\**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.6" />
