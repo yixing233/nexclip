@@ -16,6 +16,13 @@
 -dontwarn com.microsoft.signalr.**
 -keep class clip.yixing.sync.model.** { *; }
 -keepclassmembers class clip.yixing.sync.model.** { *; }
+-keep class clip.yixing.sync.smartaction.** { *; }
+-keepclassmembers class clip.yixing.sync.smartaction.** { *; }
+-keep class clip.yixing.sync.util.UpdateInfo { *; }
+
+# Miuix UI & Compose
+-keep class top.yukonga.miuix.kmp.** { *; }
+-dontwarn top.yukonga.miuix.kmp.**
 
 # HyperOS 灵动焦点通知 (FocusNotification)
 -keep class com.xzakota.hyper.notification.** { *; }
@@ -25,3 +32,4 @@
 -dontwarn org.slf4j.**
 -dontwarn okhttp3.**
 -dontwarn kotlinx.coroutines.**
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
