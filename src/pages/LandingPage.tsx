@@ -19,7 +19,27 @@ import {
   Sliders,
   Sparkles,
   Command,
+  Copy,
+  Server,
 } from 'lucide-react'
+
+const releaseInfo = {
+  version: 'v20260825.01',
+  windows: {
+    filename: 'NexClip_Setup_v20260825.01_x64.exe',
+    size: '22.0 MB',
+    serverUrl: '/releases/NexClip_Setup_v20260825.01_x64.exe',
+    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260825.01/NexClip_Setup_v20260825.01_x64.exe',
+    sha256: '5de8eba293f663bccec347b395ad934d8c12bdd9fc1ab6b450fb5c844c47f7fa',
+  },
+  android: {
+    filename: 'NexClip_v20260825.01_Android.apk',
+    size: '15.3 MB',
+    serverUrl: '/releases/NexClip_v20260825.01_Android.apk',
+    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260825.01/NexClip_v20260825.01_Android.apk',
+    sha256: 'f7e980505e831d765a52eef84a8fc92df7bc0b0c8f3cc9b04ddbd8f00cb09592',
+  },
+}
 
 interface LandingPageProps {
   isDark: boolean
@@ -607,33 +627,96 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
             }}
           >
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-                <div style={{ width: 42, height: 42, borderRadius: 10, background: 'rgba(0, 164, 239, 0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#00A4EF' }}>
-                  <Monitor size={22} />
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ width: 42, height: 42, borderRadius: 10, background: 'rgba(0, 164, 239, 0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#00A4EF' }}>
+                    <Monitor size={22} />
+                  </div>
+                  <div>
+                    <h3 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Windows 客户端</h3>
+                    <span style={{ fontSize: 12, color: c.textTertiary }}>Windows 10 / 11 · x64</span>
+                  </div>
                 </div>
-                <div>
-                  <h3 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Windows 客户端</h3>
-                  <span style={{ fontSize: 12, color: c.textTertiary }}>Windows 10 / 11 · x64</span>
-                </div>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    padding: '2px 8px',
+                    borderRadius: 9999,
+                    background: isDark ? 'rgba(68, 147, 248, 0.15)' : 'rgba(37, 99, 235, 0.10)',
+                    color: isDark ? '#58A6FF' : '#2563EB',
+                  }}
+                >
+                  {releaseInfo.version}
+                </span>
               </div>
               <p style={{ fontSize: 13, color: c.textSecondary, lineHeight: 1.6, marginBottom: 24 }}>
-                WinUI 3 原生磨砂浮窗，支持 Ctrl+Alt+S 热键唤醒、回车直贴、托盘常驻与本地极轻 SQLite 存储。
+                WinUI 3 原生 Fluent 视觉，支持智能动作识别、色值预览转换、文件路径直达、跨端互传与全拼检索。
               </p>
             </div>
-            <Button
-              type="primary"
-              size="large"
-              block
-              icon={<Download size={16} />}
-              style={{
-                borderRadius: 10,
-                height: 44,
-                fontWeight: 600,
-              }}
-              onClick={() => message.info('可通过 GitHub Releases 获取最新 NexClip.exe 安装包')}
-            >
-              获取 Windows 版 (.exe)
-            </Button>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {/* 主下载: 服务器直连 */}
+              <Button
+                type="primary"
+                size="large"
+                block
+                icon={<Zap size={16} />}
+                href={releaseInfo.windows.serverUrl}
+                download={releaseInfo.windows.filename}
+                style={{
+                  borderRadius: 10,
+                  height: 44,
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                }}
+              >
+                服务器直连下载 ({releaseInfo.windows.size})
+              </Button>
+
+              {/* 备用通道与校验信息行 */}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Button
+                  size="middle"
+                  icon={<ExternalLink size={14} />}
+                  href={releaseInfo.windows.githubUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{
+                    flex: 1,
+                    borderRadius: 8,
+                    height: 36,
+                    fontSize: 12,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                  }}
+                >
+                  GitHub 源
+                </Button>
+                <Tooltip title={`SHA256: ${releaseInfo.windows.sha256} (点击复制)`}>
+                  <Button
+                    size="middle"
+                    icon={<Copy size={14} />}
+                    onClick={() => {
+                      navigator.clipboard.writeText(releaseInfo.windows.sha256)
+                      message.success('Windows 安装包 SHA256 已复制')
+                    }}
+                    style={{
+                      borderRadius: 8,
+                      height: 36,
+                      fontSize: 12,
+                    }}
+                  >
+                    校验码
+                  </Button>
+                </Tooltip>
+              </div>
+            </div>
           </div>
 
           {/* Android 客户端 */}
@@ -659,32 +742,98 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
             }}
           >
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-                <div style={{ width: 42, height: 42, borderRadius: 10, background: 'rgba(61, 220, 132, 0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#3DDC84' }}>
-                  <Smartphone size={22} />
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ width: 42, height: 42, borderRadius: 10, background: 'rgba(61, 220, 132, 0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#3DDC84' }}>
+                    <Smartphone size={22} />
+                  </div>
+                  <div>
+                    <h3 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Android 客户端</h3>
+                    <span style={{ fontSize: 12, color: c.textTertiary }}>Android 8.0 及以上</span>
+                  </div>
                 </div>
-                <div>
-                  <h3 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Android 客户端</h3>
-                  <span style={{ fontSize: 12, color: c.textTertiary }}>Android 8.0 及以上</span>
-                </div>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    padding: '2px 8px',
+                    borderRadius: 9999,
+                    background: isDark ? 'rgba(61, 220, 132, 0.15)' : 'rgba(16, 185, 129, 0.10)',
+                    color: isDark ? '#3DDC84' : '#10B981',
+                  }}
+                >
+                  {releaseInfo.version}
+                </span>
               </div>
               <p style={{ fontSize: 13, color: c.textSecondary, lineHeight: 1.6, marginBottom: 24 }}>
-                MIUIX 拟物玻璃风格，支持系统后台静默监听同步、状态栏/灵动岛焦点通知与 6 位码极速关联。
+                Jetpack Compose + Miuix 视觉，支持 Xposed/Shizuku/前台服务全方案后台监听、验证码智能提取与灵动通知。
               </p>
             </div>
-            <Button
-              size="large"
-              block
-              icon={<Download size={16} />}
-              style={{
-                borderRadius: 10,
-                height: 44,
-                fontWeight: 600,
-              }}
-              onClick={() => message.info('可通过 GitHub Releases 获取最新 APK 安装包')}
-            >
-              获取 Android 版 (.apk)
-            </Button>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {/* 主下载: 服务器直连 */}
+              <Button
+                type="primary"
+                size="large"
+                block
+                icon={<Zap size={16} />}
+                href={releaseInfo.android.serverUrl}
+                download={releaseInfo.android.filename}
+                style={{
+                  borderRadius: 10,
+                  height: 44,
+                  fontWeight: 600,
+                  background: '#10B981',
+                  borderColor: '#10B981',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                }}
+              >
+                服务器直连下载 ({releaseInfo.android.size})
+              </Button>
+
+              {/* 备用通道与校验信息行 */}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Button
+                  size="middle"
+                  icon={<ExternalLink size={14} />}
+                  href={releaseInfo.android.githubUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{
+                    flex: 1,
+                    borderRadius: 8,
+                    height: 36,
+                    fontSize: 12,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                  }}
+                >
+                  GitHub 源
+                </Button>
+                <Tooltip title={`SHA256: ${releaseInfo.android.sha256} (点击复制)`}>
+                  <Button
+                    size="middle"
+                    icon={<Copy size={14} />}
+                    onClick={() => {
+                      navigator.clipboard.writeText(releaseInfo.android.sha256)
+                      message.success('Android 安装包 SHA256 已复制')
+                    }}
+                    style={{
+                      borderRadius: 8,
+                      height: 36,
+                      fontSize: 12,
+                    }}
+                  >
+                    校验码
+                  </Button>
+                </Tooltip>
+              </div>
+            </div>
           </div>
 
           {/* Web 控制台 */}
@@ -720,7 +869,7 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
                 </div>
               </div>
               <p style={{ fontSize: 13, color: c.textSecondary, lineHeight: 1.6, marginBottom: 24 }}>
-                无需安装任何软件，在任意电脑或平板浏览器中即可实时查看剪贴板历史流、图片预览与在线设备监控。
+                无需安装任何客户端软件，在任意电脑或平板浏览器中即可实时查看剪贴板历史流、图片预览与在线设备监控。
               </p>
             </div>
             <Button
