@@ -21,6 +21,7 @@
     <InformationalVersion>20260825.01</InformationalVersion>
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
     <WindowsSdkPackageVersion>10.0.19041.57</WindowsSdkPackageVersion>
+    <DefaultItemExcludes>$(DefaultItemExcludes);tmp\**;backup\**;server\**;server-node\**;android\**;web\**;syncclipboard-client\**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
     <Content Include="Assets\lucide\*.svg">
