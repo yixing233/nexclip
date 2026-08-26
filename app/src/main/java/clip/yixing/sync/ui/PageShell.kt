@@ -1,5 +1,6 @@
 package clip.yixing.sync.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
@@ -72,7 +73,7 @@ fun BarBlurSurface(
                 colors = BlurDefaults.blurColors(
                     blendColors = listOf(
                         BlendColorEntry(
-                            color = barSurface.copy(alpha = 0.55f),
+                            color = barSurface.copy(alpha = 0.78f),
                             mode = BlurBlendMode.SrcOver
                         )
                     )
@@ -127,6 +128,7 @@ fun PageShell(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .background(barSurface)
                 .layerBackdrop(pageBackdrop)
         ) {
             content(scrollBehavior, padding.calculateTopPadding())
@@ -142,7 +144,8 @@ fun PageShell(
 fun Modifier.predictiveBackAnimation(
     progress: Float,
     edge: Int = BackEventCompat.EDGE_LEFT,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    screenCornerRadius: Dp = 34.dp
 ): Modifier = if (enabled && progress > 0f) {
     this.graphicsLayer {
         val p = FastOutSlowInEasing.transform(progress)
@@ -155,9 +158,10 @@ fun Modifier.predictiveBackAnimation(
         scaleY = scale
         // 变换原点贴合触摸滑动侧
         transformOrigin = TransformOrigin(if (edge == BackEventCompat.EDGE_LEFT) 0f else 1f, 0.5f)
-        // 圆角卡片化裁切
+        // 物理屏幕圆角完美贴合裁切 (基准与手机屏幕物理边缘无缝衔接)
         clip = true
-        shape = RoundedCornerShape((p * 24).dp)
+        val corner = screenCornerRadius + (p * 4).dp
+        shape = RoundedCornerShape(corner)
         // 浅层淡出
         alpha = 1f - p * 0.12f
     }
