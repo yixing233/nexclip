@@ -10,6 +10,16 @@ backup/
 tmp/
 syncclipboard-client/
 .artifacts/
+.gradle/
+NexClip.Tray/
+app/
+bin/
+build/
+dist/
+local.properties
+node_modules/
+obj/
+tsconfig.tsbuildinfo
 
 # 操作系统与通用配置
 .DS_Store
