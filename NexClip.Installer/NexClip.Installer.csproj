@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>NexClip_Setup</AssemblyName>
+    <RootNamespace>NexClip.Installer</RootNamespace>
+    <ApplicationIcon>..\Assets\icon.ico</ApplicationIcon>
+    <Version>20260825.02</Version>
+    <AssemblyVersion>2026.8.25.2</AssemblyVersion>
+    <FileVersion>2026.8.25.2</FileVersion>
+    <InformationalVersion>20260825.02</InformationalVersion>
+    
+    <!-- 单文件自包含编译配置 -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\payload.zip" Condition="Exists('Resources\payload.zip')" />
+    <Resource Include="..\Assets\icon.ico">
+      <Link>Resources\icon.ico</Link>
+    </Resource>
+  </ItemGroup>
+
+</Project>
