@@ -1,52 +1,83 @@
-# NexClip v20260825.01 发布日志
+# NexClip v20260825.01 - 首个正式版本发布 (Initial Release)
 
-NexClip 正式发布 v20260825.01 版本！本次更新带来了全新的多端独立分支架构、深度安装包体积优化（总体积缩减超过 72%）、Android 扫码配对与大图预览、Windows 智能动作与全屏拖拽流转，以及全链路同步防回环优化。
-
----
-
-## 核心亮点速览
-
-1. **安装包极致瘦身**：
-   - Windows 桌面端安装包从 34.8 MB 缩减至 **8.96 MB**（体积降低 74.3%）；
-   - Android 客户端安装包从 53.7 MB 缩减至 **15.28 MB**（体积降低 71.6%）。
-2. **全新多分支独立代码架构**：各端工程（Windows / Android / Server Node / Server .NET / Web）均提供专属纯净分支，主分支专注于 Release 门户与导航。
-3. **Android 扫码互联与大图系统**：支持 CameraX + 离线相册扫码配对，内置高清大图缩放查看器与离线缓存。
-4. **Windows 智能动作与多模态流转**：新增链接/验证码/手机号一键智能动作，支持全屏文件拖拽流转与来源应用图标提取。
-5. **实时同步协议升级**：彻底解决多端剪贴板回环风暴 (Echo Push) 与连续重复条目问题。
+NexClip 是一套专为多端设备打造的现代化、轻量高效跨平台剪贴板同步与局域网文件流转系统。本次为 NexClip 的**首个正式发布版本**，带来全平台客户端（Windows / Android / Web）以及双技术栈自建服务端的完整功能体系。
 
 ---
 
-## 详细更新日志
+## 产品定位与核心优势
 
-### [Windows 桌面端]
-- **[构建]** 优化依赖发布架构，剥离调试符号与冗余资源，安装包大幅精简至 8.96 MB。
-- **[新增]** 智能动作 (Smart Action) 引擎：自动识别链接、验证码、手机号、邮箱、IP 与快递单号，提供一键直达与快捷操作。
-- **[新增]** 剪贴板来源程序识别：自动提取并展示复制内容的源应用程序名称与图标。
-- **[新增]** 全屏拖拽覆盖层与截图快速粘贴流转。
-- **[优化]** 缩略图内存管理机制，大幅降低长时间运行时的内存占用。
-- **[修复]** 修复程序启动初始化时偶发的快捷键冲突误报提示。
-- **[修复]** 消除远程同步写回时的重复条目与来源应用误判。
-- **[调整]** 设置面板布局优化，移除冗余卡片与副标题，保持界面纯净紧凑。
+- **跨端全覆盖**：深度适配 Windows 10/11 (WinUI 3)、Android (Miuix / HyperOS) 及 Web 浏览器。
+- **毫秒级实时流转**：基于 SignalR / WebSocket 长连接协议，实现双向无感实时推送与多设备在线状态感知。
+- **极致轻量化**：Windows 安装包仅 **8.96 MB**，Android 安装包仅 **15.28 MB**，极低内存与系统资源占用。
+- **隐私与自建优先**：支持自建服务端部署，内置轻量 SQLite 数据库，数据完全保存在自建服务器或本地，无第三方数据泄露风险。
 
-### [Android 客户端]
-- **[构建]** 开启 R8 代码混淆、全局摇树优化与 64 位 ABI 过滤，APK 体积精简至 15.28 MB。
-- **[新增]** 设备扫码配对：集成 CameraX 与本地扫码分析器，支持摄像头对焦扫描及系统相册选图识别。
-- **[新增]** 高清图片查看器：支持手势双指缩放、旋转、一键复制、保存到相册及系统分享。
-- **[优化]** Miuix 主页仪表盘重构：采用 2:1 模块化卡片布局，设备卡片重构为双行紧凑视图。
-- **[优化]** 网络健康度与延迟检测：改用专用健康探测接口精确测量局域网/公网毫秒级延迟。
-- **[优化]** 权限与认证解绑：解除授权时即时清空设备列表并呈现引导状态。
-- **[统一]** 界面文案与交互统一规范，全面采用 Lucide 矢量图标，杜绝 Emoji 修饰。
+---
 
-### [核心同步协议与服务端]
-- **[核心]** 重构剪贴板推送流控机制，彻底解决多设备间的回环广播、回显风暴与历史数据重复插入。
-- **[服务端]** Node.js 服务端全面对齐 SignalR 实时线协议，内置原生轻量数据库。
-- **[更新]** 全平台更新检测接口与项目开源地址全面切换至 `yixing233/nexclip`。
+## 全平台功能概览
+
+### 1. Windows 桌面端 (WinUI 3 / .NET 9)
+- **现代 Fluent 视觉**：基于 WinUI 3 原生打造，深度融合 Mica 背景材质与自适应深色/浅色主题。
+- **托盘与全局热键**：支持快捷键一键唤出剪贴板历史浮窗，托盘常驻支持快速暂停同步与状态监控。
+- **智能动作引擎 (Smart Action)**：自动识别复制内容中的链接、短信验证码、手机号、IP 地址、邮箱及快递单号，提供一键打开、复制、拨打或查询。
+- **来源应用感知**：自动探测并展示复制内容的产生来源软件名称及高精应用图标。
+- **多模态流转**：
+  - 纯文本与多行代码高亮；
+  - 高清图片缩略图与快速保存；
+  - 全屏文件拖拽覆盖层，支持将外部文件一键推送到其他设备。
+- **拼音检索**：内置拼音全拼及拼音首字母模糊搜索，毫秒级定位历史记录。
+
+### 2. Android 移动端 (Jetpack Compose / Miuix)
+- **Miuix 设计语言**：遵循小米 HyperOS / Miuix 视觉规范，配备 2:1 模块化仪表盘与分类胶囊。
+- **HyperOS 灵动超级岛**：原生集成 Focus Notification V3 协议，在状态栏与灵动岛展示呼吸灯效与剪贴板状态提醒。
+- **全方位后台存活方案**：
+  - **Xposed / LSPosed 模式**：通过系统剪贴板服务底层 Hook 实现 100% 无感后台同步与防休眠；
+  - **Shizuku 模式**：免 Root 授权，通过 ADB 权限实现后台剪贴板监听；
+  - **前台常驻服务**：适配通用 Android 系统的常驻与自启策略。
+- **扫码配对**：集成 CameraX 与本地扫码引擎，支持摄像头对焦扫描及系统相册识码，秒级完成设备授权。
+- **大图查看与流转**：支持手势缩放、全屏旋转、保存相册及系统分享。
+- **侧边悬浮窗**：支持贴边小窗快速查看最近同步记录与常用动作。
+
+### 3. 服务端 (Node.js & .NET 9 双实现)
+- **Node.js (TypeScript) 服务端 [推荐]**：
+  - 超轻量设计，内置使用 `node:sqlite` 原生数据库，运行时内存仅约 30~50MB；
+  - 完整实现 SignalR JSON 线协议，支持多设备心跳监测与定向推送；
+  - 支持直接托管 Web 管理端静态资源。
+- **.NET 9 ASP.NET Core 服务端**：
+  - 采用 Kestrel 高性能服务器与 Entity Framework Core，支持单文件无依赖发布。
+
+### 4. Web 管理控制台 (React 19 / Vite)
+- 现代化响应式控制台，支持在任意浏览器中管理多端设备、检索剪贴板历史与在线发送文本。
+
+---
+
+## 快速安装与使用
+
+### Windows 桌面端
+1. 下载并运行 [`NexClip_Setup_v20260825.01_x64.exe`](https://github.com/yixing233/nexclip/releases/download/v20260825.01/NexClip_Setup_v20260825.01_x64.exe)；
+2. 安装向导将自动检测系统环境，并按需在线静默安装所需的 .NET 9 与 Windows App SDK 依赖；
+3. 安装完成后即可在系统托盘及快捷键中使用。
+
+### Android 移动端
+1. 下载并安装 [`NexClip_v20260825.01_Android.apk`](https://github.com/yixing233/nexclip/releases/download/v20260825.01/NexClip_v20260825.01_Android.apk)；
+2. 首次启动可选择使用 **Shizuku 授权**、**Xposed 模块激活** 或 **常驻服务**；
+3. 扫码或输入配对码即可连接自建服务端。
+
+### 服务端自建 (极简 3 步)
+```bash
+# 克隆服务端分支
+git clone -b server https://github.com/yixing233/nexclip.git nexclip-server
+cd nexclip-server
+
+# 安装并启动
+npm install && npm run build && npm start
+```
+*(服务端默认运行于 `http://0.0.0.0:5033`，可在 `config.json` 或环境变量中配置端口及 AuthToken)*
 
 ---
 
 ## 发布文件与 SHA256 校验
 
-| 文件名称 | 适用平台 | 文件大小 | SHA256 校验码 |
+| 产物文件 | 适用平台 | 文件大小 | SHA256 校验码 |
 | :--- | :--- | :--- | :--- |
 | `NexClip_Setup_v20260825.01_x64.exe` | Windows 10 (1809+) / Windows 11 (x64) | 8.96 MB | `A2B5A57C66B4771163D7AF740A846AEEE81928BF0A23958030C8EE314DA11EE9` |
 | `NexClip_v20260825.01_Android.apk` | Android 8.0+ (推荐 HyperOS / MIUI) | 15.28 MB | `F7E980505E831D765A52EEF84A8FC92DF7BC0B0C8F3CC9B04DDBD8F00CB09592` |
@@ -55,8 +86,10 @@ NexClip 正式发布 v20260825.01 版本！本次更新带来了全新的多端�
 
 ## 源码分支导航
 
-- **Windows 桌面端源码**：`git clone -b windows https://github.com/yixing233/nexclip.git`
-- **Android 客户端源码**：`git clone -b android https://github.com/yixing233/nexclip.git`
-- **Node.js 服务端源码**：`git clone -b server https://github.com/yixing233/nexclip.git`
-- **.NET C# 服务端源码**：`git clone -b server-csharp https://github.com/yixing233/nexclip.git`
-- **Web 控制台源码**：`git clone -b web https://github.com/yixing233/nexclip.git`
+本项目采用单平台独立分支架构，拉取特定分支即可使用对应 IDE 独立打开：
+
+- **Windows 桌面端工程**：`git clone -b windows https://github.com/yixing233/nexclip.git`
+- **Android 移动端工程**：`git clone -b android https://github.com/yixing233/nexclip.git`
+- **Node.js 服务端工程**：`git clone -b server https://github.com/yixing233/nexclip.git`
+- **.NET C# 服务端工程**：`git clone -b server-csharp https://github.com/yixing233/nexclip.git`
+- **Web 控制台工程**：`git clone -b web https://github.com/yixing233/nexclip.git`
