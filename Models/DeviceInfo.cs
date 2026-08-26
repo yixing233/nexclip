@@ -1,16 +1,80 @@
-﻿namespace NexClip.Desktop.Models;
+using CommunityToolkit.Mvvm.ComponentModel;
+
+namespace NexClip.Desktop.Models;
 
 /// <summary>设备列表项(GET /api/devices)。</summary>
-public sealed class DeviceInfo
+public sealed class DeviceInfo : ObservableObject
 {
-    public string Id { get; set; } = "";
-    public string? Name { get; set; }
-    public string? Platform { get; set; }
-    public string? Ip { get; set; }
-    public string? Version { get; set; }
-    public bool Online { get; set; }
-    public DateTime LastSeenAt { get; set; }   // UTC
-    public bool IsCurrent { get; set; }
+    private string _id = "";
+    public string Id
+    {
+        get => _id;
+        set => SetProperty(ref _id, value);
+    }
+
+    private string? _name;
+    public string? Name
+    {
+        get => _name;
+        set => SetProperty(ref _name, value);
+    }
+
+    private string? _platform;
+    public string? Platform
+    {
+        get => _platform;
+        set
+        {
+            if (SetProperty(ref _platform, value)) OnPropertyChanged(nameof(Subtitle));
+        }
+    }
+
+    private string? _ip;
+    public string? Ip
+    {
+        get => _ip;
+        set
+        {
+            if (SetProperty(ref _ip, value)) OnPropertyChanged(nameof(Subtitle));
+        }
+    }
+
+    private string? _version;
+    public string? Version
+    {
+        get => _version;
+        set
+        {
+            if (SetProperty(ref _version, value)) OnPropertyChanged(nameof(Subtitle));
+        }
+    }
+
+    private bool _online;
+    public bool Online
+    {
+        get => _online;
+        set
+        {
+            if (SetProperty(ref _online, value)) OnPropertyChanged(nameof(LastSeenText));
+        }
+    }
+
+    private DateTime _lastSeenAt;
+    public DateTime LastSeenAt   // UTC
+    {
+        get => _lastSeenAt;
+        set
+        {
+            if (SetProperty(ref _lastSeenAt, value)) OnPropertyChanged(nameof(LastSeenText));
+        }
+    }
+
+    private bool _isCurrent;
+    public bool IsCurrent
+    {
+        get => _isCurrent;
+        set => SetProperty(ref _isCurrent, value);
+    }
 
     /// <summary>副标题:平台 · 版本 · IP(非空拼接,IP 规范化)。</summary>
     public string Subtitle

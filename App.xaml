@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Application
     x:Class="NexClip.Desktop.App"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -10,6 +10,24 @@
             </ResourceDictionary.MergedDictionaries>
             <!-- 全局样式:品牌色 Accent -->
             <SolidColorBrush x:Key="AccentBlueBrush" Color="#2563EB" />
+
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="VersionBadgeBackground" Color="#EFF6FF" />
+                    <SolidColorBrush x:Key="VersionBadgeBorder" Color="#BFDBFE" />
+                    <SolidColorBrush x:Key="VersionBadgeForeground" Color="#2563EB" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="VersionBadgeBackground" Color="#1E293B" />
+                    <SolidColorBrush x:Key="VersionBadgeBorder" Color="#334155" />
+                    <SolidColorBrush x:Key="VersionBadgeForeground" Color="#60A5FA" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Default">
+                    <SolidColorBrush x:Key="VersionBadgeBackground" Color="#EFF6FF" />
+                    <SolidColorBrush x:Key="VersionBadgeBorder" Color="#BFDBFE" />
+                    <SolidColorBrush x:Key="VersionBadgeForeground" Color="#2563EB" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

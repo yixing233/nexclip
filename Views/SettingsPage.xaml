@@ -91,6 +91,7 @@
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <TextBox
                                         PlaceholderText="http://127.0.0.1:5033"
@@ -98,6 +99,14 @@
                                         VerticalAlignment="Center" />
                                     <Button
                                         Grid.Column="1"
+                                        Command="{Binding SaveServerConfigCommand}"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        Padding="14,6"
+                                        VerticalAlignment="Center">
+                                        <TextBlock Text="保存设置" VerticalAlignment="Center" />
+                                    </Button>
+                                    <Button
+                                        Grid.Column="2"
                                         Command="{Binding TestConnectionCommand}"
                                         Padding="14,6"
                                         VerticalAlignment="Center">
@@ -179,12 +188,6 @@
                                         Content="保存名称"
                                         Command="{Binding SaveDeviceNameCommand}" />
                                 </Grid>
-
-                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                    <Button Content="测试连接" Command="{Binding TestConnectionCommand}" />
-                                    <ProgressRing IsActive="{Binding IsTesting}" Width="16" Height="16" VerticalAlignment="Center" />
-                                    <Button Content="保存服务器设置" Command="{Binding SaveServerConfigCommand}" Style="{StaticResource AccentButtonStyle}" />
-                                </StackPanel>
                             </StackPanel>
                         </Border>
 
@@ -473,6 +476,26 @@
                                         VerticalAlignment="Center"
                                         AutomationProperties.Name="关闭窗口时最小化到托盘" />
                                 </Grid>
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="启动时自动检查更新" VerticalAlignment="Center" />
+                                        <TextBlock Text="应用启动后在后台自动检测是否有新版本发布" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <ToggleSwitch
+                                        Grid.Column="1"
+                                        Width="48"
+                                        MinWidth="0"
+                                        OnContent=""
+                                        OffContent=""
+                                        IsOn="{Binding AutoCheckUpdate, Mode=TwoWay}"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.Name="启动时自动检查更新" />
+                                </Grid>
                             </StackPanel>
                         </Border>
                         <StackPanel Spacing="4" Margin="4,0,0,0">
@@ -600,7 +623,10 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Text="新内容通知" VerticalAlignment="Center" />
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="新内容通知" VerticalAlignment="Center" />
+                                        <TextBlock Text="接收到多端设备同步的新剪贴板时在右下角弹出浮窗提示" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
                                     <ToggleSwitch
                                         Grid.Column="1"
                                         Width="48"
@@ -611,23 +637,6 @@
                                         HorizontalAlignment="Right"
                                         VerticalAlignment="Center"
                                         AutomationProperties.Name="新内容通知" />
-                                </Grid>
-                                <Grid ColumnSpacing="16">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Text="复制直达" VerticalAlignment="Center" />
-                                    <ToggleSwitch
-                                        Grid.Column="1"
-                                        Width="48"
-                                        MinWidth="0"
-                                        OnContent=""
-                                        OffContent=""
-                                        IsOn="{Binding CopyDirectEnabled, Mode=TwoWay}"
-                                        HorizontalAlignment="Right"
-                                        VerticalAlignment="Center"
-                                        AutomationProperties.Name="复制直达" />
                                 </Grid>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
@@ -662,6 +671,165 @@
                                         <ComboBoxItem Content="Ctrl+V" />
                                     </ComboBox>
                                 </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- ====== 复制直达与智能识别 ====== -->
+                        <StackPanel Spacing="4" Margin="4,0,0,0">
+                            <TextBlock Text="复制直达与智能识别" Style="{ThemeResource SubtitleTextBlockStyle}" />
+                        </StackPanel>
+                        <Border
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="8"
+                            Padding="20">
+                            <StackPanel Spacing="16">
+                                <!-- 总开关: 复制直达智能浮窗 -->
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="复制直达智能浮窗 (总开关)" Style="{ThemeResource BodyStrongTextBlockStyle}" VerticalAlignment="Center" />
+                                    <ToggleSwitch
+                                        Grid.Column="1"
+                                        Width="48"
+                                        MinWidth="0"
+                                        OnContent=""
+                                        OffContent=""
+                                        IsOn="{Binding CopyDirectEnabled, Mode=TwoWay}"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.Name="复制直达智能浮窗" />
+                                </Grid>
+
+                                <MenuFlyoutSeparator Visibility="{Binding CopyDirectEnabled, Converter={StaticResource BoolToVis}}" />
+
+                                <!-- 细分能力配置项 (总开关关闭时自动收起) -->
+                                <StackPanel Spacing="14" Visibility="{Binding CopyDirectEnabled, Converter={StaticResource BoolToVis}}">
+                                    <TextBlock Text="智能直达浮窗分类控制" Style="{ThemeResource BodyStrongTextBlockStyle}" />
+
+                                    <!-- 1. 色彩识别 -->
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Image Source="{x:Bind services:Lucide.Palette}" Width="16" Height="16" VerticalAlignment="Center" />
+                                        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                                            <TextBlock Text="颜色代码微预览与直达浮窗" />
+                                            <TextBlock Text="识别 #RGB/HEX、rgb()、hsl() 色值，支持一键互转复制" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        </StackPanel>
+                                        <ToggleSwitch
+                                            Grid.Column="2"
+                                            Width="48"
+                                            MinWidth="0"
+                                            OnContent=""
+                                            OffContent=""
+                                            IsOn="{Binding SmartColorEnabled, Mode=TwoWay}"
+                                            HorizontalAlignment="Right"
+                                            VerticalAlignment="Center"
+                                            AutomationProperties.Name="颜色代码微预览与格式转换" />
+                                    </Grid>
+
+                                    <!-- 2. 本地文件与路径 -->
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Image Source="{x:Bind services:Lucide.FolderOpen}" Width="16" Height="16" VerticalAlignment="Center" />
+                                        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                                            <TextBlock Text="本地文件 / 路径直达" />
+                                            <TextBlock Text="识别 Windows 路径与文件，支持一键在资源管理器中定位或终端运行" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        </StackPanel>
+                                        <ToggleSwitch
+                                            Grid.Column="2"
+                                            Width="48"
+                                            MinWidth="0"
+                                            OnContent=""
+                                            OffContent=""
+                                            IsOn="{Binding SmartPathEnabled, Mode=TwoWay}"
+                                            HorizontalAlignment="Right"
+                                            VerticalAlignment="Center"
+                                            AutomationProperties.Name="本地文件与路径直达" />
+                                    </Grid>
+
+                                    <!-- 3. GitHub 深度识别 -->
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Image Source="{x:Bind services:Lucide.ExternalLink}" Width="16" Height="16" VerticalAlignment="Center" />
+                                        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                                            <TextBlock Text="GitHub 仓库深度识别" />
+                                            <TextBlock Text="识别 github.com 仓库链接，提供一键直达仓库与 git clone 命令复制" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        </StackPanel>
+                                        <ToggleSwitch
+                                            Grid.Column="2"
+                                            Width="48"
+                                            MinWidth="0"
+                                            OnContent=""
+                                            OffContent=""
+                                            IsOn="{Binding SmartDeepLinkEnabled, Mode=TwoWay}"
+                                            HorizontalAlignment="Right"
+                                            VerticalAlignment="Center"
+                                            AutomationProperties.Name="GitHub 仓库深度识别" />
+                                    </Grid>
+
+                                    <!-- 4. 网盘与提取码 -->
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Image Source="{x:Bind services:Lucide.Download}" Width="16" Height="16" VerticalAlignment="Center" />
+                                        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                                            <TextBlock Text="网盘链接与提取码识别" />
+                                            <TextBlock Text="覆盖百度/阿里/夸克/123/蓝奏等，自动抽离提取码并在打开网盘时自动复制" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        </StackPanel>
+                                        <ToggleSwitch
+                                            Grid.Column="2"
+                                            Width="48"
+                                            MinWidth="0"
+                                            OnContent=""
+                                            OffContent=""
+                                            IsOn="{Binding SmartNetDiskEnabled, Mode=TwoWay}"
+                                            HorizontalAlignment="Right"
+                                            VerticalAlignment="Center"
+                                            AutomationProperties.Name="网盘链接与提取码识别" />
+                                    </Grid>
+
+                                    <!-- 5. 通用网址 -->
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Image Source="{x:Bind services:Lucide.ExternalLink}" Width="16" Height="16" VerticalAlignment="Center" />
+                                        <StackPanel Grid.Column="1" Spacing="2" VerticalAlignment="Center">
+                                            <TextBlock Text="通用网页链接直达" />
+                                            <TextBlock Text="识别 http/https 网址，一键在默认浏览器中打开" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        </StackPanel>
+                                        <ToggleSwitch
+                                            Grid.Column="2"
+                                            Width="48"
+                                            MinWidth="0"
+                                            OnContent=""
+                                            OffContent=""
+                                            IsOn="{Binding SmartUrlEnabled, Mode=TwoWay}"
+                                            HorizontalAlignment="Right"
+                                            VerticalAlignment="Center"
+                                            AutomationProperties.Name="通用网页链接直达" />
+                                    </Grid>
+                                </StackPanel>
                             </StackPanel>
                         </Border>
                     </StackPanel>
@@ -840,7 +1008,6 @@
                                         <TextBlock Grid.Column="1" Text="确认候选:复制并粘贴到呼出前的窗口输入框" Margin="16,0,0,0" VerticalAlignment="Center" />
                                     </Grid>
                                 </Border>
-                                <TextBlock Text="以上为当前固定行为说明，暂不开放修改。" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Margin="0,4,0,0" />
                             </StackPanel>
                         </Border>
                     </StackPanel>
@@ -998,8 +1165,18 @@
                                     <StackPanel VerticalAlignment="Center" Spacing="3">
                                         <StackPanel Orientation="Horizontal" Spacing="10">
                                             <TextBlock Text="NexClip" Style="{ThemeResource TitleTextBlockStyle}" />
-                                            <Border Background="#2563EB22" CornerRadius="6" Padding="8,2" VerticalAlignment="Center">
-                                                <TextBlock Text="{Binding VersionText}" FontSize="12" Foreground="#2563EB" />
+                                            <Border
+                                                Background="{ThemeResource VersionBadgeBackground}"
+                                                BorderBrush="{ThemeResource VersionBadgeBorder}"
+                                                BorderThickness="1"
+                                                CornerRadius="6"
+                                                Padding="8,2"
+                                                VerticalAlignment="Center">
+                                                <TextBlock
+                                                    Text="{Binding VersionText}"
+                                                    FontSize="12"
+                                                    FontWeight="SemiBold"
+                                                    Foreground="{ThemeResource VersionBadgeForeground}" />
                                             </Border>
                                         </StackPanel>
                                         <TextBlock Text="轻量剪贴板管理 · 多端同步" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
@@ -1066,8 +1243,43 @@
                                     TextWrapping="Wrap"
                                     LineHeight="20" />
 
-                                <!-- 操作 -->
-                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                <!-- 发现新版本提示卡片 -->
+                                <Border
+                                    Visibility="{Binding HasNewVersion, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                                    Background="{ThemeResource AccentFillColorTertiaryBrush}"
+                                    BorderBrush="{ThemeResource AccentFillColorSecondaryBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="16">
+                                    <StackPanel Spacing="10">
+                                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                            <Image Source="{x:Bind services:Lucide.DownloadAccent}" Width="16" Height="16" VerticalAlignment="Center" />
+                                            <TextBlock Text="{Binding LatestVersionText}" Style="{ThemeResource BodyStrongTextBlockStyle}" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" VerticalAlignment="Center" />
+                                            <Border Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="4" Padding="6,2">
+                                                <TextBlock Text="NEW" FontSize="10" FontWeight="Bold" Foreground="White" />
+                                            </Border>
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding UpdateReleaseNotes}" TextWrapping="Wrap" MaxHeight="120" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" LineHeight="18" />
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Button Style="{StaticResource AccentButtonStyle}" Click="OpenRelease_Click">
+                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                    <Image Source="{x:Bind services:Lucide.ExternalLinkWhite}" Width="14" Height="14" />
+                                                    <TextBlock Text="前往查看与下载新版本" />
+                                                </StackPanel>
+                                            </Button>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- 操作按钮栏:检查更新 / 打开主页 / 复制信息 -->
+                                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                    <Button Command="{Binding CheckUpdateCommand}">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <ProgressRing Width="14" Height="14" IsActive="{Binding IsCheckingUpdate}" Visibility="{Binding IsCheckingUpdate, Converter={StaticResource BoolToVis}}" />
+                                            <Image Source="{x:Bind services:Lucide.RefreshCw}" Width="14" Height="14" Visibility="{Binding IsCheckingUpdate, Converter={StaticResource InverseBoolToVis}}" />
+                                            <TextBlock Text="检查更新" />
+                                        </StackPanel>
+                                    </Button>
                                     <Button Click="OpenProject_Click">
                                         <StackPanel Orientation="Horizontal" Spacing="8">
                                             <Image Source="{x:Bind services:Lucide.FolderOpen}" Width="14" Height="14" />
@@ -1080,6 +1292,12 @@
                                             <TextBlock Text="复制版本信息" />
                                         </StackPanel>
                                     </Button>
+                                    <TextBlock
+                                        Text="{Binding UpdateStatusText}"
+                                        FontSize="12"
+                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                        VerticalAlignment="Center"
+                                        Margin="6,0,0,0" />
                                 </StackPanel>
 
                             </StackPanel>

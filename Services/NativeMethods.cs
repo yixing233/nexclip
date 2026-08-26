@@ -1,4 +1,4 @@
-﻿namespace NexClip.Desktop.Services;
+namespace NexClip.Desktop.Services;
 
 using System.Runtime.InteropServices;
 
@@ -523,4 +523,101 @@ internal static class NativeMethods
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     internal static extern bool DestroyIcon(IntPtr hIcon);
+
+    [System.Runtime.InteropServices.DllImport("shell32.dll", ExactSpelling = true)]
+    private static extern int SHOpenFolderAndSelectItems(
+        IntPtr pidlFolder,
+        uint cidl,
+        [System.Runtime.InteropServices.In, System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPArray)] IntPtr[]? apidl,
+        uint dwFlags);
+
+    [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr ILCreateFromPath(string pszPath);
+
+    [System.Runtime.InteropServices.DllImport("shell32.dll")]
+    private static extern void ILFree(IntPtr pidl);
+
+    /// <summary>
+    /// 在 Windows 资源管理器中打开并高亮选中指定文件或文件夹。
+    /// 优先使用 Windows Shell 原生 API SHOpenFolderAndSelectItems (零进程开销、完美前台聚焦与精准高亮)，
+    /// 若失败则多级回退至 explorer.exe 命令行及打开父目录。
+    /// </summary>
+    internal static void LocateInExplorer(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        try
+        {
+            var fullPath = System.IO.Path.GetFullPath(path.Trim().Trim('"', '\''));
+            if (!System.IO.File.Exists(fullPath) && !System.IO.Directory.Exists(fullPath)) return;
+
+            // 1. 优先调用 Shell 原生 API (当 cidl=0 时，pidlFolder 指向文件自身 PIDL，系统自动打开其父目录并高亮选中该文件)
+            var pidl = ILCreateFromPath(fullPath);
+            if (pidl != IntPtr.Zero)
+            {
+                try
+                {
+                    if (SHOpenFolderAndSelectItems(pidl, 0, null, 0) == 0)
+                    {
+                        return;
+                    }
+                }
+                finally
+                {
+                    ILFree(pidl);
+                }
+            }
+
+            // 2. 回退方案：通过 explorer.exe /select,"path" 打开
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"/select,\"{fullPath}\"",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"在资源管理器中定位文件失败: {path}", ex);
+            try
+            {
+                // 3. 终极回退：直接打开其所在父文件夹
+                var parentDir = System.IO.Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(parentDir) && System.IO.Directory.Exists(parentDir))
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = parentDir,
+                        UseShellExecute = true
+                    });
+                }
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>在 Windows 资源管理器中打开指定目录。</summary>
+    internal static void OpenFolderInExplorer(string? folderPath)
+    {
+        if (string.IsNullOrWhiteSpace(folderPath)) return;
+        try
+        {
+            var fullPath = System.IO.Path.GetFullPath(folderPath.Trim().Trim('"', '\''));
+            if (!System.IO.Directory.Exists(fullPath)) return;
+
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = fullPath,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"打开文件夹失败: {folderPath}", ex);
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{folderPath}\"") { UseShellExecute = true });
+            }
+            catch { }
+        }
+    }
 }

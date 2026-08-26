@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.AspNetCore.SignalR.Client;
 using NexClip.Desktop.Models;
 
 namespace NexClip.Desktop.Services;
@@ -23,6 +23,9 @@ public sealed class PushClient : IAsyncDisposable
 
     /// <summary>收到 ClipboardUpdated(entry)。</summary>
     public event Action<ClipboardEntry>? EntryReceived;
+
+    /// <summary>收到 DevicesChanged() 广播(设备上下线/配对/重命名/移除)。</summary>
+    public event Action? DevicesChanged;
 
     /// <summary>连接状态变化:connecting/connected/reconnecting/disconnected。</summary>
     public event Action<string>? StateChanged;
@@ -73,6 +76,7 @@ public sealed class PushClient : IAsyncDisposable
         _hub = hub;
 
         hub.On<ClipboardEntry>("ClipboardUpdated", entry => EntryReceived?.Invoke(entry));
+        hub.On("DevicesChanged", () => DevicesChanged?.Invoke());
         hub.Reconnecting += ex =>
         {
             if (ex is not null) ErrorOccurred?.Invoke(ex);
