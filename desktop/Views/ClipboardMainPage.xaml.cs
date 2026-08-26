@@ -29,9 +29,8 @@ public sealed partial class ClipboardMainPage : Page
     public ClipboardMainPage()
     {
         InitializeComponent();
-        DataContext = App.Services.Main;
         _history = App.Services.HistoryVm;
-        ListHost.DataContext = _history;
+        DataContext = _history;
         if (App.Services.Engine is not null)
         {
             _history.AttachEngine(App.Services.Engine);
@@ -44,6 +43,7 @@ public sealed partial class ClipboardMainPage : Page
         // 窗口事件订阅放在 Loaded 中;否则置顶图标同步 / 呼出聚焦都不会生效。
         Loaded += (_, _) =>
         {
+            RefreshThemeIcons();
             if (App.ClipboardWindow is { } win)
             {
                 win.TopmostChanged += UpdateTopmostIcon;
@@ -52,6 +52,7 @@ public sealed partial class ClipboardMainPage : Page
                 win.Shown += FocusEntryList;
             }
         };
+        ActualThemeChanged += (_, _) => RefreshThemeIcons();
         // 列表模板应用后挂接内部 ScrollViewer,跟踪滚动位置
         EntryList.Loaded += (_, _) => AttachScroller();
 
@@ -59,6 +60,15 @@ public sealed partial class ClipboardMainPage : Page
         {
             OpenImageViewer(path, thumb, "互传图片预览");
         };
+    }
+
+    /// <summary>动态刷新顶栏矢量图标的主题颜色(深/浅色模式切换时秒级重绘)。</summary>
+    public void RefreshThemeIcons()
+    {
+        TopmostIconPin.Source = Lucide.Pin;
+        TopmostIconPinOff.Source = Lucide.PinOffActive;
+        SettingsButtonImage.Source = Lucide.Settings;
+        ClearSearchImage.Source = Lucide.X;
     }
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e) => App.OpenSettings();
@@ -143,6 +153,19 @@ public sealed partial class ClipboardMainPage : Page
 
     private int _lastVisualIndex;
     private Storyboard? _transitionStoryboard;
+
+    /// <summary>程序化切换分类或互传标签页(0:全部, 1:文本, 2:图片, 3:文件, 4:收藏, 5:即时互传)。</summary>
+    public void SelectTab(int filterIndex)
+    {
+        foreach (var item in CategorySelectorBar.Items)
+        {
+            if (item.Tag as string == filterIndex.ToString())
+            {
+                CategorySelectorBar.SelectedItem = item;
+                break;
+            }
+        }
+    }
 
     private void CategorySelectorBar_SelectionChanged(SelectorBar sender, SelectorBarSelectionChangedEventArgs args)
     {
@@ -306,9 +329,10 @@ public sealed partial class ClipboardMainPage : Page
         if (show) ShowBackToTopButton();
         else HideBackToTopButton();
 
-        // 触底自动触发懒加载 (当滚动距离底部小于 250px 时提前预加载下一批数据)
+        // 触底自动触发懒加载 (仅在用户主动向下滚动超过顶部区域且距离底部小于 200px 时提前预加载，避免打开窗口或处于顶部时误触发)
         if (_listScroller.ScrollableHeight > 0 &&
-            offset >= _listScroller.ScrollableHeight - 250 &&
+            offset > 80 &&
+            offset >= _listScroller.ScrollableHeight - 200 &&
             !_history.IsLoadingMore &&
             _history.HasMore)
         {
@@ -506,36 +530,119 @@ public sealed partial class ClipboardMainPage : Page
     private HistoryItemViewModel? _currentViewerVm;
     private string? _currentViewerImagePath;
     private double _currentRotation;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _imageTapTimer;
+    private HistoryItemViewModel? _pendingPreviewVm;
 
-    /// <summary>点击图片缩略图直接呼出大图查看器。</summary>
+    /// <summary>单击图片缩略图延时呼出大图查看器（留出双击直接粘贴判定时间窗口）。</summary>
     private void ImageThumbnail_Tapped(object sender, TappedRoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is HistoryItemViewModel vm)
         {
             e.Handled = true;
-            OpenImageViewer(vm);
+            _imageTapTimer?.Stop();
+            _pendingPreviewVm = vm;
+
+            _imageTapTimer = DispatcherQueue.CreateTimer();
+            _imageTapTimer.Interval = TimeSpan.FromMilliseconds(220);
+            _imageTapTimer.IsRepeating = false;
+            _imageTapTimer.Tick += (_, _) =>
+            {
+                _imageTapTimer?.Stop();
+                var target = _pendingPreviewVm;
+                _pendingPreviewVm = null;
+                if (target is not null && ImageViewerOverlay.Visibility != Visibility.Visible)
+                {
+                    OpenImageViewer(target);
+                }
+            };
+            _imageTapTimer.Start();
         }
     }
 
-    /// <summary>菜单打开时兜底取选中项(兼容 Shift+F10 键盘呼出),动态控制编辑/看图菜单显隐,并清除残留悬停态。</summary>
+    /// <summary>双击图片缩略图 → 立即取消单击看图计时，触发直接粘贴。</summary>
+    private async void ImageThumbnail_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+    {
+        e.Handled = true;
+        _imageTapTimer?.Stop();
+        _pendingPreviewVm = null;
+
+        if ((sender as FrameworkElement)?.DataContext is HistoryItemViewModel vm)
+        {
+            Log.Debug($"图片缩略图双击直接粘贴:id={vm.Item.Id}");
+            await (App.ClipboardWindow?.PasteItemAsync(vm) ?? Task.CompletedTask);
+        }
+    }
+
+    private SmartAction? _contextSmartAction;
+
+    /// <summary>菜单打开时兜底取选中项(兼容 Shift+F10 键盘呼出),动态控制智能直达、编辑/看图菜单显隐,并清除残留悬停态。</summary>
     private void EntryMenu_Opening(object? sender, object e)
     {
         if (EntryList.SelectedItem is HistoryItemViewModel vm) _contextItem = vm;
         if (sender is MenuFlyout flyout)
         {
             var isImage = _contextItem?.IsImage ?? false;
+            var text = _contextItem?.Item.Text;
+            _contextSmartAction = (!isImage && !string.IsNullOrWhiteSpace(text)) ? SmartActionService.Detect(text) : null;
+
             foreach (var item in flyout.Items)
             {
                 if (item is MenuFlyoutItem menuItem)
                 {
-                    if (menuItem.Name == "EditMenuItem") menuItem.Visibility = isImage ? Visibility.Collapsed : Visibility.Visible;
-                    if (menuItem.Name is "ViewImageMenuItem" or "OpenSystemViewerMenuItem" or "SaveImageMenuItem" or "LocateFileMenuItem")
+                    if (menuItem.Name == "SmartPrimaryMenuItem")
+                    {
+                        if (_contextSmartAction != null)
+                        {
+                            menuItem.Text = _contextSmartAction.PrimaryButtonText;
+                            if (menuItem.Icon is ImageIcon imgIcon)
+                            {
+                                imgIcon.Source = _contextSmartAction.PrimaryButtonIcon ?? _contextSmartAction.Icon ?? Lucide.ExternalLink;
+                            }
+                            menuItem.Visibility = Visibility.Visible;
+                        }
+                        else
+                        {
+                            menuItem.Visibility = Visibility.Collapsed;
+                        }
+                    }
+                    else if (menuItem.Name == "SmartSecondaryMenuItem")
+                    {
+                        if (_contextSmartAction?.SecondaryButtonText != null)
+                        {
+                            menuItem.Text = _contextSmartAction.SecondaryButtonText;
+                            if (menuItem.Icon is ImageIcon imgIcon)
+                            {
+                                imgIcon.Source = _contextSmartAction.SecondaryButtonIcon ?? Lucide.Copy;
+                            }
+                            menuItem.Visibility = Visibility.Visible;
+                        }
+                        else
+                        {
+                            menuItem.Visibility = Visibility.Collapsed;
+                        }
+                    }
+                    else if (menuItem.Name == "RemarkMenuItem")
+                    {
+                        menuItem.Text = (_contextItem?.HasRemark == true) ? "修改备注" : "添加备注";
+                    }
+                    else if (menuItem.Name == "EditMenuItem" || menuItem.Name == "PastePlainTextMenuItem" || menuItem.Name == "CopyPlainTextMenuItem")
+                    {
+                        menuItem.Visibility = isImage ? Visibility.Collapsed : Visibility.Visible;
+                    }
+                    else if (menuItem.Name is "ViewImageMenuItem" or "OpenSystemViewerMenuItem" or "SaveImageMenuItem" or "LocateFileMenuItem")
                     {
                         menuItem.Visibility = isImage ? Visibility.Visible : Visibility.Collapsed;
                     }
-                    if (menuItem.Name == "CopyAppNameMenuItem")
+                    else if (menuItem.Name == "CopyAppNameMenuItem")
                     {
                         menuItem.Visibility = (_contextItem?.HasSourceApp ?? false) ? Visibility.Visible : Visibility.Collapsed;
+                    }
+                }
+                else if (item is MenuFlyoutSeparator separator)
+                {
+                    if (separator.Name == "SmartActionSeparator")
+                    {
+                        separator.Visibility = _contextSmartAction != null ? Visibility.Visible : Visibility.Collapsed;
                     }
                 }
             }
@@ -546,6 +653,16 @@ public sealed partial class ClipboardMainPage : Page
         {
             if (item is HistoryItemViewModel hovered) hovered.IsHovered = false;
         }
+    }
+
+    private void SmartPrimaryMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        _contextSmartAction?.PrimaryAction();
+    }
+
+    private void SmartSecondaryMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        _contextSmartAction?.SecondaryAction?.Invoke();
     }
 
     /// <summary>右键条目:记录目标并同步到 ListView 真实选中项,便于菜单操作。</summary>
@@ -589,6 +706,24 @@ public sealed partial class ClipboardMainPage : Page
     private void StarMenuItem_Click(object sender, RoutedEventArgs e)
     {
         if (_contextItem is { } vm) _history.ToggleStarAsync(vm);
+    }
+
+    private async void PastePlainTextMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (_contextItem is { } vm) await (App.ClipboardWindow?.PasteItemAsync(vm, plainText: true) ?? Task.CompletedTask);
+    }
+
+    private void CopyPlainTextMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (_contextItem is { } vm && vm.Item.Text is not null)
+        {
+            ImageCodec.WriteClipboardText(vm.Item.Text);
+        }
+    }
+
+    private async void RemarkMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (_contextItem is { } vm) await ShowRemarkDialogAsync(vm);
     }
 
     private async void EditMenuItem_Click(object sender, RoutedEventArgs e)
@@ -646,18 +781,7 @@ public sealed partial class ClipboardMainPage : Page
     }
 
     /// <summary>在 Windows 文件资源管理器中定位并选中图片文件。</summary>
-    private static void LocateInExplorer(string? imagePath)
-    {
-        if (string.IsNullOrEmpty(imagePath) || !File.Exists(imagePath)) return;
-        try
-        {
-            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{imagePath}\"") { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            Log.Error("在资源管理器中定位文件失败", ex);
-        }
-    }
+    private static void LocateInExplorer(string? imagePath) => NativeMethods.LocateInExplorer(imagePath);
 
     private void OpenInSystemApp_Click(object sender, RoutedEventArgs e)
     {
@@ -693,7 +817,24 @@ public sealed partial class ClipboardMainPage : Page
         _currentViewerVm = vm;
         _currentViewerImagePath = vm.Item.ImagePath;
         ResetViewerTransform();
-        ViewerImage.Source = vm.Thumbnail;
+
+        if (!string.IsNullOrEmpty(vm.Item.ImagePath) && File.Exists(vm.Item.ImagePath))
+        {
+            try
+            {
+                var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri("file:///" + vm.Item.ImagePath.Replace('\\', '/')));
+                ViewerImage.Source = bmp;
+            }
+            catch
+            {
+                ViewerImage.Source = vm.Thumbnail;
+            }
+        }
+        else
+        {
+            ViewerImage.Source = vm.Thumbnail;
+        }
+
         ViewerInfoText.Text = $"图片预览 · {vm.RelativeTime}";
         ImageViewerOverlay.Visibility = Visibility.Visible;
         ImageViewerOverlay.Focus(FocusState.Programmatic);
@@ -706,19 +847,21 @@ public sealed partial class ClipboardMainPage : Page
         _currentViewerImagePath = imagePath;
         ResetViewerTransform();
 
-        if (thumbnail != null)
-        {
-            ViewerImage.Source = thumbnail;
-        }
-        else if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
+        if (!string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
         {
             try
             {
-                var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
-                bmp.UriSource = new Uri("file:///" + imagePath.Replace('\\', '/'));
+                var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri("file:///" + imagePath.Replace('\\', '/')));
                 ViewerImage.Source = bmp;
             }
-            catch { }
+            catch
+            {
+                ViewerImage.Source = thumbnail;
+            }
+        }
+        else if (thumbnail != null)
+        {
+            ViewerImage.Source = thumbnail;
         }
 
         ViewerInfoText.Text = title;
@@ -1013,24 +1156,96 @@ public sealed partial class ClipboardMainPage : Page
         }
     }
 
-    /// <summary>双击条目 → 粘贴到呼出前的窗口(按钮区域不触发)。</summary>
+    /// <summary>为条目添加/修改备注弹窗。添加有效备注后自动收藏该条目。</summary>
+    private async Task ShowRemarkDialogAsync(HistoryItemViewModel vm)
+    {
+        var box = new TextBox
+        {
+            Text = vm.Remark ?? "",
+            PlaceholderText = "输入备注内容 (例如: 常用密码、发票抬头、重要配置等)",
+            AcceptsReturn = false,
+            MaxLength = 200,
+            Margin = new Thickness(0, 4, 0, 0)
+        };
+
+        var promptText = new TextBlock
+        {
+            Text = "添加备注后将自动收藏该条目，并可通过顶栏搜索框直接检索备注。",
+            FontSize = 12,
+            Foreground = Application.Current.Resources["TextFillColorSecondaryBrush"] as Brush,
+            TextWrapping = TextWrapping.Wrap
+        };
+
+        var panel = new StackPanel
+        {
+            Spacing = 8,
+            Children = { promptText, box }
+        };
+
+        var dialog = new ContentDialog
+        {
+            Title = vm.HasRemark ? "修改备注" : "添加备注",
+            Content = panel,
+            PrimaryButtonText = "保存",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = XamlRoot,
+        };
+
+        if (vm.HasRemark)
+        {
+            dialog.SecondaryButtonText = "清除备注";
+        }
+
+        box.Loaded += (_, _) =>
+        {
+            box.Focus(FocusState.Programmatic);
+            box.SelectAll();
+        };
+
+        box.KeyDown += (s, e) =>
+        {
+            if (e.Key == VirtualKey.Enter)
+            {
+                e.Handled = true;
+                dialog.Hide();
+                _history.UpdateRemark(vm, box.Text);
+            }
+        };
+
+        var result = await dialog.ShowAsync();
+        if (result == ContentDialogResult.Primary)
+        {
+            _history.UpdateRemark(vm, box.Text);
+        }
+        else if (result == ContentDialogResult.Secondary)
+        {
+            _history.UpdateRemark(vm, null);
+        }
+    }
+
+    /// <summary>双击条目 → 粘贴到呼出前的窗口(按住 Shift 时触发纯文本粘贴，按钮区域不触发)。</summary>
     private async void Item_DoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
     {
         if (IsOverButton(e.OriginalSource)) return;
         if ((sender as FrameworkElement)?.DataContext is HistoryItemViewModel vm)
         {
-            Log.Debug($"双击粘贴:id={vm.Item.Id}, type={vm.Item.Type}, text={vm.Item.Text?.Substring(0, Math.Min(20, vm.Item.Text?.Length ?? 0))}");
-            await (App.ClipboardWindow?.PasteItemAsync(vm) ?? Task.CompletedTask);
+            var isShift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
+                .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+            Log.Debug($"双击粘贴:id={vm.Item.Id}, plainText={isShift}, type={vm.Item.Type}, text={vm.Item.Text?.Substring(0, Math.Min(20, vm.Item.Text?.Length ?? 0))}");
+            await (App.ClipboardWindow?.PasteItemAsync(vm, plainText: isShift) ?? Task.CompletedTask);
         }
     }
 
-    /// <summary>回车 → 粘贴选中条目;方向键由 ListView 原生支持(候选移动)。</summary>
+    /// <summary>回车 → 粘贴选中条目(按住 Shift 时触发纯文本粘贴);方向键由 ListView 原生支持(候选移动)。</summary>
     private async void EntryList_KeyDown(object sender, KeyRoutedEventArgs e)
     {
         if (e.Key == VirtualKey.Enter && EntryList.SelectedItem is HistoryItemViewModel vm)
         {
             e.Handled = true;
-            await (App.ClipboardWindow?.PasteItemAsync(vm) ?? Task.CompletedTask);
+            var isShift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
+                .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+            await (App.ClipboardWindow?.PasteItemAsync(vm, plainText: isShift) ?? Task.CompletedTask);
         }
     }
 
@@ -1062,10 +1277,27 @@ public sealed partial class ClipboardMainPage : Page
         }
     }
 
-    /// <summary>页面级快捷键拦截:为前 9 项历史记录提供 Ctrl+1~9 快速选定并直接粘贴。</summary>
+    /// <summary>页面级快捷键拦截:为前 9 项历史记录提供 Ctrl+1~9 快速选定并直接粘贴(按住 Shift 为纯文本); 空格键快速预览/关闭大图。</summary>
     private async void OnPagePreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
         if (e.Handled) return;
+
+        // 空格键极速看图/关图 (类似 macOS QuickLook / PowerToys Peek，搜索框聚焦输入时不拦截)
+        if (e.Key == VirtualKey.Space && SearchBox.FocusState == FocusState.Unfocused)
+        {
+            if (ImageViewerOverlay.Visibility == Visibility.Visible)
+            {
+                e.Handled = true;
+                CloseImageViewer();
+                return;
+            }
+            else if (EntryList.SelectedItem is HistoryItemViewModel { IsImage: true } selectedImageVm)
+            {
+                e.Handled = true;
+                OpenImageViewer(selectedImageVm);
+                return;
+            }
+        }
 
         // 若大图查看器处于激活态，不拦截数字键
         if (ImageViewerOverlay.Visibility == Visibility.Visible) return;
@@ -1094,8 +1326,10 @@ public sealed partial class ClipboardMainPage : Page
                 e.Handled = true;
                 var targetItem = _history.Items[targetIndex];
                 EntryList.SelectedItem = targetItem;
-                Log.Info($"触发快捷键 Ctrl+{targetIndex + 1}: 粘贴条目 id={targetItem.Item.Id}");
-                await (App.ClipboardWindow?.PasteItemAsync(targetItem) ?? Task.CompletedTask);
+                var isShift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
+                    .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+                Log.Info($"触发快捷键 Ctrl+{(isShift ? "Shift+" : "")}{targetIndex + 1}: 粘贴条目 id={targetItem.Item.Id}, plainText={isShift}");
+                await (App.ClipboardWindow?.PasteItemAsync(targetItem, plainText: isShift) ?? Task.CompletedTask);
             }
         }
     }
@@ -1229,6 +1463,22 @@ public sealed partial class ClipboardMainPage : Page
         {
             Log.Error("拖拽发送文本失败", ex);
             App.Services.Tray?.Notify("NexClip 发送失败", ex.Message);
+        }
+    }
+
+    private void SearchBox_GotFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox tb)
+        {
+            tb.BorderBrush = new SolidColorBrush(Microsoft.UI.ColorHelper.FromArgb(255, 37, 99, 235));
+        }
+    }
+
+    private void SearchBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox tb)
+        {
+            tb.ClearValue(TextBox.BorderBrushProperty);
         }
     }
 }

@@ -24,20 +24,6 @@ class ClipboardHook : XposedModule() {
     }
 
     override fun onModuleLoaded(param: ModuleLoadedParam) {
-        // 仅在本应用进程注入时,通过 moduleApplicationInfo(dataDir)持久化状态;
-        // system_server 等其它进程不传,避免跨 uid 写应用数据目录。
-        val appInfo = if (param.processName == MODULE_PACKAGE) moduleApplicationInfo else null
-        ModuleStatusStore.update(
-            ModuleStatusStore.ModuleStatus(
-                activated = true,
-                frameworkName = frameworkName,
-                frameworkVersion = frameworkVersion,
-                frameworkVersionCode = frameworkVersionCode,
-                apiVersion = apiVersion,
-                processName = param.processName
-            ),
-            appInfo
-        )
         log(
             Log.INFO, TAG,
             "module loaded in ${param.processName}, framework=$frameworkName " +

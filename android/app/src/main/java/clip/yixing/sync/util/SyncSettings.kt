@@ -16,12 +16,27 @@ object SyncSettings {
     const val KEY_DEVICE_TOKEN = "device_token"
     const val KEY_DEVICE_NAME = "device_name"
     const val KEY_BOOT_START_ENABLED = "boot_start_enabled"
+    const val KEY_AUTO_CHECK_UPDATE = "auto_check_update"
     const val KEY_FLOATING_BOTTOM_BAR = "floating_bottom_bar"
     const val KEY_PREDICTIVE_BACK = "predictive_back"
+    const val KEY_HIDE_FROM_RECENTS = "hide_from_recents"
     const val KEY_NOTIFICATION_ENABLED = "notification_enabled"
     const val KEY_NOTIFICATION_STYLE = "notification_style"
+    const val KEY_CAPTURE_METHOD = "capture_method"
     const val KEY_MAX_HISTORY = "max_history"
     const val KEY_SEARCH_HISTORY = "search_history"
+
+    const val KEY_SMART_ACTION_MASTER = "smart_action_master"
+    const val KEY_SMART_ACTION_CODE = "smart_action_code"
+    const val KEY_SMART_ACTION_DEEPLINK = "smart_action_deeplink"
+    const val KEY_SMART_ACTION_URL = "smart_action_url"
+    const val KEY_SMART_ACTION_COMMAND = "smart_action_command"
+    const val KEY_SMART_ACTION_PHONE = "smart_action_phone"
+    const val KEY_SMART_ACTION_EMAIL = "smart_action_email"
+    const val KEY_SMART_ACTION_EXPRESS = "smart_action_express"
+    const val KEY_SMART_ACTION_COLOR = "smart_action_color"
+    const val KEY_SMART_ACTION_MAP = "smart_action_map"
+    const val KEY_SMART_ACTION_CUSTOM_RULES = "smart_action_custom_rules"
 
     const val KEY_FILTER_KEYWORDS = "filter_keywords"
     const val KEY_FILTER_PACKAGES = "filter_packages"
@@ -29,6 +44,7 @@ object SyncSettings {
 
     const val KEY_HYPEROS_OUTER_GLOW = "hyperos_outer_glow"
     const val KEY_HYPEROS_GLOW_COLOR = "hyperos_glow_color"
+    const val KEY_HYPEROS_ISLAND_TIMEOUT = "hyperos_island_timeout"
 
     val GLOW_COLORS = listOf(
         "#006EFF" to "经典科技蓝",
@@ -38,6 +54,9 @@ object SyncSettings {
         "#EF4444" to "极光珊瑚红",
         "#EC4899" to "流光樱花粉"
     )
+
+    val ISLAND_TIMEOUT_OPTIONS = intArrayOf(10, 30, 60, 180, 300, 3600)
+    val ISLAND_TIMEOUT_LABELS = listOf("10 秒", "30 秒 (推荐)", "1 分钟", "3 分钟", "5 分钟", "常驻展示 (1小时)")
 
     const val DEFAULT_MAX_HISTORY = 50
     val MAX_HISTORY_OPTIONS = intArrayOf(20, 50, 100, 200)
@@ -69,6 +88,15 @@ object SyncSettings {
         prefs(context).edit().putString(KEY_NOTIFICATION_STYLE, style.key).apply()
     }
 
+    fun captureMethod(context: Context): CaptureMethod {
+        val key = prefs(context).getString(KEY_CAPTURE_METHOD, CaptureMethod.AUTO.key)
+        return CaptureMethod.fromKey(key)
+    }
+
+    fun setCaptureMethod(context: Context, method: CaptureMethod) {
+        prefs(context).edit().putString(KEY_CAPTURE_METHOD, method.key).apply()
+    }
+
     fun isHyperOsOuterGlow(context: Context): Boolean =
         prefs(context).getBoolean(KEY_HYPEROS_OUTER_GLOW, true)
 
@@ -81,6 +109,14 @@ object SyncSettings {
 
     fun setHyperOsGlowColor(context: Context, color: String) {
         prefs(context).edit().putString(KEY_HYPEROS_GLOW_COLOR, color).apply()
+    }
+
+    /** 小岛常驻展示有效时长（秒），默认 30 秒 */
+    fun hyperOsIslandTimeout(context: Context): Int =
+        prefs(context).getInt(KEY_HYPEROS_ISLAND_TIMEOUT, 30)
+
+    fun setHyperOsIslandTimeout(context: Context, timeoutSeconds: Int) {
+        prefs(context).edit().putInt(KEY_HYPEROS_ISLAND_TIMEOUT, timeoutSeconds).apply()
     }
 
     fun prefs(context: Context): SharedPreferences =
@@ -153,6 +189,16 @@ object SyncSettings {
     fun bootStartEnabled(context: Context): Boolean =
         prefs(context).getBoolean(KEY_BOOT_START_ENABLED, true)
 
+    /** 启动时自动检查更新开关,默认开启 */
+    fun autoCheckUpdate(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_AUTO_CHECK_UPDATE, true)
+
+    fun isAutoCheckUpdate(context: Context): Boolean = autoCheckUpdate(context)
+
+    fun setAutoCheckUpdate(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_AUTO_CHECK_UPDATE, enabled).apply()
+    }
+
     /** 悬浮底栏(液态玻璃)开关,默认开启 */
     fun floatingBottomBarEnabled(context: Context): Boolean =
         prefs(context).getBoolean(KEY_FLOATING_BOTTOM_BAR, true)
@@ -167,6 +213,24 @@ object SyncSettings {
 
     fun setPredictiveBackEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_PREDICTIVE_BACK, enabled).apply()
+    }
+
+    /** 从最近任务列表隐藏开关, 默认关闭 */
+    fun isHideFromRecents(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_HIDE_FROM_RECENTS, false)
+
+    fun setHideFromRecents(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_HIDE_FROM_RECENTS, enabled).apply()
+    }
+
+    /** 动态应用从最近任务隐藏设置 */
+    fun applyExcludeFromRecents(context: Context, exclude: Boolean) {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+        am?.appTasks?.forEach { task ->
+            runCatching {
+                task.setExcludeFromRecents(exclude)
+            }
+        }
     }
 
     /** 同步与捕获通知展示开关,默认开启 */
@@ -272,6 +336,32 @@ object SyncSettings {
     fun clearSearchHistory(context: Context) {
         prefs(context).edit().remove(KEY_SEARCH_HISTORY).apply()
     }
+
+    // ---- 智能动作识别与应用直达配置 ----
+
+    fun isSmartActionMasterEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SMART_ACTION_MASTER, true)
+
+    fun setSmartActionMasterEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_SMART_ACTION_MASTER, enabled).apply()
+    }
+
+    fun isSmartActionTypeEnabled(context: Context, key: String, defaultVal: Boolean = true): Boolean =
+        prefs(context).getBoolean(key, defaultVal)
+
+    fun setSmartActionTypeEnabled(context: Context, key: String, enabled: Boolean) {
+        prefs(context).edit().putBoolean(key, enabled).apply()
+    }
+
+    fun customSmartActionRules(context: Context): List<clip.yixing.sync.smartaction.CustomSmartActionRule> {
+        val raw = prefs(context).getString(KEY_SMART_ACTION_CUSTOM_RULES, null)
+        return clip.yixing.sync.smartaction.CustomSmartActionRule.listFromJson(raw)
+    }
+
+    fun setCustomSmartActionRules(context: Context, list: List<clip.yixing.sync.smartaction.CustomSmartActionRule>) {
+        val json = clip.yixing.sync.smartaction.CustomSmartActionRule.listToJson(list)
+        prefs(context).edit().putString(KEY_SMART_ACTION_CUSTOM_RULES, json).apply()
+    }
 }
 
 /**
@@ -290,3 +380,21 @@ enum class NotificationStyle(val key: String, val label: String, val summary: St
             entries.find { it.key == key } ?: (if (SyncSettings.isHyperOs()) HYPEROS_ISLAND else ANDROID_LIVE)
     }
 }
+
+/**
+ * 剪贴板后台监听与授权模式:
+ * - AUTO: 自动 (LSPosed 优先 / Shizuku 备用)
+ * - LSPOSED: 仅 LSPosed 模块
+ * - SHIZUKU: 仅 Shizuku
+ */
+enum class CaptureMethod(val key: String, val label: String, val summary: String) {
+    AUTO("auto", "自动选择", "自动识别最佳方案"),
+    LSPOSED("lsposed", "LSPosed 模块", "通过系统框架模块监听"),
+    SHIZUKU("shizuku", "Shizuku 授权", "通过免 Root 服务监听");
+
+    companion object {
+        fun fromKey(key: String?): CaptureMethod =
+            entries.find { it.key == key } ?: AUTO
+    }
+}
+

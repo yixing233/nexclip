@@ -15,7 +15,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
-    <Version>0.1.0</Version>
+    <Version>20260825.01</Version>
+    <AssemblyVersion>2026.8.25.1</AssemblyVersion>
+    <FileVersion>2026.8.25.1</FileVersion>
+    <InformationalVersion>20260825.01</InformationalVersion>
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
     <WindowsSdkPackageVersion>10.0.19041.57</WindowsSdkPackageVersion>
   </PropertyGroup>

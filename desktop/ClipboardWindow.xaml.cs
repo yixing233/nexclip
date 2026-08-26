@@ -1,4 +1,4 @@
-﻿using Microsoft.UI.Dispatching;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
@@ -233,7 +233,11 @@ public sealed partial class ClipboardWindow : Window
                 if (NativeMethods.GetForegroundWindow() != hwnd)
                 {
                     NativeMethods.ShowWindow(hwnd, 5 /* SW_SHOW */);
-                    NativeMethods.ActivateWindow(hwnd);
+                    NativeMethods.SetForegroundWindow(hwnd);
+                    if (NativeMethods.GetForegroundWindow() != hwnd)
+                    {
+                        NativeMethods.ForceForeground(hwnd);
+                    }
                 }
                 Shown?.Invoke();
             }
@@ -259,12 +263,32 @@ public sealed partial class ClipboardWindow : Window
             Activate();
             NativeMethods.ShowWindow(hwnd, 5 /* SW_SHOW */);
             NativeMethods.SetForegroundWindow(hwnd);
+            if (NativeMethods.GetForegroundWindow() != hwnd)
+            {
+                NativeMethods.ForceForeground(hwnd);
+            }
             Shown?.Invoke();
         }
         catch (Exception ex)
         {
             Log.Error("显示剪贴板窗口失败", ex);
         }
+    }
+
+    private Views.ClipboardMainPage? MainPage => Content as Views.ClipboardMainPage;
+
+    /// <summary>显示并直接切换至即时互传标签页。</summary>
+    public void ShowTransferTab()
+    {
+        ShowWindow();
+        MainPage?.SelectTab(5);
+    }
+
+    /// <summary>显示并直接切换至全部剪贴板记录标签页。</summary>
+    public void ShowClipboardTab()
+    {
+        ShowWindow();
+        MainPage?.SelectTab(0);
     }
 
     /// <summary>在本窗口抢走前台之前保存粘贴目标及其精确焦点。</summary>
@@ -433,7 +457,7 @@ public sealed partial class ClipboardWindow : Window
     /// 激活目标 + 精确回焦方案兜底,且仅在目标确实成为前台后注入按键。
     /// 双击条目 / 列表选中后按回车 触发。
     /// </summary>
-    public async Task PasteItemAsync(ViewModels.HistoryItemViewModel vm)
+    public async Task PasteItemAsync(ViewModels.HistoryItemViewModel vm, bool plainText = false)
     {
         if (_isPasting) return;
         _isPasting = true;
@@ -445,8 +469,8 @@ public sealed partial class ClipboardWindow : Window
             var target = _pasteTarget;
             var focus = _pasteFocus;
             var automationFocus = _pasteAutomationFocus;
-            Log.Debug($"粘贴开始:id={vm.Item.Id}, target={target}, focus={focus}, uia={automationFocus is not null}");
-            await engine.CopyHistoryItemAsync(vm.Item);
+            Log.Debug($"粘贴开始:id={vm.Item.Id}, plainText={plainText}, target={target}, focus={focus}, uia={automationFocus is not null}");
+            await engine.CopyHistoryItemAsync(vm.Item, plainText: plainText);
             var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
             NativeMethods.AllKeysUp();
             if (target == IntPtr.Zero || !NativeMethods.IsWindow(target))
@@ -639,7 +663,7 @@ public sealed partial class ClipboardWindow : Window
     {
         var scale = root.XamlRoot.RasterizationScale;
         var regions = new List<RectInt32>();
-        foreach (var name in new[] { "SearchBox", "TopButtons" })
+        foreach (var name in new[] { "SearchBoxHost", "SearchBox", "TopButtons" })
         {
             if (root.FindName(name) is FrameworkElement el &&
                 el.ActualWidth > 0 && el.ActualHeight > 0)

@@ -1,4 +1,4 @@
-﻿namespace NexClip.Desktop.Services;
+namespace NexClip.Desktop.Services;
 
 using Microsoft.UI.Dispatching;
 using NexClip.Tray;
@@ -14,17 +14,29 @@ public sealed class TrayIconService : IDisposable
     private readonly TrayManager _trayManager;
     private readonly List<DispatcherQueueTimer> _retryTimers = new();
 
-    public TrayIconService(Action onActivate, Action onSettings, Action onExit, IntPtr ownerHwnd)
+    public TrayIconService(Action onActivate, Action onShow, Action onSettings, Action onExit)
     {
-        _trayManager = new TrayManager(onActivate, onSettings, onExit, AppContext.BaseDirectory, Log.Info);
+        _trayManager = new TrayManager(
+            onActivate,
+            onShow,
+            onSettings,
+            onExit,
+            AppContext.BaseDirectory,
+            Log.Info);
     }
 
     public void Initialize()
     {
         SetState(TrayState.Disconnected);
+        SetTheme(Lucide.IsDarkTheme);
         ScheduleReAttach(1.5);
         ScheduleReAttach(5);
         ScheduleReAttach(12);
+    }
+
+    public void SetTheme(bool isDark)
+    {
+        _trayManager.SetTheme(isDark);
     }
 
     private void ScheduleReAttach(double seconds)

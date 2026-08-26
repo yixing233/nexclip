@@ -48,7 +48,18 @@ public sealed class HistoryStore : IDisposable
         DbPath = Path.Combine(storageDir, "history.db");
         _conn = new SqliteConnection($"Data Source={DbPath}");
         _conn.Open();
+        RegisterCustomFunctions();
         EnsureSchema();
+    }
+
+    private void RegisterCustomFunctions()
+    {
+        _conn.CreateFunction("pinyin_match", (string? text, string? query) =>
+        {
+            if (string.IsNullOrWhiteSpace(query)) return 1;
+            if (string.IsNullOrWhiteSpace(text)) return 0;
+            return PinyinHelper.IsMatch(text, query) ? 1 : 0;
+        });
     }
 
     /// <summary>建表 + 兼容迁移(构造与 Reopen 共用)。</summary>
@@ -75,6 +86,7 @@ public sealed class HistoryStore : IDisposable
         cmd.ExecuteNonQuery();
         EnsureContentHashColumn();
         EnsureSourceAppColumns();
+        EnsureRemarkColumn();
         BackfillContentHashes();
     }
 
@@ -88,6 +100,7 @@ public sealed class HistoryStore : IDisposable
             DbPath = Path.Combine(storageDir, "history.db");
             _conn = new SqliteConnection($"Data Source={DbPath}");
             _conn.Open();
+            RegisterCustomFunctions();
             EnsureSchema();
         }
     }
@@ -167,6 +180,26 @@ public sealed class HistoryStore : IDisposable
         }
     }
 
+    /// <summary>兼容旧库:新增 remark 列(用户自定义备注)。</summary>
+    private void EnsureRemarkColumn()
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info(entries)";
+        var hasRemark = false;
+        using (var r = cmd.ExecuteReader())
+        {
+            while (r.Read())
+            {
+                if (r.GetString(1) == "remark") { hasRemark = true; break; }
+            }
+        }
+        if (!hasRemark)
+        {
+            cmd.CommandText = "ALTER TABLE entries ADD COLUMN remark TEXT";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     /// <summary>为历史存量条目回填内容哈希(文本取文本哈希,图片取缓存文件字节哈希)。</summary>
     private void BackfillContentHashes()
     {
@@ -211,14 +244,17 @@ public sealed class HistoryStore : IDisposable
         }
     }
 
-    /// <summary>查询历史(新→旧)。search 模糊匹配文本;type 过滤;starredOnly 只看收藏;urlOnly 只看链接。</summary>
+    /// <summary>查询历史(新→旧)。search 模糊匹配文本与备注;type 过滤;starredOnly 只看收藏;urlOnly 只看链接。</summary>
     public List<HistoryItem> Query(string? search = null, string? type = null, bool starredOnly = false, int limit = 500, bool urlOnly = false, int offset = 0)
     {
         lock (_lock)
         {
-            var sql = "SELECT id, server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon FROM entries";
+            var sql = "SELECT id, server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon, remark FROM entries";
             var conds = new List<string>();
-            if (!string.IsNullOrWhiteSpace(search)) conds.Add("text LIKE @search");
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                conds.Add("(text LIKE @search OR remark LIKE @search OR source_app_name LIKE @search OR pinyin_match(text, @raw_search) = 1 OR pinyin_match(remark, @raw_search) = 1 OR pinyin_match(source_app_name, @raw_search) = 1)");
+            }
             if (!string.IsNullOrWhiteSpace(type)) conds.Add("type = @type");
             if (starredOnly) conds.Add("starred = 1");
             if (urlOnly) conds.Add("(type = 'Text' AND (text LIKE 'http://%' OR text LIKE 'https://%'))");
@@ -228,6 +264,7 @@ public sealed class HistoryStore : IDisposable
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = sql;
             cmd.Parameters.AddWithValue("@search", $"%{search}%");
+            cmd.Parameters.AddWithValue("@raw_search", search.Trim());
             cmd.Parameters.AddWithValue("@type", type ?? "");
             cmd.Parameters.AddWithValue("@limit", limit);
             cmd.Parameters.AddWithValue("@offset", offset);
@@ -249,9 +286,9 @@ public sealed class HistoryStore : IDisposable
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = """
                 INSERT OR IGNORE INTO entries
-                    (server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon)
+                    (server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon, remark)
                 VALUES
-                    (@server_id, @type, @text, @image_path, @image_ref, @device_id, @device_name, @created_at, @origin, 0, @content_hash, @source_app_name, @source_app_path, @source_app_icon);
+                    (@server_id, @type, @text, @image_path, @image_ref, @device_id, @device_name, @created_at, @origin, @starred, @content_hash, @source_app_name, @source_app_path, @source_app_icon, @remark);
                 SELECT CASE WHEN changes() > 0 THEN last_insert_rowid() ELSE 0 END;
                 """;
             cmd.Parameters.AddWithValue("@server_id", (object?)item.ServerId ?? DBNull.Value);
@@ -263,10 +300,12 @@ public sealed class HistoryStore : IDisposable
             cmd.Parameters.AddWithValue("@device_name", (object?)item.DeviceName ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@created_at", item.CreatedAt.ToUniversalTime().Ticks);
             cmd.Parameters.AddWithValue("@origin", item.Origin);
+            cmd.Parameters.AddWithValue("@starred", item.Starred ? 1 : 0);
             cmd.Parameters.AddWithValue("@content_hash", (object?)ResolveContentHash(item) ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@source_app_name", (object?)item.SourceAppName ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@source_app_path", (object?)item.SourceAppPath ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@source_app_icon", (object?)item.SourceAppIcon ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@remark", (object?)item.Remark ?? DBNull.Value);
             var id = Convert.ToInt64(cmd.ExecuteScalar());
             if (id > 0) TrimToLimitLocked();
             return id;
@@ -366,7 +405,7 @@ public sealed class HistoryStore : IDisposable
         lock (_lock)
         {
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = "SELECT id, server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon FROM entries WHERE content_hash = @hash ORDER BY created_at DESC LIMIT 1";
+            cmd.CommandText = "SELECT id, server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon, remark FROM entries WHERE content_hash = @hash ORDER BY created_at DESC LIMIT 1";
             cmd.Parameters.AddWithValue("@hash", contentHash);
             using var reader = cmd.ExecuteReader();
             return reader.Read() ? ReadItem(reader) : null;
@@ -457,6 +496,20 @@ public sealed class HistoryStore : IDisposable
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = "UPDATE entries SET text = @text WHERE id = @id";
             cmd.Parameters.AddWithValue("@text", text);
+            cmd.Parameters.AddWithValue("@id", id);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>更新条目自定义备注。若 remark 为空或纯空白则存为 NULL。</summary>
+    public void UpdateRemark(long id, string? remark)
+    {
+        lock (_lock)
+        {
+            var trimmed = string.IsNullOrWhiteSpace(remark) ? null : remark.Trim();
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "UPDATE entries SET remark = @remark WHERE id = @id";
+            cmd.Parameters.AddWithValue("@remark", (object?)trimmed ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@id", id);
             cmd.ExecuteNonQuery();
         }
@@ -556,6 +609,7 @@ public sealed class HistoryStore : IDisposable
         SourceAppName = reader.FieldCount > 12 && !reader.IsDBNull(12) ? reader.GetString(12) : null,
         SourceAppPath = reader.FieldCount > 13 && !reader.IsDBNull(13) ? reader.GetString(13) : null,
         SourceAppIcon = reader.FieldCount > 14 && !reader.IsDBNull(14) ? reader.GetString(14) : null,
+        Remark = reader.FieldCount > 15 && !reader.IsDBNull(15) ? reader.GetString(15) : null,
     };
 
     public void Dispose() => _conn.Dispose();

@@ -24,8 +24,38 @@ public partial class HistoryItemViewModel : ObservableObject
     [ObservableProperty]
     private bool isHovered;
 
+    partial void OnIsHoveredChanged(bool value)
+    {
+        OnPropertyChanged(nameof(RemarkOpacity));
+        OnPropertyChanged(nameof(RemarkHitTest));
+        OnPropertyChanged(nameof(OriginalOpacity));
+        OnPropertyChanged(nameof(OriginalHitTest));
+    }
+
     [ObservableProperty]
     private bool starred;
+
+    [ObservableProperty]
+    private string? remark;
+
+    public bool HasRemark => !string.IsNullOrWhiteSpace(Remark);
+
+    /// <summary>备注层透明度(有备注且未悬停时为 1，悬停时渐隐为 0)。</summary>
+    public double RemarkOpacity => HasRemark ? (IsHovered ? 0.0 : 1.0) : 0.0;
+    public bool RemarkHitTest => HasRemark && !IsHovered;
+
+    /// <summary>原内容层透明度(无备注或悬停时为 1，未悬停且有备注时为 0 并保留占位测量以防高度抖动)。</summary>
+    public double OriginalOpacity => !HasRemark || IsHovered ? 1.0 : 0.0;
+    public bool OriginalHitTest => !HasRemark || IsHovered;
+
+    partial void OnRemarkChanged(string? value)
+    {
+        OnPropertyChanged(nameof(HasRemark));
+        OnPropertyChanged(nameof(RemarkOpacity));
+        OnPropertyChanged(nameof(RemarkHitTest));
+        OnPropertyChanged(nameof(OriginalOpacity));
+        OnPropertyChanged(nameof(OriginalHitTest));
+    }
 
     [ObservableProperty]
     private int indexInList;
@@ -42,16 +72,66 @@ public partial class HistoryItemViewModel : ObservableObject
     public IRelayCommand CopyCommand { get; }
     public IRelayCommand DeleteCommand { get; }
     public IRelayCommand ToggleStarCommand { get; }
+    public IRelayCommand SmartPrimaryCommand { get; }
+    public IRelayCommand SmartSecondaryCommand { get; }
 
     public HistoryItemViewModel(HistoryItem item, HistoryViewModel parent)
     {
         Item = item;
         starred = item.Starred;
+        remark = item.Remark;
         Thumbnail = BuildThumbnail(item.ImagePath);
         SourceAppIcon = BuildAppIcon(item.SourceAppIcon);
+        RefreshFormatAnalysis();
         CopyCommand = new RelayCommand(async () => await parent.CopyAsync(this));
         DeleteCommand = new RelayCommand(() => parent.DeleteAsync(this));
         ToggleStarCommand = new RelayCommand(() => parent.ToggleStarAsync(this));
+        SmartPrimaryCommand = new RelayCommand(() => _smartAction?.PrimaryAction());
+        SmartSecondaryCommand = new RelayCommand(() => _smartAction?.SecondaryAction?.Invoke());
+    }
+
+    private bool _isColor;
+    private SolidColorBrush? _colorBrush;
+    private string? _domainText;
+    private bool _isCodeOrJson;
+    private SmartAction? _smartAction;
+
+    public bool IsColor => _isColor;
+    public SolidColorBrush? ColorBrush => _colorBrush;
+
+    public bool HasDomain => !string.IsNullOrEmpty(_domainText);
+    public string? DomainText => _domainText;
+
+    public bool IsCodeOrJson => _isCodeOrJson;
+    public bool IsNormalText => !IsImage && !_isColor && !_isCodeOrJson;
+
+    public bool HasSmartAction => _smartAction != null;
+    public string SmartPrimaryText => _smartAction?.PrimaryButtonText ?? "";
+    public ImageSource? SmartPrimaryIcon => _smartAction?.PrimaryButtonIcon ?? _smartAction?.Icon ?? Services.Lucide.ExternalLink;
+    public string SmartPrimaryToolTip => _smartAction?.Subtitle ?? _smartAction?.Title ?? "";
+
+    public bool HasSmartSecondary => _smartAction?.SecondaryButtonText != null;
+    public string SmartSecondaryText => _smartAction?.SecondaryButtonText ?? "";
+    public ImageSource? SmartSecondaryIcon => _smartAction?.SecondaryButtonIcon ?? Services.Lucide.Copy;
+    public string SmartSecondaryToolTip => _smartAction?.SecondaryButtonText ?? "";
+
+    private void RefreshFormatAnalysis()
+    {
+        if (Item.Type == "Text" && !string.IsNullOrWhiteSpace(Item.Text))
+        {
+            _isColor = FormatHelper.TryParseColor(Item.Text, out _, out _colorBrush);
+            _domainText = FormatHelper.ExtractDomain(Item.Text);
+            _isCodeOrJson = FormatHelper.IsCodeOrJson(Item.Text);
+            _smartAction = SmartActionService.Detect(Item.Text);
+        }
+        else
+        {
+            _isColor = false;
+            _colorBrush = null;
+            _domainText = null;
+            _isCodeOrJson = false;
+            _smartAction = null;
+        }
     }
 
     public string TypeText => Item.Type == "Image" ? "图片" : "文本";
@@ -124,17 +204,53 @@ public partial class HistoryItemViewModel : ObservableObject
     public void ApplyText(string text)
     {
         Item.Text = text;
+        RefreshFormatAnalysis();
         OnPropertyChanged(nameof(PreviewText));
         OnPropertyChanged(nameof(MetaText));
+        OnPropertyChanged(nameof(IsColor));
+        OnPropertyChanged(nameof(ColorBrush));
+        OnPropertyChanged(nameof(HasDomain));
+        OnPropertyChanged(nameof(DomainText));
+        OnPropertyChanged(nameof(IsCodeOrJson));
+        OnPropertyChanged(nameof(IsNormalText));
+        OnPropertyChanged(nameof(HasSmartAction));
+        OnPropertyChanged(nameof(SmartPrimaryText));
+        OnPropertyChanged(nameof(SmartPrimaryIcon));
+        OnPropertyChanged(nameof(SmartPrimaryToolTip));
+        OnPropertyChanged(nameof(HasSmartSecondary));
+        OnPropertyChanged(nameof(SmartSecondaryText));
+        OnPropertyChanged(nameof(SmartSecondaryIcon));
+        OnPropertyChanged(nameof(SmartSecondaryToolTip));
+    }
+
+    /// <summary>更新备注后同步更新卡片展示与状态。</summary>
+    public void ApplyRemark(string? newRemark)
+    {
+        var trimmed = string.IsNullOrWhiteSpace(newRemark) ? null : newRemark.Trim();
+        Item.Remark = trimmed;
+        Remark = trimmed;
+        OnPropertyChanged(nameof(Remark));
+        OnPropertyChanged(nameof(HasRemark));
+        OnPropertyChanged(nameof(RemarkOpacity));
+        OnPropertyChanged(nameof(RemarkHitTest));
+        OnPropertyChanged(nameof(OriginalOpacity));
+        OnPropertyChanged(nameof(OriginalHitTest));
     }
 
     private static BitmapImage? BuildThumbnail(string? path)
     {
         if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
-        return new BitmapImage(new Uri("file:///" + path.Replace('\\', '/')))
+        try
         {
-            DecodePixelWidth = 240,
-        };
+            return new BitmapImage(new Uri("file:///" + path.Replace('\\', '/')))
+            {
+                DecodePixelWidth = 960,
+            };
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static BitmapImage? BuildAppIcon(string? path)

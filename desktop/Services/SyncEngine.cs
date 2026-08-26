@@ -19,6 +19,7 @@ public sealed class SyncEngine : IDisposable
     private readonly SemaphoreSlim _uploadGate = new(1, 1);
     private ConnState _state = ConnState.NotConfigured;
     private int _credentialRecoveryInProgress;
+    private DispatcherQueueTimer? _heartbeatTimer;
 
     /// <summary>本地历史(SQLite)。</summary>
     public HistoryStore History { get; }
@@ -45,6 +46,34 @@ public sealed class SyncEngine : IDisposable
     public event Action? SyncError;
 
     public ConnState State => _state;
+    public bool IsPaused { get; private set; }
+    public bool IsRunning => !IsPaused;
+
+    /// <summary>暂停实时同步(停止剪贴板捕获并断开推送)。</summary>
+    public void PauseSync()
+    {
+        if (IsPaused) return;
+        IsPaused = true;
+        _monitor?.Stop();
+        _ = _push?.DisconnectAsync();
+        SetState(ConnState.Offline, "同步已暂停");
+    }
+
+    /// <summary>恢复实时同步(启动剪贴板捕获并重新连接推送)。</summary>
+    public void ResumeSync()
+    {
+        if (!IsPaused) return;
+        IsPaused = false;
+        _monitor?.Start();
+        _ = ConnectAsync();
+    }
+
+    /// <summary>切换暂停/恢复同步状态。</summary>
+    public void ToggleSync()
+    {
+        if (IsPaused) ResumeSync();
+        else PauseSync();
+    }
 
     public void Start()
     {
@@ -52,6 +81,12 @@ public sealed class SyncEngine : IDisposable
         _monitor.Start();
         _push = new PushClient();
         _push.EntryReceived += entry => _dispatcher.TryEnqueue(() => _ = HandlePushAsync(entry));
+        _push.DevicesChanged += () => _dispatcher.TryEnqueue(async () =>
+        {
+            Log.Debug("收到服务端 DevicesChanged 广播，正在后台实时刷新设备状态…");
+            await _svc.SettingsVm.RefreshDevicesAsync();
+            await _svc.ChatVm.RefreshDevicesAsync();
+        });
         _push.StateChanged += s => _dispatcher.TryEnqueue(() => HandlePushState(s));
         _push.ErrorOccurred += ex => _dispatcher.TryEnqueue(() =>
         {
@@ -63,7 +98,39 @@ public sealed class SyncEngine : IDisposable
             ConnectionChanged?.Invoke(_state,
                 $"连接失败：{ServerApi.DescribeException(ex, "无法连接到同步服务。")} 自动重连中…");
         });
+        StartPeriodicHeartbeat();
         _ = ConnectAsync();
+    }
+
+    private void StartPeriodicHeartbeat()
+    {
+        if (_heartbeatTimer is not null) return;
+        try
+        {
+            _heartbeatTimer = _dispatcher.CreateTimer();
+            _heartbeatTimer.Interval = TimeSpan.FromSeconds(45);
+            _heartbeatTimer.IsRepeating = true;
+            _heartbeatTimer.Tick += async (_, _) =>
+            {
+                if (_state == ConnState.Connected && !IsPaused)
+                {
+                    try
+                    {
+                        await _svc.SettingsVm.RefreshDevicesAsync();
+                        await _svc.ChatVm.RefreshDevicesAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Debug($"后台定期刷新设备状态失败: {ex.Message}");
+                    }
+                }
+            };
+            _heartbeatTimer.Start();
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"初始化后台心跳定时器失败: {ex.Message}");
+        }
     }
 
     /// <summary>设置变化后重建连接。</summary>
@@ -207,6 +274,7 @@ public sealed class SyncEngine : IDisposable
             case "connected":
                 SetState(ConnState.Connected, "");
                 _ = PullCurrentAsync();   // 重连成功后主动校准(设计文档 §4.1)
+                _ = _svc.SettingsVm.RefreshDevicesCommand.ExecuteAsync(null); // 静默更新设备列表与缓存
                 break;
             case "reconnecting":
                 SetState(ConnState.Reconnecting, "");
@@ -241,11 +309,14 @@ public sealed class SyncEngine : IDisposable
         {
             var local = await SaveLocalCaptureAsync(clip, s);
 
-            // 复制直达提示属于本地捕获反馈,不应依赖服务端是否在线。
-            if (clip.Text is not null && s.CopyDirectEnabled && Services.UrlUtil.IsUrl(clip.Text))
+            // 复制直达智能提示属于本地捕获反馈,不应依赖服务端是否在线。
+            if (clip.Text is not null && s.CopyDirectEnabled)
             {
-                var linkUrl = clip.Text.Trim();
-                _dispatcher.TryEnqueue(() => App.ShowLinkToast(linkUrl));
+                var smartAction = SmartActionService.Detect(clip.Text, forToast: true);
+                if (smartAction is not null)
+                {
+                    _dispatcher.TryEnqueue(() => App.ShowSmartActionToast(smartAction));
+                }
             }
 
             // 先刷新本地历史,即使服务端离线也能立即看到刚复制的内容。
@@ -501,6 +572,32 @@ public sealed class SyncEngine : IDisposable
             }
         }
 
+        // 新内容通知: 若开启通知且为远端设备同步来的新鲜剪贴板, 在右下角弹出提示浮窗
+        if (s.NotifyEnabled && isFresh)
+        {
+            _dispatcher.TryEnqueue(() =>
+            {
+                var senderName = string.IsNullOrWhiteSpace(entry.DeviceName) ? "远端设备" : entry.DeviceName;
+                var desc = entry.Type == "Text"
+                    ? (entry.Text?.Length > 60 ? entry.Text[..60] + "..." : entry.Text ?? "")
+                    : "已同步新图片到剪贴板";
+                var action = new SmartAction
+                {
+                    Kind = SmartActionKind.Url,
+                    Title = $"来自 {senderName} 的新剪贴板",
+                    Subtitle = desc,
+                    Icon = Lucide.ClipboardAccent,
+                    PrimaryButtonText = "查看历史",
+                    PrimaryButtonIcon = Lucide.ClipboardAccent,
+                    PrimaryAction = () =>
+                    {
+                        App.ClipboardWindow?.ShowWindow();
+                    }
+                };
+                App.ShowSmartActionToast(action);
+            });
+        }
+
         _dispatcher.TryEnqueue(() => EntryUpdated?.Invoke(entry, imagePath, true));
     }
 
@@ -550,20 +647,25 @@ public sealed class SyncEngine : IDisposable
     private void SetTransfer(bool active, TransferKind kind) =>
         _dispatcher.TryEnqueue(() => TransferChanged?.Invoke(active, kind));
 
-    /// <summary>复制历史条目到本机剪贴板(图片先确保本地缓存),并抑制回环上传。</summary>
-    public async Task CopyHistoryItemAsync(Models.HistoryItem item)
+    /// <summary>复制历史条目到本机剪贴板(图片先确保本地缓存),并抑制回环上传。支持 plainText 纯文本模式。</summary>
+    public async Task CopyHistoryItemAsync(Models.HistoryItem item, bool plainText = false)
     {
         try
         {
             using var _ = _monitor?.PauseCapture();
             if (item.Type == "Text" && item.Text is not null)
             {
-                ImageCodec.SetClipboardText(item.Text);
+                ImageCodec.WriteClipboardText(item.Text);
                 var hash = item.ContentHash ?? ClipboardMonitor.HashText(item.Text);
                 _monitor?.RecordLastSeen(hash);
             }
             else if (item.Type == "Image")
             {
+                if (plainText)
+                {
+                    if (!string.IsNullOrEmpty(item.ImagePath)) ImageCodec.WriteClipboardText(item.ImagePath);
+                    return;
+                }
                 var path = item.ImagePath;
                 if (string.IsNullOrEmpty(path) || !File.Exists(path))
                 {
@@ -660,6 +762,8 @@ public sealed class SyncEngine : IDisposable
 
     public void Dispose()
     {
+        _heartbeatTimer?.Stop();
+        _heartbeatTimer = null;
         _monitor?.Stop();
         _uploadGate.Dispose();
         History.Dispose();

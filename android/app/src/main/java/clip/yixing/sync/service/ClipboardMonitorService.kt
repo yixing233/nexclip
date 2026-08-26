@@ -50,6 +50,9 @@ class ClipboardMonitorService : Service() {
     private var heartbeatJob: Job? = null
     private var legacyMigrationJob: Job? = null
     private var lastUploadHash: String? = null
+    private var lastLocalText: String? = null
+    private var lastLocalImgHash: String? = null
+    private var lastLocalTime: Long = 0L
     private lateinit var clipboard: ClipboardManager
     private var push: PushClient? = null
     @Volatile
@@ -59,6 +62,7 @@ class ClipboardMonitorService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         startForeground(SyncNotificationManager.NOTIFICATION_ID_FOREGROUND, buildNotification())
         clipboard.addPrimaryClipChangedListener(listener)
@@ -67,31 +71,55 @@ class ClipboardMonitorService : Service() {
         // 启动时拉取服务器当前剪贴板作为初始记录
         scope.launch { pullAndApply() }
 
-        // 监听记录与连接状态以实时更新前台通知/超级岛卡片
+        // 初始化 Shizuku 免 Root 剪贴板监听
+        clip.yixing.sync.shizuku.ShizukuClipboardManager.init(this)
         scope.launch {
-            captured.collect {
-                refreshForegroundNotification()
+            clip.yixing.sync.shizuku.ShizukuClipboardManager.status.collect {
+                updateShizukuListenerState()
             }
         }
+
+        // 监听连接状态以实时更新前台通知状态
         scope.launch {
             isServerConnected.collect {
                 refreshForegroundNotification()
             }
         }
+
+        // 监听捕获历史变化以实时更新常驻通知最新条目
+        scope.launch {
+            captured.collect {
+                refreshForegroundNotification()
+            }
+        }
+    }
+
+    private fun updateShizukuListenerState() {
+        val captureMethod = SyncSettings.captureMethod(this)
+        val shizukuActive = clip.yixing.sync.shizuku.ShizukuClipboardManager.status.value == clip.yixing.sync.shizuku.ShizukuClipboardManager.ShizukuStatus.AUTHORIZED_RUNNING
+        if ((captureMethod == clip.yixing.sync.util.CaptureMethod.AUTO || captureMethod == clip.yixing.sync.util.CaptureMethod.SHIZUKU) && shizukuActive) {
+            clip.yixing.sync.shizuku.ShizukuClipboardMonitor.start(this)
+        } else {
+            clip.yixing.sync.shizuku.ShizukuClipboardMonitor.stop()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(SyncNotificationManager.NOTIFICATION_ID_FOREGROUND, buildNotification())
+        updateShizukuListenerState()
         return START_STICKY
     }
 
     override fun onDestroy() {
+        if (instance == this) instance = null
         uploadJob?.cancel()
         heartbeatJob?.cancel()
         heartbeatJob = null
         push?.disconnect()
         push = null
         clipboard.removePrimaryClipChangedListener(listener)
+        clip.yixing.sync.shizuku.ShizukuClipboardMonitor.stop()
+        clip.yixing.sync.shizuku.ShizukuClipboardManager.unregisterClipboardListener()
         isRunning.value = false
         isServerConnected.value = false
         serverConnectionState.value = ServerConnectionState.DISCONNECTED
@@ -127,17 +155,23 @@ class ClipboardMonitorService : Service() {
             val isManual = entry.isManual
             if (!imgRef.isNullOrBlank()) {
                 addCaptured(ctx, "[图片]", imgRef, sourceDevice = entry.deviceName ?: "其他设备", isManual = isManual)
-                notifyPush(entry.deviceName ?: "其他设备", "[图片]")
+                notifyPush(entry.deviceName ?: "其他设备", "[图片]", imgRef)
             } else if (!text.isNullOrBlank()) {
                 val hash = sha256(text)
                 lastUploadHash = hash
                 addCaptured(ctx, text, null, sourceDevice = entry.deviceName ?: "其他设备", isManual = isManual)
                 isApplyingRemote = true
+                val newClip = ClipData.newPlainText("NexClip", text)
                 try {
-                    clipboard.setPrimaryClip(ClipData.newPlainText("NexClip", text))
+                    val method = SyncSettings.captureMethod(ctx)
+                    val useShizuku = (method == clip.yixing.sync.util.CaptureMethod.AUTO || method == clip.yixing.sync.util.CaptureMethod.SHIZUKU)
+                    val shizukuApplied = if (useShizuku) clip.yixing.sync.shizuku.ShizukuClipboardManager.setPrimaryClip(newClip) else false
+                    if (!shizukuApplied) {
+                        clipboard.setPrimaryClip(newClip)
+                    }
                 } finally {
                     scope.launch {
-                        delay(350)
+                        delay(500)
                         isApplyingRemote = false
                     }
                 }
@@ -225,19 +259,27 @@ class ClipboardMonitorService : Service() {
             val remoteDevName = cur.deviceName?.ifBlank { null } ?: "其他设备"
             if (!cur.imageRef.isNullOrBlank() && captured.value.firstOrNull()?.imageRef != cur.imageRef) {
                 addCaptured(this, "[图片]", cur.imageRef, sourceDevice = remoteDevName, sourceApp = remoteDevName)
+                notifyPush(remoteDevName, "[图片]", cur.imageRef)
             } else if (!cur.text.isNullOrBlank() && captured.value.firstOrNull()?.text != cur.text) {
                 val hash = sha256(cur.text)
                 lastUploadHash = hash
                 addCaptured(this, cur.text, null, sourceDevice = remoteDevName, sourceApp = remoteDevName)
                 isApplyingRemote = true
+                val newClip = ClipData.newPlainText("NexClip", cur.text)
                 try {
-                    clipboard.setPrimaryClip(ClipData.newPlainText("NexClip", cur.text))
+                    val method = SyncSettings.captureMethod(this)
+                    val useShizuku = (method == clip.yixing.sync.util.CaptureMethod.AUTO || method == clip.yixing.sync.util.CaptureMethod.SHIZUKU)
+                    val shizukuApplied = if (useShizuku) clip.yixing.sync.shizuku.ShizukuClipboardManager.setPrimaryClip(newClip) else false
+                    if (!shizukuApplied) {
+                        clipboard.setPrimaryClip(newClip)
+                    }
                 } finally {
                     scope.launch {
                         delay(1000)
                         isApplyingRemote = false
                     }
                 }
+                notifyPush(remoteDevName, cur.text)
             }
         } catch (e: clip.yixing.sync.data.ApiException) {
             if (e.statusCode == 401 || e.statusCode == 403 || e.statusCode == 410) {
@@ -256,17 +298,21 @@ class ClipboardMonitorService : Service() {
             return@OnPrimaryClipChangedListener
         }
         val clipData = runCatching { clipboard.primaryClip }.getOrNull() ?: return@OnPrimaryClipChangedListener
-        val item = clipData.getItemAt(0) ?: return@OnPrimaryClipChangedListener
+        processIncomingClip(clipData)
+    }
 
-        val sourcePkg = AppSourceHelper.resolvePackageName(this, clipData)
-        // 关键防护: 若剪贴板内容由 NexClip 自身写入(如应用云端推送、在 App 内点击复制), 不作为新的本机记录重复捕获
-        if (sourcePkg == packageName) {
-            android.util.Log.i("NexClip", "OnPrimaryClipChangedListener ignored (source is self app)")
-            return@OnPrimaryClipChangedListener
+    fun processIncomingClip(clipData: ClipData, overrideSourcePkg: String? = null) {
+        val item = clipData.getItemAt(0) ?: return
+
+        val sourcePkg = overrideSourcePkg?.takeIf { it.isNotBlank() } ?: AppSourceHelper.resolvePackageName(this, clipData)
+        // 关键防护: 若剪贴板内容由 NexClip 自身在软件内复制，保持原位且不生成新条目
+        if (isInternalCopy || sourcePkg == packageName) {
+            android.util.Log.i("NexClip", "Incoming clip ignored (source is self app or internal copy, maintaining original position)")
+            return
         }
         if (SyncSettings.isPackageFiltered(this, sourcePkg)) {
-            android.util.Log.i("NexClip", "OnPrimaryClipChangedListener ignored (source package $sourcePkg is blacklisted)")
-            return@OnPrimaryClipChangedListener
+            android.util.Log.i("NexClip", "Incoming clip ignored (source package $sourcePkg is blacklisted)")
+            return
         }
 
         // 1. 检查是否复制了图片 (Uri / MIME 类型为 image/*)
@@ -284,7 +330,13 @@ class ClipboardMonitorService : Service() {
 
             if (bytes != null && bytes.isNotEmpty() && bytes.size <= 30 * 1024 * 1024) {
                 val hash = sha256Bytes(bytes)
-                if (hash == lastUploadHash) return@OnPrimaryClipChangedListener
+                val now = System.currentTimeMillis()
+                if (hash == lastLocalImgHash && (now - lastLocalTime) < 800L) {
+                    android.util.Log.i("NexClip", "Incoming image ignored (debounced within 800ms)")
+                    return
+                }
+                lastLocalImgHash = hash
+                lastLocalTime = now
                 lastUploadHash = hash
 
                 // 关键修复: 1. 持久化缓存图片到本地磁盘
@@ -292,6 +344,7 @@ class ClipboardMonitorService : Service() {
 
                 // 关键修复: 2. 存入捕获历史并携带 imageRef = hash
                 addCaptured(this, "[图片]", hash, sourceDevice = "本机", sourcePackage = sourcePkg, sourceApp = sourceApp)
+                refreshForegroundNotification()
 
                 val clip = CapturedClip(
                     text = "[图片]",
@@ -302,7 +355,6 @@ class ClipboardMonitorService : Service() {
                     sourceApp = sourceApp
                 )
                 SyncNotificationManager.notifyNewClip(this, clip, sourceApp ?: "本机", isPush = false)
-                refreshForegroundNotification()
 
                 uploadJob?.cancel()
                 uploadJob = scope.launch(Dispatchers.IO) {
@@ -320,7 +372,7 @@ class ClipboardMonitorService : Service() {
                     } catch (_: Exception) {
                     }
                 }
-                return@OnPrimaryClipChangedListener
+                return
             }
         }
 
@@ -335,13 +387,22 @@ class ClipboardMonitorService : Service() {
         } else {
             null
         }
-        android.util.Log.i("NexClip", "primaryClip read: hasClip=${clipData != null}, textLen=${text?.length ?: 0}, srcPkg=$sourcePkg, srcApp=$sourceApp")
-        if (text.isNullOrBlank() || text.length > 500_000) return@OnPrimaryClipChangedListener
-        if (SyncSettings.isContentFiltered(this, text)) return@OnPrimaryClipChangedListener
+        android.util.Log.i("NexClip", "primaryClip read: hasClip=true, textLen=${text?.length ?: 0}, srcPkg=$sourcePkg, srcApp=$sourceApp")
+        if (text.isNullOrBlank() || text.length > 500_000) return
+        if (SyncSettings.isContentFiltered(this, text)) return
+
+        val now = System.currentTimeMillis()
+        if (text == lastLocalText && (now - lastLocalTime) < 800L) {
+            android.util.Log.i("NexClip", "Incoming text ignored (debounced within 800ms)")
+            return
+        }
+        lastLocalText = text
+        lastLocalTime = now
         val hash = sha256(text)
-        if (hash == lastUploadHash) return@OnPrimaryClipChangedListener
         lastUploadHash = hash
+
         addCaptured(this, text, null, sourceDevice = "本机", sourcePackage = sourcePkg, sourceApp = sourceApp)
+        refreshForegroundNotification()
 
         val clip = CapturedClip(
             text = text,
@@ -351,7 +412,6 @@ class ClipboardMonitorService : Service() {
             sourceApp = sourceApp
         )
         SyncNotificationManager.notifyNewClip(this, clip, sourceApp ?: "本机", isPush = false)
-        refreshForegroundNotification()
 
         uploadJob?.cancel()
         uploadJob = scope.launch(Dispatchers.IO) {
@@ -372,9 +432,10 @@ class ClipboardMonitorService : Service() {
         }
     }
 
-    private fun notifyPush(deviceName: String, text: String) {
+    private fun notifyPush(deviceName: String, text: String, imgRef: String? = null) {
         val clip = CapturedClip(
             text = text,
+            imageRef = imgRef,
             time = System.currentTimeMillis(),
             sourceDevice = deviceName,
             sourceApp = "来自 $deviceName"
@@ -412,6 +473,14 @@ class ClipboardMonitorService : Service() {
 
     companion object {
         private const val PREFS_CAPTURED = "captured_clips"
+
+        @Volatile
+        var instance: ClipboardMonitorService? = null
+            private set
+
+        fun onClipCaptured(clipData: ClipData, sourcePkg: String? = null) {
+            instance?.processIncomingClip(clipData, sourcePkg)
+        }
 
         /** 服务运行状态(UI 开关用) */
         val isRunning = MutableStateFlow(false)
@@ -455,6 +524,25 @@ class ClipboardMonitorService : Service() {
             }
         }
 
+        /**
+         * 标记本次写入剪贴板由 App 内部发起 (点击卡片复制等)
+         */
+        @Volatile
+        var isInternalCopy: Boolean = false
+            private set
+
+        fun copyToClipboardInternal(context: Context, clipData: ClipData) {
+            isInternalCopy = true
+            try {
+                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(clipData)
+            } finally {
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    isInternalCopy = false
+                }, 800)
+            }
+        }
+
         fun addCaptured(
             context: Context,
             text: String,
@@ -464,23 +552,43 @@ class ClipboardMonitorService : Service() {
             sourceApp: String? = null,
             isManual: Boolean = false
         ) {
-            val first = captured.value.firstOrNull()
-            if (first != null) {
-                if (!imageRef.isNullOrBlank() && first.imageRef == imageRef) return
-                if (imageRef.isNullOrBlank() && first.imageRef.isNullOrBlank() && first.text == text) return
+            // 查找是否已经存在相同内容的条目 (图片匹配 imageRef，文本匹配 text)
+            val existingIndex = captured.value.indexOfFirst {
+                if (!imageRef.isNullOrBlank()) {
+                    it.imageRef == imageRef
+                } else {
+                    it.imageRef.isNullOrBlank() && it.text == text
+                }
             }
+
             val resolvedApp = sourceApp ?: AppSourceHelper.resolveAppName(context, sourcePackage)
-            val list = listOf(
-                CapturedClip(
-                    text = text,
+
+            val list = if (existingIndex != -1) {
+                // 如果是软件外复制的现有条目 -> 将原有条目的时间更新为最新，并移到首位，保留收藏/标签等原有属性
+                val existing = captured.value[existingIndex]
+                val updated = existing.copy(
                     time = System.currentTimeMillis(),
-                    imageRef = imageRef,
-                    sourceDevice = sourceDevice,
-                    sourcePackage = sourcePackage,
-                    sourceApp = resolvedApp,
-                    isManual = isManual
+                    sourceDevice = sourceDevice ?: existing.sourceDevice,
+                    sourcePackage = sourcePackage ?: existing.sourcePackage,
+                    sourceApp = resolvedApp ?: existing.sourceApp,
+                    isManual = isManual || existing.isManual
                 )
-            ) + captured.value
+                listOf(updated) + captured.value.filterIndexed { index, _ -> index != existingIndex }
+            } else {
+                // 新条目 -> 插入首位
+                listOf(
+                    CapturedClip(
+                        text = text,
+                        time = System.currentTimeMillis(),
+                        imageRef = imageRef,
+                        sourceDevice = sourceDevice,
+                        sourcePackage = sourcePackage,
+                        sourceApp = resolvedApp,
+                        isManual = isManual
+                    )
+                ) + captured.value
+            }
+
             persist(context, list)
             captured.value = list
         }
@@ -659,6 +767,17 @@ class ClipboardMonitorService : Service() {
             }
             context.getSharedPreferences(PREFS_CAPTURED, Context.MODE_PRIVATE)
                 .edit().putString("clips", arr.toString()).apply()
+        }
+
+        fun updateMonitoringState(context: Context) {
+            val intent = Intent(context, ClipboardMonitorService::class.java).apply {
+                action = "clip.yixing.sync.ACTION_UPDATE_MONITOR"
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                runCatching { context.startForegroundService(intent) }
+            } else {
+                runCatching { context.startService(intent) }
+            }
         }
     }
 }

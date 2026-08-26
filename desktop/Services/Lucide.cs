@@ -1,138 +1,176 @@
-﻿using Microsoft.UI.Xaml;
+using System;
+using System.Collections.Concurrent;
+using System.IO;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace NexClip.Desktop.Services;
 
 /// <summary>
-/// lucide 图标加载(官方 SVG)。
-/// SvgImageSource 无 Foreground,加载时把 stroke="currentColor" 替换为具体颜色并写入缓存文件;
-/// 颜色取当前主题资源(启动时主题已确定),深/浅主题各得其所。
+/// lucide 矢量图标动态加载器(官方 SVG)。
+/// 自动根据系统与应用深浅色主题动态计算高对比度着色并生成 SVG 缓存。
 /// </summary>
 public static class Lucide
 {
     private static readonly string BaseDir = Path.Combine(AppContext.BaseDirectory, "Assets", "lucide");
     private static readonly string CacheDir = Path.Combine(Path.GetTempPath(), "NexClipIcons");
+    private static readonly ConcurrentDictionary<string, SvgImageSource> Cache = new();
 
-    private static ImageSource? _clipboard;
-    private static ImageSource? _copy;
-    private static ImageSource? _star;
-    private static ImageSource? _starActive;
-    private static ImageSource? _trash;
-    private static ImageSource? _fileText;
-    private static ImageSource? _image;
-    private static ImageSource? _settings;
-    private static ImageSource? _search;
-    private static ImageSource? _refreshCw;
-    private static ImageSource? _pin;
-    private static ImageSource? _pinOff;
-    private static ImageSource? _pinOffActive;
-    private static ImageSource? _monitorSmartphone;
-    private static ImageSource? _database;
-    private static ImageSource? _palette;
-    private static ImageSource? _info;
-    private static ImageSource? _panelLeftClose;
-    private static ImageSource? _panelLeftOpen;
-    private static ImageSource? _download;
-    private static ImageSource? _upload;
-    private static ImageSource? _folderOpen;
-    private static ImageSource? _clock;
-    private static ImageSource? _hardDrive;
-    private static ImageSource? _server;
-    private static ImageSource? _keyboard;
-    private static ImageSource? _arrowUp;
-    private static ImageSource? _zoomInWhite;
-    private static ImageSource? _zoomOutWhite;
-    private static ImageSource? _rotateCwWhite;
-    private static ImageSource? _maximize2White;
-    private static ImageSource? _externalLinkWhite;
-    private static ImageSource? _xWhite;
-    private static ImageSource? _saveWhite;
-    private static ImageSource? _copyWhite;
-    private static ImageSource? _imageMuted;
-    private static ImageSource? _edit;
-    private static ImageSource? _externalLink;
-    private static ImageSource? _save;
-    private static ImageSource? _zoomIn;
-    private static ImageSource? _smartphone;
-    private static ImageSource? _laptop;
-    private static ImageSource? _monitor;
-    private static ImageSource? _rotateCw;
-
-    public static ImageSource Clipboard => _clipboard ??= Load("clipboard", "TextFillColorPrimaryBrush");
-    public static ImageSource Copy => _copy ??= Load("copy", "TextFillColorSecondaryBrush");
-    public static ImageSource Star => _star ??= Load("star", "TextFillColorSecondaryBrush");
-    public static ImageSource StarActive => _starActive ??= Load("star", "#F59E0B");
-    public static ImageSource Trash => _trash ??= Load("trash-2", "TextFillColorSecondaryBrush");
-    public static ImageSource FileText => _fileText ??= Load("file-text", "TextFillColorSecondaryBrush");
-    public static ImageSource Image => _image ??= Load("image", "TextFillColorSecondaryBrush");
-    public static ImageSource Settings => _settings ??= Load("settings", "TextFillColorPrimaryBrush");
-    public static ImageSource Search => _search ??= Load("search", "TextFillColorSecondaryBrush");
-    public static ImageSource RefreshCw => _refreshCw ??= Load("refresh-cw", "TextFillColorPrimaryBrush");
-    public static ImageSource RotateCw => _rotateCw ??= Load("rotate-cw", "TextFillColorSecondaryBrush");
-    public static ImageSource Pin => _pin ??= Load("pin", "TextFillColorPrimaryBrush");
-    public static ImageSource PinOff => _pinOff ??= Load("pin-off", "TextFillColorSecondaryBrush");
-    /// <summary>置顶激活态:白色图标,用于蓝色胶囊按钮上。</summary>
-    public static ImageSource PinOffActive => _pinOffActive ??= Load("pin-off", "#FFFFFF");
-    public static ImageSource MonitorSmartphone => _monitorSmartphone ??= Load("monitor-smartphone", "TextFillColorPrimaryBrush");
-    public static ImageSource Smartphone => _smartphone ??= Load("smartphone", "TextFillColorPrimaryBrush");
-    public static ImageSource Laptop => _laptop ??= Load("laptop", "TextFillColorPrimaryBrush");
-    public static ImageSource Monitor => _monitor ??= Load("monitor", "TextFillColorPrimaryBrush");
-    public static ImageSource Database => _database ??= Load("database", "TextFillColorPrimaryBrush");
-    public static ImageSource Palette => _palette ??= Load("palette", "TextFillColorPrimaryBrush");
-    public static ImageSource Info => _info ??= Load("info", "TextFillColorPrimaryBrush");
-    public static ImageSource PanelLeftClose => _panelLeftClose ??= Load("panel-left-close", "TextFillColorSecondaryBrush");
-    public static ImageSource PanelLeftOpen => _panelLeftOpen ??= Load("panel-left-open", "TextFillColorSecondaryBrush");
-    public static ImageSource Download => _download ??= Load("download", "TextFillColorSecondaryBrush");
-    public static ImageSource Upload => _upload ??= Load("upload", "TextFillColorSecondaryBrush");
-    public static ImageSource FolderOpen => _folderOpen ??= Load("folder-open", "TextFillColorSecondaryBrush");
-    public static ImageSource Clock => _clock ??= Load("clock", "TextFillColorSecondaryBrush");
-    public static ImageSource HardDrive => _hardDrive ??= Load("hard-drive", "TextFillColorSecondaryBrush");
-    public static ImageSource Server => _server ??= Load("server", "TextFillColorPrimaryBrush");
-    public static ImageSource Keyboard => _keyboard ??= Load("keyboard", "TextFillColorPrimaryBrush");
-    public static ImageSource ArrowUp => _arrowUp ??= Load("arrow-up", "#FFFFFF");
-
-    // ---- 大图查看器 HUD 与右键菜单专属 Lucide 图标 ----
-    public static ImageSource ZoomInWhite => _zoomInWhite ??= Load("zoom-in", "#F8FAFC");
-    public static ImageSource ZoomOutWhite => _zoomOutWhite ??= Load("zoom-out", "#F8FAFC");
-    public static ImageSource RotateCwWhite => _rotateCwWhite ??= Load("rotate-cw", "#F8FAFC");
-    public static ImageSource Maximize2White => _maximize2White ??= Load("maximize-2", "#F8FAFC");
-    public static ImageSource ExternalLinkWhite => _externalLinkWhite ??= Load("external-link", "#F8FAFC");
-    public static ImageSource XWhite => _xWhite ??= Load("x", "#F8FAFC");
-    public static ImageSource SaveWhite => _saveWhite ??= Load("save", "#F8FAFC");
-    public static ImageSource CopyWhite => _copyWhite ??= Load("copy", "#F8FAFC");
-    public static ImageSource ImageMuted => _imageMuted ??= Load("image", "#94A3B8");
-
-    public static ImageSource Edit => _edit ??= Load("edit", "TextFillColorPrimaryBrush");
-    public static ImageSource ExternalLink => _externalLink ??= Load("external-link", "TextFillColorPrimaryBrush");
-    public static ImageSource Save => _save ??= Load("save", "TextFillColorPrimaryBrush");
-    public static ImageSource ZoomIn => _zoomIn ??= Load("zoom-in", "TextFillColorPrimaryBrush");
-
-    private static SvgImageSource Load(string name, string color)
+    /// <summary>当前是否处于深色主题。</summary>
+    public static bool IsDarkTheme
     {
-        if (!color.StartsWith('#'))
+        get
         {
-            var brush = Application.Current.Resources[color] as SolidColorBrush;
-            color = brush is null
-                ? "#4B5563"
-                : $"#{brush.Color.R:X2}{brush.Color.G:X2}{brush.Color.B:X2}";
+            try
+            {
+                var themeMode = App.Services?.Settings?.ThemeMode;
+                if (string.Equals(themeMode, "dark", StringComparison.OrdinalIgnoreCase)) return true;
+                if (string.Equals(themeMode, "light", StringComparison.OrdinalIgnoreCase)) return false;
+
+                // 检查已打开窗口的实际主题
+                if (App.ClipboardWindow?.Content is FrameworkElement root && root.ActualTheme != ElementTheme.Default)
+                {
+                    return root.ActualTheme == ElementTheme.Dark;
+                }
+
+                // 通过系统颜色准确探测系统是否为深色模式
+                var uiSettings = new Windows.UI.ViewManagement.UISettings();
+                var color = uiSettings.GetColorValue(Windows.UI.ViewManagement.UIColorType.Background);
+                return color.R < 128;
+            }
+            catch
+            {
+                return false;
+            }
         }
+    }
+
+    /// <summary>解析逻辑颜色角色对应的十六进制颜色值。</summary>
+    public static string ResolveColorHex(string colorOrRole)
+    {
+        if (colorOrRole.StartsWith('#')) return colorOrRole;
+        bool isDark = IsDarkTheme;
+        return colorOrRole switch
+        {
+            "primary" or "TextFillColorPrimaryBrush" => isDark ? "#F8FAFC" : "#0F172A",
+            "secondary" or "TextFillColorSecondaryBrush" => isDark ? "#CBD5E1" : "#475569",
+            "tertiary" or "TextFillColorTertiaryBrush" => isDark ? "#94A3B8" : "#94A3B8",
+            "amber" => isDark ? "#FBBF24" : "#D97706",
+            "blue" => isDark ? "#60A5FA" : "#2563EB",
+            "white" => "#FFFFFF",
+            _ => isDark ? "#F8FAFC" : "#0F172A"
+        };
+    }
+
+    public static ImageSource Get(string name, string colorOrRole = "primary")
+    {
+        var hex = ResolveColorHex(colorOrRole);
+        var key = $"{name}_{hex.TrimStart('#')}";
+        return Cache.GetOrAdd(key, _ => LoadSvg(name, hex));
+    }
+
+    private static SvgImageSource LoadSvg(string name, string hexColor)
+    {
         try
         {
             Directory.CreateDirectory(CacheDir);
-            var target = Path.Combine(CacheDir, $"{name}-{color.TrimStart('#')}.svg");
+            var cleanHex = hexColor.TrimStart('#');
+            var target = Path.Combine(CacheDir, $"{name}-{cleanHex}.svg");
             if (!File.Exists(target))
             {
-                var content = File.ReadAllText(Path.Combine(BaseDir, name + ".svg"));
-                content = content.Replace("stroke=\"currentColor\"", $"stroke=\"{color}\"");
-                File.WriteAllText(target, content);
+                var sourcePath = Path.Combine(BaseDir, $"{name}.svg");
+                if (File.Exists(sourcePath))
+                {
+                    var content = File.ReadAllText(sourcePath);
+                    content = content.Replace("stroke=\"currentColor\"", $"stroke=\"#{cleanHex}\"");
+                    content = content.Replace("fill=\"currentColor\"", $"fill=\"#{cleanHex}\"");
+                    File.WriteAllText(target, content);
+                }
+                else
+                {
+                    Log.Warn($"图标源文件不存在: {sourcePath}");
+                    return new SvgImageSource();
+                }
             }
             return new SvgImageSource(new Uri("file:///" + target.Replace('\\', '/')));
         }
         catch (Exception ex)
         {
-            Log.Warn($"图标加载失败:{name} - {ex.Message}");
+            Log.Warn($"图标加载失败: {name} ({hexColor}) - {ex.Message}");
             return new SvgImageSource();
         }
+    }
+
+    public static ImageSource Clipboard => Get("clipboard", "primary");
+    public static ImageSource Copy => Get("copy", "secondary");
+    public static ImageSource Star => Get("star", "secondary");
+    public static ImageSource StarActive => Get("star-filled", "amber");
+    public static ImageSource Trash => Get("trash-2", "secondary");
+    public static ImageSource FileText => Get("file-text", "secondary");
+    public static ImageSource Image => Get("image", "secondary");
+    public static ImageSource Settings => Get("settings", "primary");
+    public static ImageSource Search => Get("search", "secondary");
+    public static ImageSource RefreshCw => Get("refresh-cw", "primary");
+    public static ImageSource RotateCw => Get("rotate-cw", "secondary");
+    public static ImageSource Pin => Get("pin", "primary");
+    public static ImageSource PinOff => Get("pin-off", "secondary");
+    public static ImageSource PinOffActive => Get("pin-off", "#FFFFFF");
+    public static ImageSource MonitorSmartphone => Get("monitor-smartphone", "primary");
+    public static ImageSource MonitorSmartphoneWhite => Get("monitor-smartphone", "#FFFFFF");
+    public static ImageSource Smartphone => Get("smartphone", "primary");
+    public static ImageSource Laptop => Get("laptop", "primary");
+    public static ImageSource Monitor => Get("monitor", "primary");
+    public static ImageSource Database => Get("database", "primary");
+    public static ImageSource Palette => Get("palette", "primary");
+    public static ImageSource Info => Get("info", "primary");
+    public static ImageSource PanelLeftClose => Get("panel-left-close", "secondary");
+    public static ImageSource PanelLeftOpen => Get("panel-left-open", "secondary");
+    public static ImageSource Download => Get("download", "secondary");
+    public static ImageSource Upload => Get("upload", "secondary");
+    public static ImageSource FolderOpen => Get("folder-open", "secondary");
+    public static ImageSource Clock => Get("clock", "secondary");
+    public static ImageSource HardDrive => Get("hard-drive", "secondary");
+    public static ImageSource Server => Get("server", "primary");
+    public static ImageSource Keyboard => Get("keyboard", "primary");
+    public static ImageSource ArrowUp => Get("arrow-up", "#FFFFFF");
+
+    // ---- 大图查看器 HUD 与纯白/浅色变体 ----
+    public static ImageSource ZoomInWhite => Get("zoom-in", "#F8FAFC");
+    public static ImageSource ZoomOutWhite => Get("zoom-out", "#F8FAFC");
+    public static ImageSource RotateCwWhite => Get("rotate-cw", "#F8FAFC");
+    public static ImageSource Maximize2White => Get("maximize-2", "#F8FAFC");
+    public static ImageSource ExternalLinkWhite => Get("external-link", "#F8FAFC");
+    public static ImageSource XWhite => Get("x", "#F8FAFC");
+    public static ImageSource SaveWhite => Get("save", "#F8FAFC");
+    public static ImageSource CopyWhite => Get("copy", "#F8FAFC");
+    public static ImageSource FolderOpenWhite => Get("folder-open", "#F8FAFC");
+    public static ImageSource DownloadWhite => Get("download", "#F8FAFC");
+    public static ImageSource PaletteWhite => Get("palette", "#F8FAFC");
+    public static ImageSource FileTextWhite => Get("file-text", "#F8FAFC");
+    public static ImageSource ImageMuted => Get("image", "#94A3B8");
+
+    public static ImageSource Edit => Get("edit", "primary");
+    public static ImageSource ExternalLink => Get("external-link", "primary");
+    public static ImageSource ExternalLinkAccent => Get("external-link", "#2563EB");
+    public static ImageSource CopyAccent => Get("copy", "#2563EB");
+    public static ImageSource FolderOpenAccent => Get("folder-open", "#2563EB");
+    public static ImageSource DownloadAccent => Get("download", "#2563EB");
+    public static ImageSource PaletteAccent => Get("palette", "#2563EB");
+    public static ImageSource ClipboardAccent => Get("clipboard", "#2563EB");
+    public static ImageSource Save => Get("save", "primary");
+    public static ImageSource ZoomIn => Get("zoom-in", "primary");
+    public static ImageSource X => Get("x", "secondary");
+
+    /// <summary>获取图标对应的纯白高对比度变体 (用于深色/强调色背景主按钮)。</summary>
+    public static ImageSource GetWhiteVariant(ImageSource? icon)
+    {
+        if (icon == ExternalLink || icon == ExternalLinkAccent || icon == ExternalLinkWhite) return ExternalLinkWhite;
+        if (icon == FolderOpen || icon == FolderOpenAccent || icon == FolderOpenWhite) return FolderOpenWhite;
+        if (icon == Download || icon == DownloadAccent || icon == DownloadWhite) return DownloadWhite;
+        if (icon == Copy || icon == CopyAccent || icon == CopyWhite) return CopyWhite;
+        if (icon == Palette || icon == PaletteAccent || icon == PaletteWhite) return PaletteWhite;
+        if (icon == FileText || icon == FileTextWhite) return FileTextWhite;
+        return ExternalLinkWhite;
     }
 }

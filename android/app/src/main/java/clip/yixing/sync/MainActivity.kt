@@ -1,6 +1,10 @@
 package clip.yixing.sync
 
+import android.app.ActivityManager
 import android.os.Bundle
+import android.content.Intent
+import android.net.Uri
+import android.content.pm.PackageManager
 import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -77,6 +81,7 @@ import clip.yixing.sync.ui.SearchPage
 import clip.yixing.sync.ui.BarBlurSurface
 import clip.yixing.sync.ui.PageShell
 import clip.yixing.sync.ui.predictiveBackAnimation
+import clip.yixing.sync.ui.rememberScreenCornerRadius
 import clip.yixing.sync.ui.FloatingBottomBar
 import clip.yixing.sync.ui.FloatingBottomBarItem
 import clip.yixing.sync.ui.SettingsPage
@@ -138,6 +143,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        updateRecentsVisibility(SyncSettings.isHideFromRecents(this))
         // 恢复本地剪贴板记录;按设置自动恢复监听
         ClipboardMonitorService.loadCaptured(applicationContext)
         if (SyncSettings.bootStartEnabled(this)) {
@@ -169,6 +175,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        updateRecentsVisibility(SyncSettings.isHideFromRecents(this))
+    }
+
+    fun updateRecentsVisibility(hideFromRecents: Boolean) {
+        val activityManager = getSystemService(ActivityManager::class.java)
+        activityManager?.appTasks
+            ?.firstOrNull { it.taskInfo?.taskId == taskId }
+            ?.setExcludeFromRecents(hideFromRecents)
     }
 }
 
@@ -237,6 +255,42 @@ private fun MainScreen() {
     var isManualPushOpen by remember { mutableStateOf(false) }
     var displayedManualPushOpen by remember { mutableStateOf(false) }
     val manualPushAnimProgress = remember { Animatable(1f) }
+
+    LaunchedEffect(Unit) {
+        if (SyncSettings.autoCheckUpdate(appContext)) {
+            delay(1500)
+            val info = runCatching {
+                val curVer = try {
+                    val pInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        appContext.packageManager.getPackageInfo(appContext.packageName, PackageManager.PackageInfoFlags.of(0L))
+                    } else {
+                        @Suppress("DEPRECATION")
+                        appContext.packageManager.getPackageInfo(appContext.packageName, 0)
+                    }
+                    pInfo.versionName ?: "20260825.01"
+                } catch (_: Exception) {
+                    "20260825.01"
+                }
+                clip.yixing.sync.util.UpdateChecker.check(curVer).getOrNull()
+            }.getOrNull()
+            if (info != null && info.hasUpdate) {
+                val res = snackbarHostState.showAppSnack(
+                    message = "发现新版本 v${info.latestVersion}",
+                    type = SnackType.Info,
+                    actionLabel = "查看"
+                )
+                if (res == SnackbarResult.ActionPerformed) {
+                    val target = info.downloadUrl ?: info.releaseUrl
+                    runCatching {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(target)).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        appContext.startActivity(intent)
+                    }
+                }
+            }
+        }
+    }
 
     val isGlobalOverlayActive = isScanOpen || isManualPushOpen || searchOpen
     val isAnyOverlayActive = isOverlayActiveHome || isOverlayActiveRecords || isOverlayActiveSettings || isGlobalOverlayActive
@@ -551,6 +605,8 @@ private fun MainScreen() {
         )
     }
 
+    val screenCornerRadius = rememberScreenCornerRadius()
+
     // 全屏扫码配对页(全屏覆盖,水平平滑滑入退出与独立预测返回)
     if (displayedScanOpen) {
         val p = scanAnimProgress.value
@@ -564,7 +620,8 @@ private fun MainScreen() {
                     scaleY = s
                     alpha = 1f - p * 0.3f
                     clip = true
-                    shape = RoundedCornerShape((p * 24).dp)
+                    val corner = screenCornerRadius + (p * 4).dp
+                    shape = RoundedCornerShape(corner)
                     shadowElevation = (1f - p) * 24f
                 }
         ) {
@@ -593,7 +650,8 @@ private fun MainScreen() {
                     scaleY = s
                     alpha = 1f - p * 0.3f
                     clip = true
-                    shape = RoundedCornerShape((p * 24).dp)
+                    val corner = screenCornerRadius + (p * 4).dp
+                    shape = RoundedCornerShape(corner)
                     shadowElevation = (1f - p) * 24f
                 }
         ) {

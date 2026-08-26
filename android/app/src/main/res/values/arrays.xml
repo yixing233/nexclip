@@ -2,7 +2,5 @@
 <resources>
     <string-array name="xposed_scope">
         <item>system</item>
-        <item>android</item>
-        <item>clip.yixing.sync</item>
     </string-array>
 </resources>

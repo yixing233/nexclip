@@ -9,8 +9,9 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,9 +60,13 @@ import clip.yixing.sync.StatusRow
 import clip.yixing.sync.data.SyncApi
 import clip.yixing.sync.formatTime
 import clip.yixing.sync.hook.ModuleStatusStore
+import clip.yixing.sync.shizuku.ShizukuClipboardManager
+import clip.yixing.sync.smartaction.SmartActionEngine
+import clip.yixing.sync.smartaction.SmartActionChip
 import clip.yixing.sync.service.CapturedClip
 import clip.yixing.sync.service.ClipboardMonitorService
 import clip.yixing.sync.showAppSnack
+import clip.yixing.sync.util.CaptureMethod
 import clip.yixing.sync.util.ClipboardTest
 import clip.yixing.sync.util.ImageLoader
 import clip.yixing.sync.util.SyncSettings
@@ -273,6 +278,26 @@ internal fun HomePage(
                             )
                         }
                     }
+                    val currentSmartActions = remember(currentText, currentClip?.isImage) {
+                        if (currentClip?.isImage != true) SmartActionEngine.detectActions(context, currentText) else emptyList()
+                    }
+                    if (currentSmartActions.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                        ) {
+                            currentSmartActions.forEach { action ->
+                                SmartActionChip(
+                                    action = action,
+                                    onClick = { action.action(context) }
+                                )
+                            }
+                        }
+                    }
                     Spacer(Modifier.height(10.dp))
                     Button(
                         onClick = {
@@ -414,6 +439,8 @@ private fun SyncStatusHeroCard(
 ) {
     val moduleStatus by ModuleStatusStore.moduleStatus.collectAsState()
     val isXposedActivated = moduleStatus.activated
+    val shizukuStatus by ShizukuClipboardManager.status.collectAsState()
+    val isShizukuActive = shizukuStatus == ShizukuClipboardManager.ShizukuStatus.AUTHORIZED_RUNNING
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -520,20 +547,40 @@ private fun SyncStatusHeroCard(
                     )
                 }
 
-                // 2. 模块状态
+                // 2. 增强监听状态 (LSPosed / Shizuku)
+                val context = LocalContext.current
+                val captureMethod = SyncSettings.captureMethod(context)
+                val isEnhanced = when (captureMethod) {
+                    CaptureMethod.AUTO -> isXposedActivated || isShizukuActive
+                    CaptureMethod.LSPOSED -> isXposedActivated
+                    CaptureMethod.SHIZUKU -> isShizukuActive
+                }
+                val badgeLabel = when (captureMethod) {
+                    CaptureMethod.AUTO -> when {
+                        isXposedActivated -> "模块已激活"
+                        isShizukuActive -> "Shizuku 就绪"
+                        else -> "未授权"
+                    }
+                    CaptureMethod.LSPOSED -> if (isXposedActivated) "模块已激活" else "模块未激活"
+                    CaptureMethod.SHIZUKU -> if (isShizukuActive) "Shizuku 就绪" else "未授权"
+                }
+
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 3.dp)
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { onNavigateToSettings() }
+                        .padding(horizontal = 4.dp, vertical = 3.dp)
                 ) {
                     Box(
                         modifier = Modifier
                             .size(7.dp)
                             .clip(CircleShape)
-                            .background(if (isXposedActivated) Color(0xFF34C759) else MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.4f))
+                            .background(if (isEnhanced) Color(0xFF34C759) else MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.4f))
                     )
                     Spacer(Modifier.width(5.dp))
                     Text(
-                        text = if (isXposedActivated) "模块已激活" else "常规监听",
+                        text = badgeLabel,
                         fontSize = 12.sp,
                         color = MiuixTheme.colorScheme.onBackgroundVariant
                     )
@@ -689,6 +736,7 @@ private fun RecentRecordsCard(
     onPreviewImage: (clip.yixing.sync.service.CapturedClip) -> Unit,
     onViewAll: () -> Unit
 ) {
+    val context = LocalContext.current
     SectionBlock(
         title = "最近记录",
         trailing = {
@@ -754,6 +802,26 @@ private fun RecentRecordsCard(
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
+                        val actions = remember(clip.text, clip.isImage) {
+                            if (!clip.isImage) SmartActionEngine.detectActions(context, clip.text) else emptyList()
+                        }
+                        if (actions.isNotEmpty()) {
+                            Spacer(Modifier.height(4.dp))
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState())
+                            ) {
+                                actions.forEach { action ->
+                                    SmartActionChip(
+                                        action = action,
+                                        onClick = { action.action(context) }
+                                    )
+                                }
+                            }
+                        }
                         Spacer(Modifier.height(2.dp))
                         Text(
                             text = formatTime(clip.time),
@@ -780,8 +848,7 @@ private fun RecentRecordsCard(
 }
 
 private fun copyToClipboard(context: Context, text: String) {
-    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    cm.setPrimaryClip(ClipData.newPlainText("NexClip", text))
+    clip.yixing.sync.service.ClipboardMonitorService.copyToClipboardInternal(context, ClipData.newPlainText("NexClip", text))
 }
 
 private fun clearClipboard(context: Context) {

@@ -5,9 +5,77 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:converters="using:NexClip.Desktop.Converters"
     xmlns:services="using:NexClip.Desktop.Services"
     xmlns:vm="using:NexClip.Desktop.ViewModels"
     mc:Ignorable="d">
+
+    <UserControl.Resources>
+        <converters:BooleanToVisibilityConverter x:Key="BoolToVis" />
+        <converters:InverseBooleanToVisibilityConverter x:Key="InverseBoolToVis" />
+        <converters:BoolToPillForegroundConverter x:Key="BoolToPillFg" />
+
+        <!-- 筛选胶囊 ToggleButton 样式: 选中时高亮蓝底(#2563EB)+纯白字; 未选中时自适应卡片底色+主题文字 -->
+        <Style x:Key="FilterPillStyle" TargetType="ToggleButton">
+            <Setter Property="Padding" Value="10,4" />
+            <Setter Property="CornerRadius" Value="14" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}" />
+            <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorSecondaryBrush}" />
+            <Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border
+                            x:Name="RootBorder"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{TemplateBinding CornerRadius}"
+                            Padding="{TemplateBinding Padding}">
+                            <ContentPresenter
+                                x:Name="ContentPresenter"
+                                Content="{TemplateBinding Content}"
+                                ContentTemplate="{TemplateBinding ContentTemplate}"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center" />
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal" />
+                                    <VisualState x:Name="PointerOver">
+                                        <VisualState.Setters>
+                                            <Setter Target="RootBorder.Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <VisualState.Setters>
+                                            <Setter Target="RootBorder.Opacity" Value="0.8" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Disabled">
+                                        <VisualState.Setters>
+                                            <Setter Target="RootBorder.Opacity" Value="0.5" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                </VisualStateGroup>
+                                <VisualStateGroup x:Name="CheckStates">
+                                    <VisualState x:Name="Unchecked" />
+                                    <VisualState x:Name="Checked">
+                                        <VisualState.Setters>
+                                            <Setter Target="RootBorder.Background" Value="#2563EB" />
+                                            <Setter Target="RootBorder.BorderBrush" Value="Transparent" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Indeterminate" />
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </UserControl.Resources>
 
     <Grid RowDefinitions="Auto,*,Auto" Background="Transparent">
 
@@ -16,18 +84,29 @@
             <Grid ColumnDefinitions="*,Auto">
                 <ScrollViewer HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled" HorizontalScrollMode="Enabled" VerticalScrollMode="Disabled">
                     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                        <!-- 全选胶囊 -->
                         <!-- 全部设备胶囊 -->
                         <ToggleButton
                             x:Name="SelectAllToggle"
+                            Style="{StaticResource FilterPillStyle}"
                             IsChecked="{x:Bind ViewModel.SelectAllDevices, Mode=OneWay}"
-                            Click="SelectAllToggle_Click"
-                            Padding="10,4"
-                            CornerRadius="14"
-                            FontSize="12">
-                            <StackPanel Orientation="Horizontal" Spacing="4">
-                                <Image Source="{x:Bind services:Lucide.MonitorSmartphone}" Width="14" Height="14" />
-                                <TextBlock Text="全部设备" />
+                            Click="SelectAllToggle_Click">
+                            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                                <Grid Width="14" Height="14" VerticalAlignment="Center">
+                                    <Image
+                                        Source="{x:Bind services:Lucide.MonitorSmartphone}"
+                                        Width="14"
+                                        Height="14"
+                                        Visibility="{x:Bind ViewModel.SelectAllDevices, Mode=OneWay, Converter={StaticResource InverseBoolToVis}}" />
+                                    <Image
+                                        Source="{x:Bind services:Lucide.MonitorSmartphoneWhite}"
+                                        Width="14"
+                                        Height="14"
+                                        Visibility="{x:Bind ViewModel.SelectAllDevices, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                                </Grid>
+                                <TextBlock
+                                    Text="全部设备"
+                                    VerticalAlignment="Center"
+                                    Foreground="{x:Bind ViewModel.SelectAllDevices, Mode=OneWay, Converter={StaticResource BoolToPillFg}}" />
                             </StackPanel>
                         </ToggleButton>
 
@@ -41,14 +120,15 @@
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="vm:DeviceSelectViewModel">
                                     <ToggleButton
+                                        Style="{StaticResource FilterPillStyle}"
                                         IsChecked="{x:Bind IsSelected, Mode=OneWay}"
-                                        Click="DevicePill_Click"
-                                        Padding="10,4"
-                                        CornerRadius="14"
-                                        FontSize="12">
-                                        <StackPanel Orientation="Horizontal" Spacing="4">
-                                            <Ellipse Width="6" Height="6" Fill="{x:Bind StatusBrush, Mode=OneWay}" />
-                                            <TextBlock Text="{x:Bind Name}" />
+                                        Click="DevicePill_Click">
+                                        <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                                            <Ellipse Width="6" Height="6" Fill="{x:Bind StatusBrush, Mode=OneWay}" VerticalAlignment="Center" />
+                                            <TextBlock
+                                                Text="{x:Bind Name}"
+                                                VerticalAlignment="Center"
+                                                Foreground="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToPillFg}}" />
                                         </StackPanel>
                                     </ToggleButton>
                                 </DataTemplate>
@@ -75,6 +155,11 @@
             ItemsSource="{x:Bind ViewModel.Messages}"
             SelectionMode="None"
             Padding="12,12,12,12">
+            <ListView.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <ItemsStackPanel ItemsUpdatingScrollMode="KeepLastItemInView" />
+                </ItemsPanelTemplate>
+            </ListView.ItemsPanel>
             <ListView.ItemContainerStyle>
                 <Style TargetType="ListViewItem">
                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -85,94 +170,104 @@
             </ListView.ItemContainerStyle>
             <ListView.ItemTemplate>
                 <DataTemplate x:DataType="vm:ChatMessageItem">
-                    <!-- 消息项布局: 根据 Alignment 决定靠右还是靠左 -->
-                    <Grid HorizontalAlignment="{x:Bind Alignment}" Margin="0,4" MaxWidth="360">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-
-                        <!-- 发送设备、来源标签与时间 (远端消息) -->
-                        <StackPanel
-                            Grid.Row="0"
-                            Orientation="Horizontal"
-                            Spacing="6"
-                            Margin="4,0,4,3"
-                            HorizontalAlignment="{x:Bind Alignment}"
-                            Visibility="{x:Bind FromRemoteVisibility}">
-                            <TextBlock Text="{x:Bind DeviceName}" FontSize="11" FontWeight="SemiBold" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
-                            <Border CornerRadius="4" Padding="5,1" Background="{x:Bind SourceBadgeBackground}" VerticalAlignment="Center">
-                                <TextBlock Text="{x:Bind SourceTypeText}" FontSize="9" FontWeight="Medium" Foreground="{x:Bind SourceBadgeForeground}" />
-                            </Border>
-                            <TextBlock Text="{x:Bind TimeText}" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" VerticalAlignment="Center" />
-                        </StackPanel>
-
-                        <!-- 气泡主体 (限制最大高度 260px，超长内容内滚) -->
+                    <!-- 单条消息与跨日期分割容器 -->
+                    <StackPanel Spacing="0" Margin="0,2">
+                        <!-- 跨日期中间居中显示日期胶囊 -->
                         <Border
-                            Grid.Row="1"
-                            CornerRadius="14"
-                            Padding="{x:Bind BubblePadding}"
-                            Background="{x:Bind BubbleBackground, Mode=OneWay}"
-                            BorderThickness="{x:Bind BubbleThickness}"
-                            BorderBrush="{x:Bind BubbleBorderBrush, Mode=OneWay}"
-                            MaxHeight="260"
-                            RightTapped="MessageBubble_RightTapped">
-                            <Border.ContextFlyout>
-                                <MenuFlyout>
-                                    <MenuFlyoutItem Text="复制" Click="CopyMessage_Click">
-                                        <MenuFlyoutItem.Icon>
-                                            <ImageIcon Source="{x:Bind services:Lucide.Copy}" />
-                                        </MenuFlyoutItem.Icon>
-                                    </MenuFlyoutItem>
-                                </MenuFlyout>
-                            </Border.ContextFlyout>
+                            Visibility="{x:Bind ShowDateHeader, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                            HorizontalAlignment="Center"
+                            Background="{ThemeResource LayerFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="10"
+                            Padding="12,3"
+                            Margin="0,8,0,10">
+                            <TextBlock
+                                Text="{x:Bind DateHeaderText, Mode=OneWay}"
+                                FontSize="11"
+                                FontWeight="Medium"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </Border>
 
-                            <StackPanel Spacing="4">
-                                <!-- 文本消息 (带内嵌滚动，超长时局部滚动) -->
-                                <ScrollViewer
-                                    Visibility="{x:Bind TextVisibility}"
-                                    VerticalScrollBarVisibility="Auto"
-                                    HorizontalScrollBarVisibility="Disabled"
-                                    MaxHeight="220">
-                                    <TextBlock
-                                        Text="{x:Bind Text}"
-                                        TextWrapping="Wrap"
-                                        FontSize="13"
-                                        Foreground="{x:Bind BubbleForeground, Mode=OneWay}"
-                                        IsTextSelectionEnabled="True" />
-                                </ScrollViewer>
+                        <!-- 消息项布局: 根据 Alignment 决定靠右还是靠左 -->
+                        <Grid HorizontalAlignment="{x:Bind Alignment}" Margin="0,2" MaxWidth="360">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
 
-                                <!-- 图片消息 (点击内嵌查看器预览，限制高宽) -->
-                                <Border
-                                    Visibility="{x:Bind ImageVisibility}"
-                                    CornerRadius="10"
-                                    Tapped="ImageBubble_Tapped">
-                                    <Image
-                                        Source="{x:Bind Thumbnail}"
-                                        MaxHeight="180"
-                                        MaxWidth="240"
-                                        Stretch="Uniform" />
-                                </Border>
+                            <!-- 发送设备与时间 (远端消息) -->
+                            <StackPanel
+                                Grid.Row="0"
+                                Orientation="Horizontal"
+                                Spacing="5"
+                                Margin="4,0,4,3"
+                                HorizontalAlignment="{x:Bind Alignment}"
+                                Visibility="{x:Bind FromRemoteVisibility}">
+                                <TextBlock Text="{x:Bind DeviceName}" FontSize="11" FontWeight="SemiBold" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                                <TextBlock Text="·" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" VerticalAlignment="Center" />
+                                <TextBlock Text="{x:Bind TimeText}" FontSize="11" Foreground="{ThemeResource TextFillColorTertiaryBrush}" VerticalAlignment="Center" />
+                            </StackPanel>
 
-                                <!-- 本机发送状态与标签 -->
-                                <StackPanel
-                                    Orientation="Horizontal"
-                                    Spacing="6"
-                                    Visibility="{x:Bind FromSelfVisibility}"
-                                    HorizontalAlignment="Right"
-                                    Margin="0,3,0,0">
-                                    <Border CornerRadius="4" Padding="5,1" Background="{x:Bind SourceBadgeBackground}" VerticalAlignment="Center">
-                                        <TextBlock Text="{x:Bind SourceTypeText}" FontSize="9" FontWeight="Medium" Foreground="{x:Bind SourceBadgeForeground}" />
+                            <!-- 气泡主体 (限制最大高度 260px，超长内容内滚) -->
+                            <Border
+                                Grid.Row="1"
+                                CornerRadius="14"
+                                Padding="{x:Bind BubblePadding}"
+                                Background="{x:Bind BubbleBackground, Mode=OneWay}"
+                                BorderThickness="{x:Bind BubbleThickness}"
+                                BorderBrush="{x:Bind BubbleBorderBrush, Mode=OneWay}"
+                                MaxHeight="260"
+                                RightTapped="MessageBubble_RightTapped">
+                                <Border.ContextFlyout>
+                                    <MenuFlyout>
+                                        <MenuFlyoutItem Text="复制" Click="CopyMessage_Click">
+                                            <MenuFlyoutItem.Icon>
+                                                <ImageIcon Source="{x:Bind services:Lucide.Copy}" />
+                                            </MenuFlyoutItem.Icon>
+                                        </MenuFlyoutItem>
+                                    </MenuFlyout>
+                                </Border.ContextFlyout>
+
+                                <StackPanel Spacing="4">
+                                    <!-- 文本消息 (带内嵌滚动，超长时局部滚动) -->
+                                    <ScrollViewer
+                                        Visibility="{x:Bind TextVisibility}"
+                                        VerticalScrollBarVisibility="Auto"
+                                        HorizontalScrollBarVisibility="Disabled"
+                                        MaxHeight="220">
+                                        <TextBlock
+                                            Text="{x:Bind Text}"
+                                            TextWrapping="Wrap"
+                                            FontSize="13"
+                                            Foreground="{x:Bind BubbleForeground, Mode=OneWay}"
+                                            IsTextSelectionEnabled="True" />
+                                    </ScrollViewer>
+
+                                    <!-- 图片消息 (点击内嵌查看器预览，限制高宽) -->
+                                    <Border
+                                        Visibility="{x:Bind ImageVisibility}"
+                                        CornerRadius="10"
+                                        Tapped="ImageBubble_Tapped">
+                                        <Image
+                                            Source="{x:Bind Thumbnail}"
+                                            MaxHeight="180"
+                                            MaxWidth="240"
+                                            Stretch="Uniform" />
                                     </Border>
+
+                                    <!-- 本机发送时间 -->
                                     <TextBlock
                                         Text="{x:Bind TimeText}"
                                         FontSize="10"
-                                        VerticalAlignment="Center"
+                                        HorizontalAlignment="Right"
+                                        Margin="0,3,0,0"
+                                        Visibility="{x:Bind FromSelfVisibility}"
                                         Foreground="{x:Bind TimeForeground, Mode=OneWay}" />
                                 </StackPanel>
-                            </StackPanel>
-                        </Border>
-                    </Grid>
+                            </Border>
+                        </Grid>
+                    </StackPanel>
                 </DataTemplate>
             </ListView.ItemTemplate>
         </ListView>
@@ -240,15 +335,22 @@
                     <Button
                         x:Name="SendButton"
                         Grid.Column="2"
+                        Style="{StaticResource AccentButtonStyle}"
                         Command="{x:Bind ViewModel.SendMessageCommand}"
-                        Background="#2563EB"
-                        Foreground="#FFFFFF"
                         Padding="12,6"
                         CornerRadius="6"
                         ToolTipService.ToolTip="立即发送">
-                        <StackPanel Orientation="Horizontal" Spacing="4">
-                            <Image Source="{x:Bind services:Lucide.ArrowUp}" Width="16" Height="16" />
-                        </StackPanel>
+                        <Button.Resources>
+                            <SolidColorBrush x:Key="AccentButtonBackground" Color="#2563EB" />
+                            <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="#1D4ED8" />
+                            <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="#1E40AF" />
+                            <SolidColorBrush x:Key="AccentButtonBackgroundDisabled" Color="#93C5FD" />
+                            <SolidColorBrush x:Key="AccentButtonForeground" Color="#FFFFFF" />
+                            <SolidColorBrush x:Key="AccentButtonForegroundPointerOver" Color="#FFFFFF" />
+                            <SolidColorBrush x:Key="AccentButtonForegroundPressed" Color="#FFFFFF" />
+                            <SolidColorBrush x:Key="AccentButtonForegroundDisabled" Color="#FFFFFF" />
+                        </Button.Resources>
+                        <Image Source="{x:Bind services:Lucide.ArrowUp}" Width="16" Height="16" />
                     </Button>
                 </Grid>
             </StackPanel>

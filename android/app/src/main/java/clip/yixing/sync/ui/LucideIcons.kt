@@ -1303,6 +1303,410 @@ object LucideIcons {
             }
         }.build()
     }
+
+    /** Lucide Phone 电话图标 */
+    val Phone: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Phone",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(22f, 16.92f)
+                lineTo(22f, 19.92f)
+                curveTo(22f, 21.02f, 21.1f, 22f, 19.92f, 22f)
+                curveTo(11.23f, 22f, 2f, 12.77f, 2f, 4.08f)
+                curveTo(2f, 2.98f, 2.98f, 2f, 4.08f, 2f)
+                lineTo(7.08f, 2f)
+                curveTo(8.18f, 2f, 9.08f, 2.82f, 9.2f, 3.92f)
+                curveTo(9.36f, 5.06f, 9.68f, 6.16f, 10.15f, 7.18f)
+                curveTo(10.45f, 7.82f, 10.28f, 8.58f, 9.75f, 9.05f)
+                lineTo(8.48f, 10.32f)
+                curveTo(10.08f, 13.52f, 12.48f, 15.92f, 15.68f, 17.52f)
+                lineTo(16.95f, 16.25f)
+                curveTo(17.42f, 15.72f, 18.18f, 15.55f, 18.82f, 15.85f)
+                curveTo(19.84f, 16.32f, 20.94f, 16.64f, 22.08f, 16.8f)
+                curveTo(22.08f, 16.8f, 22f, 16.92f, 22f, 16.92f)
+            }
+        }.build()
+    }
+
+    /** Lucide Mail 邮件图标 */
+    val Mail: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Mail",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(4f, 4f)
+                lineTo(20f, 4f)
+                curveTo(21.1f, 4f, 22f, 4.9f, 22f, 6f)
+                lineTo(22f, 18f)
+                curveTo(22f, 19.1f, 21.1f, 20f, 20f, 20f)
+                lineTo(4f, 20f)
+                curveTo(2.9f, 20f, 2f, 19.1f, 2f, 18f)
+                lineTo(2f, 6f)
+                curveTo(2f, 4.9f, 2.9f, 4f, 4f, 4f)
+                close()
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(22f, 6f)
+                lineTo(12f, 13f)
+                lineTo(2f, 6f)
+            }
+        }.build()
+    }
+
+    /** Lucide MapPin 地图定位图标 */
+    val MapPin: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.MapPin",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(20f, 10f)
+                curveTo(20f, 15f, 12f, 22f, 12f, 22f)
+                curveTo(12f, 22f, 4f, 15f, 4f, 10f)
+                curveTo(4f, 5.58f, 7.58f, 2f, 12f, 2f)
+                curveTo(16.42f, 2f, 20f, 5.58f, 20f, 10f)
+                close()
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(12f, 7f)
+                curveTo(13.66f, 7f, 15f, 8.34f, 15f, 10f)
+                curveTo(15f, 11.66f, 13.66f, 13f, 12f, 13f)
+                curveTo(10.34f, 13f, 9f, 11.66f, 9f, 10f)
+                curveTo(9f, 8.34f, 10.34f, 7f, 12f, 7f)
+                close()
+            }
+        }.build()
+    }
+
+    /** Lucide Search 搜索图标 */
+    val Search: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Search",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(19f, 11f)
+                curveTo(19f, 15.42f, 15.42f, 19f, 11f, 19f)
+                curveTo(6.58f, 19f, 3f, 15.42f, 3f, 11f)
+                curveTo(3f, 6.58f, 6.58f, 3f, 11f, 3f)
+                curveTo(15.42f, 3f, 19f, 6.58f, 19f, 11f)
+                close()
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(21f, 21f)
+                lineTo(16.65f, 16.65f)
+            }
+        }.build()
+    }
+
+    /** Lucide Code 代码图标 */
+    val Code: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Code",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(16f, 18f)
+                lineTo(22f, 12f)
+                lineTo(16f, 6f)
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(8f, 6f)
+                lineTo(2f, 12f)
+                lineTo(8f, 18f)
+            }
+        }.build()
+    }
+
+    /** Lucide ShoppingBag 购物袋/电商图标 */
+    val ShoppingBag: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.ShoppingBag",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(6f, 2f)
+                lineTo(3f, 6f)
+                lineTo(3f, 20f)
+                curveTo(3f, 21.1f, 3.9f, 22f, 5f, 22f)
+                lineTo(19f, 22f)
+                curveTo(20.1f, 22f, 21f, 21.1f, 21f, 20f)
+                lineTo(21f, 6f)
+                lineTo(18f, 2f)
+                close()
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(3f, 6f)
+                lineTo(21f, 6f)
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(16f, 10f)
+                curveTo(16f, 12.21f, 14.21f, 14f, 12f, 14f)
+                curveTo(9.79f, 14f, 8f, 12.21f, 8f, 10f)
+            }
+        }.build()
+    }
+
+    /** Lucide Tv 电视/视频图标 */
+    val Tv: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Tv",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(4f, 7f)
+                lineTo(20f, 7f)
+                curveTo(21.1f, 7f, 22f, 7.9f, 22f, 9f)
+                lineTo(22f, 20f)
+                curveTo(22f, 21.1f, 21.1f, 22f, 20f, 22f)
+                lineTo(4f, 22f)
+                curveTo(2.9f, 22f, 2f, 21.1f, 2f, 20f)
+                lineTo(2f, 9f)
+                curveTo(2f, 7.9f, 2.9f, 7f, 4f, 7f)
+                close()
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(17f, 2f)
+                lineTo(12f, 7f)
+                lineTo(7f, 2f)
+            }
+        }.build()
+    }
+
+    /** Lucide Key 钥匙/验证码图标 */
+    val Key: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Key",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(21f, 2f)
+                lineTo(11.4f, 11.6f)
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(7.5f, 10f)
+                curveTo(4.46f, 10f, 2f, 12.46f, 2f, 15.5f)
+                curveTo(2f, 18.54f, 4.46f, 21f, 7.5f, 21f)
+                curveTo(10.54f, 21f, 13f, 18.54f, 13f, 15.5f)
+                curveTo(13f, 14.12f, 12.49f, 12.86f, 11.65f, 11.9f)
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(15.5f, 7.5f)
+                lineTo(18.5f, 10.5f)
+            }
+        }.build()
+    }
+
+    /** Lucide Truck 卡车/物流快递图标 */
+    val Truck: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Truck",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(14f, 18f)
+                lineTo(14f, 6f)
+                curveTo(14f, 4.9f, 13.1f, 4f, 12f, 4f)
+                lineTo(4f, 4f)
+                curveTo(2.9f, 4f, 2f, 4.9f, 2f, 6f)
+                lineTo(2f, 17f)
+                curveTo(2f, 17.55f, 2.45f, 18f, 3f, 18f)
+                lineTo(5f, 18f)
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(19f, 18f)
+                lineTo(21f, 18f)
+                curveTo(21.55f, 18f, 22f, 17.55f, 22f, 17f)
+                lineTo(22f, 13.35f)
+                curveTo(22f, 13.12f, 21.91f, 12.9f, 21.78f, 12.72f)
+                lineTo(18.3f, 8.37f)
+                curveTo(18.11f, 8.13f, 17.82f, 8f, 17.52f, 8f)
+                lineTo(14f, 8f)
+                lineTo(14f, 18f)
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(7f, 16f)
+                curveTo(8.1f, 16f, 9f, 16.9f, 9f, 18f)
+                curveTo(9f, 19.1f, 8.1f, 20f, 7f, 20f)
+                curveTo(5.9f, 20f, 5f, 19.1f, 5f, 18f)
+                curveTo(5f, 16.9f, 5.9f, 16f, 7f, 16f)
+                close()
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(17f, 16f)
+                curveTo(18.1f, 16f, 19f, 16.9f, 19f, 18f)
+                curveTo(19f, 19.1f, 18.1f, 20f, 17f, 20f)
+                curveTo(15.9f, 20f, 15f, 19.1f, 15f, 18f)
+                curveTo(15f, 16.9f, 15.9f, 16f, 17f, 16f)
+                close()
+            }
+        }.build()
+    }
+
+    /** Lucide Palette 调色板/色彩图标 */
+    val Palette: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Palette",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(12f, 2f)
+                curveTo(6.5f, 2f, 2f, 6.5f, 2f, 12f)
+                curveTo(2f, 17.5f, 6.5f, 22f, 12f, 22f)
+                curveTo(12.93f, 22f, 13.65f, 21.25f, 13.65f, 20.31f)
+                curveTo(13.65f, 19.87f, 13.47f, 19.48f, 13.21f, 19.19f)
+                curveTo(12.92f, 18.9f, 12.77f, 18.54f, 12.77f, 18.07f)
+                curveTo(12.77f, 17.14f, 13.52f, 16.4f, 14.44f, 16.4f)
+                lineTo(16.44f, 16.4f)
+                curveTo(19.49f, 16.4f, 22f, 13.89f, 22f, 10.84f)
+                curveTo(22f, 6.5f, 17.5f, 2f, 12f, 2f)
+                close()
+            }
+        }.build()
+    }
 }
 
 /**

@@ -64,11 +64,10 @@ public sealed partial class SettingsPage : Page
                 StartToastAutoClose();
             }
 
-            // 先完成页面结构和滚动定位，再等待网络请求，避免慢连接让窗口停在旧焦点位置。
+            // 先完成页面结构和滚动定位。
             ResetContentScroll();
-            await _vm.RefreshDevicesCommand.ExecuteAsync(null);
-            // 网络请求期间可能触发了焦点恢复/布局重算，再补一次定位。
-            ResetContentScroll();
+            // 采用 SWR 策略: 首屏已立即渲染本地缓存的旧列表, 此处在后台异步静默校验刷新最新状态
+            _ = _vm.RefreshDevicesCommand.ExecuteAsync(null);
         };
         // 配对码生成完成 → 弹出对话框展示(二维码扫码直连 + 6位纯数字验证码);关闭即作废
         _vm.PairingCodeGenerated += async (result) =>
@@ -314,6 +313,22 @@ public sealed partial class SettingsPage : Page
         {
             Log.Error("复制版本信息失败", ex);
             _vm.ShowMessage($"复制版本信息失败：{ServerApi.DescribeException(ex, "请稍后重试。")}", InfoBarSeverity.Error);
+        }
+    }
+
+    private void OpenRelease_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var url = string.IsNullOrWhiteSpace(_vm.UpdateReleaseUrl)
+                ? "https://github.com/yixing233/easy-clip/releases"
+                : _vm.UpdateReleaseUrl;
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Log.Error("打开更新链接失败", ex);
+            _vm.ShowMessage($"打开更新链接失败：{ex.Message}", InfoBarSeverity.Error);
         }
     }
 

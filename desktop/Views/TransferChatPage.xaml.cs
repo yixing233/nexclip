@@ -39,9 +39,9 @@ public sealed partial class TransferChatPage : UserControl
         };
     }
 
-    public void OnActivated()
+    public async void OnActivated()
     {
-        _ = ViewModel.LoadHistoryMessagesAsync();
+        await ViewModel.LoadHistoryMessagesAsync();
         _ = ViewModel.RefreshDevicesAsync();
         FocusInput();
         ScrollToBottom(instant: true);
@@ -52,7 +52,7 @@ public sealed partial class TransferChatPage : UserControl
     {
         await Task.Delay(50);
         DispatcherQueue.TryEnqueue(() => ScrollToBottom(instant: true));
-        await Task.Delay(120);
+        await Task.Delay(180);
         DispatcherQueue.TryEnqueue(() => ScrollToBottom(instant: true));
     }
 
@@ -75,10 +75,11 @@ public sealed partial class TransferChatPage : UserControl
         {
             scroller.ChangeView(null, double.MaxValue, null, instant);
         }
-        else
+        try
         {
             ChatListView.ScrollIntoView(ViewModel.Messages[^1]);
         }
+        catch { }
     }
 
     private static T? FindChild<T>(DependencyObject parent) where T : DependencyObject

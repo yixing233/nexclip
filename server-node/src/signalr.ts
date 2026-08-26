@@ -80,6 +80,8 @@ export class SignalRHub {
     this.pingTimer.unref();
   }
 
+  private devicesChangedTimer: NodeJS.Timeout | null = null;
+
   private accept(url: URL, ws: WebSocket, ip: string | null, auth: HubAuthorization): void {
     // 第一步:等待客户端握手帧
     const onFirst = (data: Buffer) => {
@@ -122,9 +124,16 @@ export class SignalRHub {
       }
       this.conns.set(token, conn);
       ws.on('message', (d: Buffer) => this.onMessage(conn, d));
-      ws.on('close', () => { this.conns.delete(token); });
-      ws.on('error', () => { this.conns.delete(token); });
+      ws.on('close', () => {
+        this.conns.delete(token);
+        this.broadcastDevicesChanged();
+      });
+      ws.on('error', () => {
+        this.conns.delete(token);
+        this.broadcastDevicesChanged();
+      });
       this.onConnected?.(conn.deviceId, deviceName, platform, version, ip);
+      this.broadcastDevicesChanged();
     };
     ws.once('message', onFirst);
     ws.on('error', () => { /* 忽略客户端错误 */ });
@@ -183,10 +192,15 @@ export class SignalRHub {
     }
   }
 
-  /** 全员广播设备列表变更(配对/重命名/移除),各端收到后自行刷新列表 */
+  /** 全员广播设备列表变更(配对/重命名/移除/上下线),各端收到后自行刷新列表 */
   broadcastDevicesChanged(): void {
-    const msg = { type: 1, target: 'DevicesChanged', arguments: [] };
-    for (const conn of this.conns.values()) this.sendJson(conn.ws, msg);
+    if (this.devicesChangedTimer) clearTimeout(this.devicesChangedTimer);
+    this.devicesChangedTimer = setTimeout(() => {
+      this.devicesChangedTimer = null;
+      const msg = { type: 1, target: 'DevicesChanged', arguments: [] };
+      for (const conn of this.conns.values()) this.sendJson(conn.ws, msg);
+    }, 150);
+    this.devicesChangedTimer.unref?.();
   }
 
   /** 主动断开指定 deviceId 的所有活跃连接(用于设备注销/移除) */

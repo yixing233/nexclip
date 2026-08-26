@@ -103,6 +103,8 @@ import clip.yixing.sync.cardContentPadding
 import clip.yixing.sync.data.SyncApi
 import clip.yixing.sync.formatTime
 import clip.yixing.sync.ui.LucideIcons
+import clip.yixing.sync.smartaction.SmartActionEngine
+import clip.yixing.sync.smartaction.SmartActionChip
 import clip.yixing.sync.service.CapturedClip
 import clip.yixing.sync.service.ClipboardMonitorService
 import clip.yixing.sync.showAppSnack
@@ -267,8 +269,13 @@ internal fun RecordsPage(
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
     val captured by ClipboardMonitorService.captured.collectAsState()
-
-    val recordsBackdrop = rememberLayerBackdrop()
+    val barSurface = MiuixTheme.colorScheme.surface
+    val recordsBackdrop = rememberLayerBackdrop(
+        onDraw = {
+            drawRect(barSurface)
+            drawContent()
+        }
+    )
 
     var isTimeForward by remember { mutableStateOf(true) }
     var currentFilter by remember { mutableStateOf(ClipFilterTab.All) }
@@ -1450,7 +1457,9 @@ private fun RecordDetailPage(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val smartActions = remember(clip.text) { detectSmartActions(clip.text) }
+    val smartActions = remember(clip.text, clip.isImage) {
+        if (!clip.isImage) SmartActionEngine.detectActions(context, clip.text) else emptyList()
+    }
 
     val sourceLabel = if (!clip.sourceDevice.isNullOrBlank() && clip.sourceDevice != "本机") {
         clip.sourceDevice
@@ -1642,8 +1651,8 @@ private fun RecordDetailPage(
                 )
             }
 
-            // 2. 智能动作快捷胶囊 (如有 URL / 电话 / 邮箱)
-            if (!isEditing && (smartActions.urls.isNotEmpty() || smartActions.phones.isNotEmpty() || smartActions.emails.isNotEmpty())) {
+            // 2. 智能动作快捷胶囊 (如有识别出的智能动作)
+            if (!isEditing && smartActions.isNotEmpty()) {
                 FlowRow(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1651,25 +1660,10 @@ private fun RecordDetailPage(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    smartActions.urls.forEach { url ->
+                    smartActions.forEach { action ->
                         SmartActionChip(
-                            icon = MiuixIcons.Normal.Link,
-                            label = "打开链接",
-                            onClick = { openUrl(context, url) }
-                        )
-                    }
-                    smartActions.phones.forEach { phone ->
-                        SmartActionChip(
-                            icon = MiuixIcons.Normal.Phone,
-                            label = "拨打: $phone",
-                            onClick = { dialNumber(context, phone) }
-                        )
-                    }
-                    smartActions.emails.forEach { email ->
-                        SmartActionChip(
-                            icon = MiuixIcons.Normal.Share,
-                            label = "邮件: $email",
-                            onClick = { sendEmail(context, email) }
+                            action = action,
+                            onClick = { action.action(context) }
                         )
                     }
                 }
@@ -1805,7 +1799,9 @@ private fun RecordCard(
     onDelete: () -> Unit
 ) {
     val context = LocalContext.current
-    val smartActions = remember(clip.text) { detectSmartActions(clip.text) }
+    val smartActions = remember(clip.text, clip.isImage) {
+        if (!clip.isImage) SmartActionEngine.detectActions(context, clip.text) else emptyList()
+    }
 
     Card(
         modifier = Modifier
@@ -1883,24 +1879,19 @@ private fun RecordCard(
         }
 
         // 智能动作识别胶囊
-        if (smartActions.urls.isNotEmpty() || smartActions.phones.isNotEmpty()) {
+        if (smartActions.isNotEmpty()) {
             Spacer(Modifier.height(6.dp))
             Row(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
             ) {
-                smartActions.urls.firstOrNull()?.let { url ->
-                    SmartActionMiniChip(
-                        icon = MiuixIcons.Normal.Link,
-                        label = "打开链接",
-                        onClick = { openUrl(context, url) }
-                    )
-                }
-                smartActions.phones.firstOrNull()?.let { phone ->
-                    SmartActionMiniChip(
-                        icon = MiuixIcons.Normal.Phone,
-                        label = "拨号",
-                        onClick = { dialNumber(context, phone) }
+                smartActions.forEach { action ->
+                    SmartActionChip(
+                        action = action,
+                        onClick = { action.action(context) }
                     )
                 }
             }
@@ -2019,71 +2010,8 @@ private fun ActiveFilterChip(
     }
 }
 
-/** 智能动作大胶囊按钮 */
-@Composable
-private fun SmartActionChip(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = MiuixTheme.colorScheme.primary,
-            modifier = Modifier.size(14.dp)
-        )
-        Spacer(Modifier.width(6.dp))
-        Text(
-            text = label,
-            color = MiuixTheme.colorScheme.primary,
-            fontSize = 12.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-    }
-}
-
-/** 卡片内微型智能动作按钮 */
-@Composable
-private fun SmartActionMiniChip(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.1f))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 3.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = MiuixTheme.colorScheme.primary,
-            modifier = Modifier.size(12.dp)
-        )
-        Spacer(Modifier.width(4.dp))
-        Text(
-            text = label,
-            color = MiuixTheme.colorScheme.primary,
-            fontSize = 11.sp
-        )
-    }
-}
-
 private fun copyToClipboard(context: Context, text: String) {
-    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    cm.setPrimaryClip(ClipData.newPlainText("NexClip", text))
+    clip.yixing.sync.service.ClipboardMonitorService.copyToClipboardInternal(context, ClipData.newPlainText("NexClip", text))
 }
 
 private fun shareText(context: Context, text: String) {
@@ -2094,48 +2022,6 @@ private fun shareText(context: Context, text: String) {
     }
     val shareIntent = Intent.createChooser(sendIntent, "分享剪贴板内容")
     context.startActivity(shareIntent)
-}
-
-private fun openUrl(context: Context, url: String) {
-    runCatching {
-        val target = if (url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true)) url else "https://$url"
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(target))
-        context.startActivity(intent)
-    }
-}
-
-private fun dialNumber(context: Context, number: String) {
-    runCatching {
-        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${number.trim()}"))
-        context.startActivity(intent)
-    }
-}
-
-private fun sendEmail(context: Context, email: String) {
-    runCatching {
-        val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:${email.trim()}"))
-        context.startActivity(intent)
-    }
-}
-
-/** 智能动作识别 */
-private data class SmartActions(
-    val urls: List<String> = emptyList(),
-    val phones: List<String> = emptyList(),
-    val emails: List<String> = emptyList(),
-)
-
-private fun detectSmartActions(text: String): SmartActions {
-    if (text.length > 5000) return SmartActions()
-    val urlRegex = Regex("https?://[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+", RegexOption.IGNORE_CASE)
-    val phoneRegex = Regex("(?:\\+?86)?1[3-9]\\d{9}|\\b\\d{3,4}-\\d{7,8}\\b")
-    val emailRegex = Regex("[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+")
-
-    val urls = urlRegex.findAll(text).map { it.value }.distinct().take(2).toList()
-    val phones = phoneRegex.findAll(text).map { it.value }.distinct().take(2).toList()
-    val emails = emailRegex.findAll(text).map { it.value }.distinct().take(2).toList()
-
-    return SmartActions(urls, phones, emails)
 }
 
 private fun formatFullTime(millis: Long): String {
@@ -2267,13 +2153,16 @@ internal fun SearchPage(
         }
     }
 
+    val screenCornerRadius = rememberScreenCornerRadius()
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .predictiveBackAnimation(
                 progress = searchBackProgress,
                 edge = searchBackEdge,
-                enabled = isSearchBackActive
+                enabled = isSearchBackActive,
+                screenCornerRadius = screenCornerRadius
             )
             .background(MiuixTheme.colorScheme.surface)
     ) {

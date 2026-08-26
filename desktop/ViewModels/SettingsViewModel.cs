@@ -107,6 +107,9 @@ public partial class SettingsViewModel : ObservableObject
     private bool closeToTray;
 
     [ObservableProperty]
+    private bool autoCheckUpdate;
+
+    [ObservableProperty]
     private bool monitorEnabled;
 
     [ObservableProperty]
@@ -117,6 +120,21 @@ public partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private bool copyDirectEnabled;
+
+    [ObservableProperty]
+    private bool smartColorEnabled;
+
+    [ObservableProperty]
+    private bool smartPathEnabled;
+
+    [ObservableProperty]
+    private bool smartDeepLinkEnabled;
+
+    [ObservableProperty]
+    private bool smartNetDiskEnabled;
+
+    [ObservableProperty]
+    private bool smartUrlEnabled;
 
     [ObservableProperty]
     private string hotkey = "Alt+V";            // 剪贴板呼出
@@ -201,7 +219,32 @@ public partial class SettingsViewModel : ObservableObject
 
     public string[] RetentionDaysLabels { get; } = { "不限", "7 天", "30 天", "90 天", "180 天", "365 天" };
 
-    public string VersionText { get; } = "v" + typeof(SettingsViewModel).Assembly.GetName().Version?.ToString(3);
+    public string VersionText { get; } = "v" + (
+        (System.Attribute.GetCustomAttribute(typeof(SettingsViewModel).Assembly, typeof(System.Reflection.AssemblyInformationalVersionAttribute)) as System.Reflection.AssemblyInformationalVersionAttribute)?.InformationalVersion?.Split('+')[0]
+        ?? "20260825.01");
+
+    private readonly UpdateService _updateService = new();
+
+    [ObservableProperty]
+    private bool isCheckingUpdate;
+
+    [ObservableProperty]
+    private string updateStatusText = "";
+
+    [ObservableProperty]
+    private bool hasNewVersion;
+
+    [ObservableProperty]
+    private string latestVersionText = "";
+
+    [ObservableProperty]
+    private string updateReleaseNotes = "";
+
+    [ObservableProperty]
+    private string updateReleaseUrl = "https://github.com/yixing233/easy-clip/releases";
+
+    [ObservableProperty]
+    private string? updateDownloadUrl;
 
     public SettingsViewModel(AppServices svc)
     {
@@ -215,10 +258,16 @@ public partial class SettingsViewModel : ObservableObject
         BootStartEnabled = bootStart;
         StartMinimized = s.StartMinimized;
         CloseToTray = s.CloseToTray;
+        AutoCheckUpdate = s.AutoCheckUpdate;
         MonitorEnabled = s.MonitorEnabled;
         AutoPaste = s.AutoPaste;
         NotifyEnabled = s.NotifyEnabled;
         CopyDirectEnabled = s.CopyDirectEnabled;
+        SmartColorEnabled = s.SmartColorEnabled;
+        SmartPathEnabled = s.SmartPathEnabled;
+        SmartDeepLinkEnabled = s.SmartDeepLinkEnabled;
+        SmartNetDiskEnabled = s.SmartNetDiskEnabled;
+        SmartUrlEnabled = s.SmartUrlEnabled;
         Hotkey = s.Hotkey;
         HotkeySettings = s.HotkeySettings;
         HotkeyOpenUrl = s.HotkeyOpenUrl;
@@ -234,6 +283,8 @@ public partial class SettingsViewModel : ObservableObject
         _initialized = true;
         // 快捷键占用等长久态错误:注册失败时在快捷键页对应区域常驻提示
         RefreshHotkeyStatus();
+        // 从本地缓存立即装载上次设备列表 (SWR 首屏零延迟直出)
+        LoadCachedDevicesFromStore();
     }
 
     /// <summary>根据当前注册状态刷新热键常驻提示(占用/非法时显示)。</summary>
@@ -297,6 +348,7 @@ public partial class SettingsViewModel : ObservableObject
     {
         var newId = Guid.NewGuid().ToString("N");
         _svc.Settings.DeviceId = newId;
+        _svc.Settings.ClearCachedDevices();
         _svc.Settings.Save();
         OnPropertyChanged(nameof(DeviceIdText));
         ShowMessage("已重新生成本机设备 ID，正在重新连接…", InfoBarSeverity.Success);
@@ -591,7 +643,67 @@ public partial class SettingsViewModel : ObservableObject
         }
     }
 
-    /// <summary>加载设备列表(GET /api/devices)。</summary>
+    private SyncEngine? _attachedEngine;
+
+    /// <summary>绑定同步引擎,监听连接状态即时联动本机在线徽章与状态。</summary>
+    public void AttachEngine(SyncEngine engine)
+    {
+        if (_attachedEngine == engine) return;
+        if (_attachedEngine is not null)
+        {
+            _attachedEngine.ConnectionChanged -= OnEngineConnectionChanged;
+        }
+        _attachedEngine = engine;
+        _attachedEngine.ConnectionChanged += OnEngineConnectionChanged;
+    }
+
+    private void OnEngineConnectionChanged(SyncEngine.ConnState state, string message)
+    {
+        var isOnline = state is SyncEngine.ConnState.Connected;
+        var myId = _svc.Settings.DeviceId;
+        var cur = Devices.FirstOrDefault(d => d.IsCurrent || string.Equals(d.Id, myId, StringComparison.OrdinalIgnoreCase));
+        if (cur != null)
+        {
+            cur.Online = isOnline;
+            if (isOnline) cur.LastSeenAt = DateTime.UtcNow;
+        }
+    }
+
+    /// <summary>从本地持久化缓存装载设备列表 (SWR 策略首屏秒级直出)。</summary>
+    private void LoadCachedDevicesFromStore()
+    {
+        try
+        {
+            var cached = _svc.Settings.LoadCachedDevices();
+            if (cached.Count > 0)
+            {
+                var myId = _svc.Settings.DeviceId;
+                var isClientOnline = _svc.Engine?.State is SyncEngine.ConnState.Connected or SyncEngine.ConnState.Connecting or SyncEngine.ConnState.Reconnecting;
+                foreach (var d in cached)
+                {
+                    d.IsCurrent = string.Equals(d.Id, myId, StringComparison.OrdinalIgnoreCase);
+                    if (d.IsCurrent && isClientOnline)
+                    {
+                        d.Online = true;
+                        d.LastSeenAt = DateTime.UtcNow;
+                    }
+                }
+                var sorted = cached.OrderByDescending(d => d.IsCurrent)
+                                   .ThenByDescending(d => d.Online)
+                                   .ThenByDescending(d => d.LastSeenAt);
+                Devices.Clear();
+                foreach (var d in sorted) Devices.Add(d);
+                DeviceStatus = $"{Devices.Count} 台设备";
+                NotifyDeviceStateChanged();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"初始化装载设备缓存失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>加载设备列表(GET /api/devices,采用 SWR 策略静默刷新并更新本地缓存)。</summary>
     [RelayCommand]
     public async Task RefreshDevicesAsync()
     {
@@ -599,6 +711,7 @@ public partial class SettingsViewModel : ObservableObject
         if (string.IsNullOrWhiteSpace(s.ServerUrl))
         {
             Devices.Clear();
+            s.ClearCachedDevices();
             DeviceStatus = "等待配置";
             DeviceLoadErrorText = "";
             NotifyDeviceStateChanged();
@@ -614,17 +727,28 @@ public partial class SettingsViewModel : ObservableObject
         try
         {
             var list = await _svc.Api.GetDevicesAsync(s.ServerUrl, s.DeviceId, s.AuthToken);
-            Devices.Clear();
             var myId = s.DeviceId;
+            var isClientOnline = _svc.Engine?.State is SyncEngine.ConnState.Connected or SyncEngine.ConnState.Connecting or SyncEngine.ConnState.Reconnecting;
             foreach (var d in list)
             {
                 d.IsCurrent = string.Equals(d.Id, myId, StringComparison.OrdinalIgnoreCase);
+                if (d.IsCurrent && isClientOnline)
+                {
+                    d.Online = true;
+                    d.LastSeenAt = DateTime.UtcNow;
+                }
             }
             var sorted = list.OrderByDescending(d => d.IsCurrent)
                              .ThenByDescending(d => d.Online)
-                             .ThenByDescending(d => d.LastSeenAt);
+                             .ThenByDescending(d => d.LastSeenAt)
+                             .ToList();
+
+            Devices.Clear();
             foreach (var d in sorted) Devices.Add(d);
             DeviceStatus = list.Count == 0 ? "暂无设备" : $"{list.Count} 台设备";
+
+            // 请求成功，持久化更新本地缓存
+            s.SaveCachedDevices(sorted);
         }
         catch (Exception ex)
         {
@@ -651,6 +775,7 @@ public partial class SettingsViewModel : ObservableObject
         {
             await _svc.Api.RemoveDeviceAsync(s.ServerUrl, device.Id, s.DeviceId, s.AuthToken);
             Devices.Remove(device);
+            s.SaveCachedDevices(Devices.ToList());
             DeviceStatus = Devices.Count == 0 ? "暂无设备" : $"{Devices.Count} 台设备";
             NotifyDeviceStateChanged();
             ShowMessage($"已成功移除设备「{device.Name ?? device.Id}」", InfoBarSeverity.Success);
@@ -794,10 +919,16 @@ public partial class SettingsViewModel : ObservableObject
     }
     partial void OnStartMinimizedChanged(bool value) { if (!_initialized) return; _svc.Settings.StartMinimized = value; _svc.Settings.Save(); }
     partial void OnCloseToTrayChanged(bool value) { if (!_initialized) return; _svc.Settings.CloseToTray = value; _svc.Settings.Save(); }
+    partial void OnAutoCheckUpdateChanged(bool value) { if (!_initialized) return; _svc.Settings.AutoCheckUpdate = value; _svc.Settings.Save(); }
     partial void OnMonitorEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.MonitorEnabled = value; _svc.Settings.Save(); }
     partial void OnAutoPasteChanged(bool value) { if (!_initialized) return; _svc.Settings.AutoPaste = value; _svc.Settings.Save(); }
     partial void OnNotifyEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.NotifyEnabled = value; _svc.Settings.Save(); }
     partial void OnCopyDirectEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.CopyDirectEnabled = value; _svc.Settings.Save(); }
+    partial void OnSmartColorEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.SmartColorEnabled = value; _svc.Settings.Save(); }
+    partial void OnSmartPathEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.SmartPathEnabled = value; _svc.Settings.Save(); }
+    partial void OnSmartDeepLinkEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.SmartDeepLinkEnabled = value; _svc.Settings.Save(); }
+    partial void OnSmartNetDiskEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.SmartNetDiskEnabled = value; _svc.Settings.Save(); }
+    partial void OnSmartUrlEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.SmartUrlEnabled = value; _svc.Settings.Save(); }
     partial void OnHotkeyChanged(string value)
     {
         if (!_initialized) return;
@@ -995,6 +1126,54 @@ public partial class SettingsViewModel : ObservableObject
         finally
         {
             IsDataBusy = false;
+        }
+    }
+
+    [RelayCommand]
+    public async Task CheckUpdateAsync()
+    {
+        if (IsCheckingUpdate) return;
+        IsCheckingUpdate = true;
+        UpdateStatusText = "正在检查更新...";
+        try
+        {
+            var rawVersion = VersionText.TrimStart('v', 'V');
+            var result = await _updateService.CheckForUpdateAsync(rawVersion);
+            if (result.Success)
+            {
+                if (result.HasUpdate)
+                {
+                    HasNewVersion = true;
+                    LatestVersionText = $"v{result.LatestVersion}";
+                    UpdateReleaseNotes = string.IsNullOrWhiteSpace(result.ReleaseNotes) ? "有新版本可用。" : result.ReleaseNotes;
+                    UpdateReleaseUrl = string.IsNullOrWhiteSpace(result.ReleaseUrl) ? "https://github.com/yixing233/easy-clip/releases" : result.ReleaseUrl;
+                    UpdateDownloadUrl = result.DownloadUrl;
+                    UpdateStatusText = $"发现新版本 v{result.LatestVersion}";
+                    ShowMessage($"发现新版本 v{result.LatestVersion}，可点击前往查看下载。", InfoBarSeverity.Informational);
+                }
+                else
+                {
+                    HasNewVersion = false;
+                    UpdateStatusText = "当前已是最新版本";
+                    ShowMessage("当前已是最新版本 (" + VersionText + ")", InfoBarSeverity.Success);
+                }
+            }
+            else
+            {
+                HasNewVersion = false;
+                UpdateStatusText = $"检查更新失败 ({result.ErrorMessage})";
+                ShowMessage($"检查更新失败: {result.ErrorMessage}", InfoBarSeverity.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            HasNewVersion = false;
+            UpdateStatusText = "检查更新出错";
+            ShowMessage($"检查更新出错: {ex.Message}", InfoBarSeverity.Error);
+        }
+        finally
+        {
+            IsCheckingUpdate = false;
         }
     }
 }

@@ -11,9 +11,11 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="moe.shizuku.privileged.api.permission.RECEIVE_STATUS" />
 
-    <!-- 包可见性声明：允许检测与拉起 LSPosed / Xposed / 模块管理器与 Root 管理器 -->
+    <!-- 包可见性声明：允许检测与拉起 LSPosed / Xposed / 模块管理器与 Root 管理器 / Shizuku -->
     <queries>
+        <package android:name="moe.shizuku.privileged.api" />
         <package android:name="org.lsposed.manager" />
         <package android:name="org.lsposed.manager.v1" />
         <package android:name="io.github.lsposed.manager" />
@@ -44,10 +46,7 @@
         android:theme="@style/Theme.Miuix"
         android:enableOnBackInvokedCallback="true"
         android:usesCleartextTraffic="true">
-        <!-- Xposed / LSPosed 模块元数据 -->
-        <meta-data
-            android:name="xposedmodule"
-            android:value="true" />
+        <!-- Modern LibXposed 模块元数据 -->
         <meta-data
             android:name="xposeddescription"
             android:value="@string/module_description" />
@@ -57,6 +56,9 @@
         <meta-data
             android:name="xposedscope"
             android:resource="@array/xposed_scope" />
+        <meta-data
+            android:name="libxposed"
+            android:value="true" />
 
         <activity
             android:name=".MainActivity"
@@ -65,8 +67,25 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="de.robv.android.xposed.category.MODULE_SETTINGS" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".service.NotificationTrampolineActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity="" />
+        <activity
+            android:name=".service.ClipboardFloatingActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:finishOnTaskLaunch="true"
+            android:launchMode="singleTask"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/ClipboardFloatingTheme" />
         <service
             android:name=".service.ClipboardMonitorService"
             android:exported="false"
@@ -100,5 +119,13 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:exported="true"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
     </application>
 </manifest>

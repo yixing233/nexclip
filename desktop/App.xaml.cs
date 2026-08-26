@@ -17,56 +17,91 @@ public partial class App : Application
     public static HotKeyService? HotkeyOpenUrl { get; private set; }        // 打开复制的链接(Ctrl+Alt+O)
     public static LinkToastWindow? LinkToast { get; private set; }          // 右下角链接卡片
 
-    /// <summary>复制到链接时,在屏幕右下角显示链接卡片(UI 线程调用)。</summary>
-    public static void ShowLinkToast(string url)
+    /// <summary>显示复制直达智能动作卡片(UI 线程调用)。</summary>
+    public static void ShowSmartActionToast(SmartAction action)
     {
         try
         {
-            Log.Debug($"显示链接卡片:{url}");
+            Log.Debug($"显示复制直达卡片: {action.Title}");
             LinkToast?.Close();
-            LinkToast = new LinkToastWindow(url);
+            LinkToast = new LinkToastWindow(action);
         }
         catch (Exception ex)
         {
-            Log.Error("显示链接卡片失败", ex);
+            Log.Error("显示复制直达卡片失败", ex);
         }
     }
 
-    /// <summary>打开"复制的网址":优先当前剪贴板中的链接,否则取最近一条链接历史。</summary>
+    /// <summary>复制到链接/内容时,在屏幕右下角显示直达卡片(UI 线程调用)。</summary>
+    public static void ShowLinkToast(string url)
+    {
+        if (SmartActionService.Detect(url) is { } action)
+        {
+            ShowSmartActionToast(action);
+        }
+        else
+        {
+            try
+            {
+                Log.Debug($"显示链接卡片:{url}");
+                LinkToast?.Close();
+                LinkToast = new LinkToastWindow(url);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("显示链接卡片失败", ex);
+            }
+        }
+    }
+
+    /// <summary>打开"复制的网址/直达动作":优先执行当前浮窗主动作，否则取当前剪贴板或最近一条历史。</summary>
     public static void OpenCopiedUrl()
     {
         try
         {
-            var url = "";
+            if (LinkToast is { } toast)
+            {
+                toast.ExecutePrimaryAction();
+                return;
+            }
+
+            var text = "";
             try
             {
                 if (global::Windows.ApplicationModel.DataTransfer.Clipboard.GetContent()
                     is { } content && content.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text))
                 {
-                    url = global::Windows.ApplicationModel.DataTransfer.Clipboard.GetContent()
+                    text = global::Windows.ApplicationModel.DataTransfer.Clipboard.GetContent()
                         ?.GetTextAsync()?.AsTask()?.GetAwaiter().GetResult() ?? "";
                 }
             }
-            catch { url = ""; }
-            if (!UrlUtil.IsUrl(url))
+            catch { text = ""; }
+
+            if (SmartActionService.Detect(text) is { } action)
+            {
+                action.PrimaryAction();
+                return;
+            }
+
+            if (!UrlUtil.IsUrl(text))
             {
                 // 回退:最近一条链接历史
                 var items = Services.History.Query(urlOnly: true, limit: 1);
-                url = items.FirstOrDefault()?.Text ?? "";
+                text = items.FirstOrDefault()?.Text ?? "";
             }
-            if (Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri))
+            if (Uri.TryCreate(text.Trim(), UriKind.Absolute, out var uri))
             {
                 Log.Debug($"打开链接:{uri}");
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(uri.ToString()) { UseShellExecute = true });
             }
             else
             {
-                Log.Warn($"打开链接:剪贴板无有效网址 url='{url}'");
+                Log.Warn($"打开链接:剪贴板无有效网址或动作 text='{text}'");
             }
         }
         catch (Exception ex)
         {
-            Log.Error("打开复制的链接失败", ex);
+            Log.Error("执行复制直达动作失败", ex);
         }
     }
 
@@ -123,11 +158,21 @@ public partial class App : Application
 
         Services = new AppServices();
 
+        // 1. 同步引擎与后台数据初始化 (在创建窗口前完成，确保窗口打开时数据已准备就绪)
+        Services.Engine = new SyncEngine(Services, dispatcher);
+        Services.History.MaxEntries = Services.Settings.MaxHistory;
+        Services.History.PruneOlderThan(Services.Settings.RetentionDays);
+        Services.Main.AttachEngine(Services.Engine);
+        Services.HistoryVm.AttachEngine(Services.Engine);
+        Services.ChatVm.AttachEngine(Services.Engine);
+        Services.SettingsVm.AttachEngine(Services.Engine);
+        _ = Services.HistoryVm.RefreshAsync();
+
         // 静默启动:开机自启动(--autostart 由注册表 Run 键传入)或设置了"启动即最小化"时不显示窗口、不抢焦点
         var silentStart = Environment.GetCommandLineArgs().Contains("--autostart")
                           || Services.Settings.StartMinimized;
 
-        // 剪贴板主窗口
+        // 2. 剪贴板主窗口 (数据已就绪，立即直出，零白屏与闪烁)
         ClipboardWindow = new ClipboardWindow();
         RegisterWindow(ClipboardWindow);
         ApplyTheme(Services.Settings.ThemeMode);
@@ -136,25 +181,13 @@ public partial class App : Application
             ClipboardWindow.ShowWindow();
         }
 
-        // 托盘(右键菜单 owner = 剪贴板窗口;静默启动时窗口未显示,但句柄已存在,托盘仍可用)
-        var trayOwner = WinRT.Interop.WindowNative.GetWindowHandle(ClipboardWindow);
+        // 托盘(左键单击切换、双击与右键菜单显式唤醒至最前台)
         Services.Tray = new TrayIconService(
             () => dispatcher?.TryEnqueue(ToggleClipboardWindow),
+            () => dispatcher?.TryEnqueue(ShowClipboardWindow),
             () => dispatcher?.TryEnqueue(OpenSettings),
-            () => dispatcher?.TryEnqueue(ExitApp),
-            trayOwner);
+            () => dispatcher?.TryEnqueue(ExitApp));
         Services.Tray.Initialize();
-
-        // 同步引擎 + 热键
-        Services.Engine = new SyncEngine(Services, dispatcher);
-        // 应用数据保留策略:条目上限 + 时间上限(启动即清理)
-        Services.History.MaxEntries = Services.Settings.MaxHistory;
-        Services.History.PruneOlderThan(Services.Settings.RetentionDays);
-        Services.Main.AttachEngine(Services.Engine);
-        // 历史列表 VM 与 互传 VM 在窗口构造时可能早于 Engine 创建,这里补挂接并首刷
-        Services.HistoryVm.AttachEngine(Services.Engine);
-        Services.ChatVm.AttachEngine(Services.Engine);
-        _ = Services.HistoryVm.RefreshAsync();
         WireTrayState(Services);
 
         Hotkey = new HotKeyService(() => dispatcher?.TryEnqueue(ToggleClipboardWindow));
@@ -178,6 +211,51 @@ public partial class App : Application
         Services.SettingsVm.RefreshHotkeyStatus();
 
         Services.Engine.Start();
+
+        // 启动时后台自动检查更新 (延时 3 秒避免影响冷启动性能)
+        if (Services.Settings.AutoCheckUpdate)
+        {
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(3000);
+                try
+                {
+                    var rawVersion = (System.Attribute.GetCustomAttribute(typeof(App).Assembly, typeof(System.Reflection.AssemblyInformationalVersionAttribute)) as System.Reflection.AssemblyInformationalVersionAttribute)?.InformationalVersion?.Split('+')[0] ?? "20260825.01";
+                    var updateService = new UpdateService();
+                    var result = await updateService.CheckForUpdateAsync(rawVersion);
+                    if (result.Success && result.HasUpdate)
+                    {
+                        dispatcher?.TryEnqueue(() =>
+                        {
+                            var action = new SmartAction
+                            {
+                                Kind = SmartActionKind.Url,
+                                Title = $"发现新版本 v{result.LatestVersion}",
+                                Subtitle = string.IsNullOrWhiteSpace(result.ReleaseNotes) ? "检测到新版本发布，点击前往下载更新" : result.ReleaseNotes.Split('\n')[0].Trim(),
+                                Icon = Lucide.DownloadAccent,
+                                PrimaryButtonText = "前往下载",
+                                PrimaryButtonIcon = Lucide.DownloadAccent,
+                                PrimaryAction = () =>
+                                {
+                                    var url = result.DownloadUrl ?? result.ReleaseUrl ?? "https://github.com/yixing233/easy-clip/releases";
+                                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+                                },
+                                SecondaryButtonText = "查看详情",
+                                SecondaryAction = () =>
+                                {
+                                    OpenSettings();
+                                }
+                            };
+                            ShowSmartActionToast(action);
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug($"启动后台自动检查更新异常: {ex.Message}");
+                }
+            });
+        }
 
         // 静默启动:确保主窗口不显示
         if (silentStart)
@@ -271,7 +349,7 @@ public partial class App : Application
     }
 
     /// <summary>退出应用(托盘菜单)。</summary>
-    private static void ExitApp()
+    public static void ExitApp()
     {
         _exiting = true;
         Hotkey?.Dispose();
@@ -324,6 +402,11 @@ public partial class App : Application
             {
                 root.RequestedTheme = requested;
             }
+        }
+        Services?.Tray?.SetTheme(Lucide.IsDarkTheme);
+        if (ClipboardWindow?.Content is Views.ClipboardMainPage mainPage)
+        {
+            mainPage.RefreshThemeIcons();
         }
     }
 

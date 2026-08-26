@@ -28,50 +28,72 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 顶栏:拖拽区 + 搜索框 + 操作按钮(同一行) -->
-        <Grid x:Name="TopBar" Height="48" Padding="16,0,8,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <!-- 搜索框(拖拽区内,通过 Passthrough 保持可点击输入) -->
-            <TextBox
-                x:Name="SearchBox"
-                PlaceholderText="搜索剪贴板历史"
-                Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                VerticalAlignment="Center"
-                Margin="0,0,8,0" />
-            <StackPanel x:Name="TopButtons" Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                <Button x:Name="TopmostButton" Click="TopmostButton_Click" Padding="8,6" Background="Transparent" BorderThickness="0" CornerRadius="4" ToolTipService.ToolTip="置顶窗口">
-                    <Button.Resources>
-                        <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
-                        <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
-                    </Button.Resources>
-                    <!-- 双图标叠放:切换时交叉淡化,避免 Image.Source 换源瞬间闪烁 -->
-                    <Grid Width="16" Height="16">
-                        <Image x:Name="TopmostIconPin" Source="{x:Bind services:Lucide.Pin}" Width="16" Height="16" />
-                        <Image x:Name="TopmostIconPinOff" Source="{x:Bind services:Lucide.PinOffActive}" Width="16" Height="16" Opacity="0" />
-                    </Grid>
-                </Button>
-                <Button Click="SettingsButton_Click" Padding="8,6" Background="Transparent" BorderThickness="0" ToolTipService.ToolTip="设置">
-                    <Image Source="{x:Bind services:Lucide.Settings}" Width="16" Height="16" />
-                </Button>
-            </StackPanel>
+        <!-- 顶栏容器: 顶部独立拖拽手柄热区 + 搜索框与操作按钮 -->
+        <StackPanel x:Name="TopBar" Background="Transparent" Spacing="2">
+            <!-- 1. 顶部手柄拖拽条 (大面积拖拽热区) -->
+            <Grid x:Name="DragHandleBar" Height="16" Background="Transparent" VerticalAlignment="Top">
+                <Border
+                    Width="60"
+                    Height="4"
+                    CornerRadius="2"
+                    Background="{ThemeResource TextFillColorTertiaryBrush}"
+                    Opacity="0.85"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    IsHitTestVisible="False" />
+            </Grid>
 
-            <!-- 顶部拖拽提示条:保持轻量,不遮挡搜索框和操作按钮 -->
-            <Border
-                Grid.ColumnSpan="2"
-                Width="56"
-                Height="4"
-                CornerRadius="2"
-                Background="{ThemeResource TextFillColorTertiaryBrush}"
-                Opacity="0.8"
-                HorizontalAlignment="Center"
-                VerticalAlignment="Top"
-                Margin="0,6,0,0"
-                IsHitTestVisible="False"
-                Canvas.ZIndex="2" />
-        </Grid>
+            <!-- 2. 搜索框与操作按钮 -->
+            <Grid Height="38" Padding="16,0,12,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <!-- 搜索框(内置一键清空按钮与快捷键提示) -->
+                <Grid x:Name="SearchBoxHost" VerticalAlignment="Center" Margin="0,0,8,0">
+                    <TextBox
+                        x:Name="SearchBox"
+                        PlaceholderText="搜索历史 (Ctrl+F)"
+                        Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                        GotFocus="SearchBox_GotFocus"
+                        LostFocus="SearchBox_LostFocus"
+                        Padding="10,5,28,5"
+                        Height="32"
+                        VerticalAlignment="Center" />
+                    <Button
+                        Command="{Binding ClearSearchCommand}"
+                        Visibility="{Binding HasSearchText, Converter={StaticResource BoolToVis}}"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Center"
+                        Margin="0,0,4,0"
+                        Padding="4"
+                        Width="24"
+                        Height="24"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        CornerRadius="12"
+                        ToolTipService.ToolTip="清空搜索">
+                        <Image x:Name="ClearSearchImage" Source="{x:Bind services:Lucide.X}" Width="12" Height="12" />
+                    </Button>
+                </Grid>
+                <StackPanel x:Name="TopButtons" Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                    <Button x:Name="TopmostButton" Click="TopmostButton_Click" Width="32" Height="32" Padding="0" Background="Transparent" BorderThickness="0" CornerRadius="4" ToolTipService.ToolTip="置顶窗口">
+                        <Button.Resources>
+                            <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                            <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                        </Button.Resources>
+                        <!-- 双图标叠放:切换时交叉淡化,避免 Image.Source 换源瞬间闪烁 -->
+                        <Grid Width="16" Height="16">
+                            <Image x:Name="TopmostIconPin" Source="{x:Bind services:Lucide.Pin}" Width="16" Height="16" />
+                            <Image x:Name="TopmostIconPinOff" Source="{x:Bind services:Lucide.PinOffActive}" Width="16" Height="16" Opacity="0" />
+                        </Grid>
+                    </Button>
+                    <Button Click="SettingsButton_Click" Width="32" Height="32" Padding="0" Background="Transparent" BorderThickness="0" CornerRadius="4" ToolTipService.ToolTip="设置">
+                        <Image x:Name="SettingsButtonImage" Source="{x:Bind services:Lucide.Settings}" Width="16" Height="16" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </StackPanel>
 
         <!-- 分类选择栏(WinUI 3 原生 SelectorBar 控件,自带平滑滑块与选中动效) -->
         <SelectorBar
@@ -92,10 +114,6 @@
             <Grid.RenderTransform>
                 <TranslateTransform x:Name="ListTranslateTransform" />
             </Grid.RenderTransform>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="*" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
             <ListView
                 x:Name="EntryList"
                 ItemsSource="{Binding Items}"
@@ -103,13 +121,6 @@
                 SelectionChanged="EntryList_SelectionChanged"
                 KeyDown="EntryList_KeyDown"
                 Background="Transparent">
-                <ListView.ItemContainerTransitions>
-                    <TransitionCollection>
-                        <EntranceThemeTransition FromVerticalOffset="20" IsStaggeringEnabled="True" />
-                        <AddDeleteThemeTransition />
-                        <RepositionThemeTransition />
-                    </TransitionCollection>
-                </ListView.ItemContainerTransitions>
                 <ListView.ItemContainerStyle>
                     <Style TargetType="ListViewItem">
                         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -157,7 +168,30 @@
                             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
                             <Border.ContextFlyout>
                                 <MenuFlyout Opening="EntryMenu_Opening">
+                                    <!-- 智能直达动态菜单项 (根据条目内容智能识别并呈现，保持条目卡片轻量不加多余徽标) -->
+                                    <MenuFlyoutItem x:Name="SmartPrimaryMenuItem" Click="SmartPrimaryMenuItem_Click" Visibility="Collapsed">
+                                        <MenuFlyoutItem.Icon>
+                                            <ImageIcon Source="{x:Bind services:Lucide.ExternalLink}" />
+                                        </MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="SmartSecondaryMenuItem" Click="SmartSecondaryMenuItem_Click" Visibility="Collapsed">
+                                        <MenuFlyoutItem.Icon>
+                                            <ImageIcon Source="{x:Bind services:Lucide.Copy}" />
+                                        </MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutSeparator x:Name="SmartActionSeparator" Visibility="Collapsed" />
+
                                     <MenuFlyoutItem Text="复制" Click="CopyMenuItem_Click">
+                                        <MenuFlyoutItem.Icon>
+                                            <ImageIcon Source="{x:Bind services:Lucide.Copy}" />
+                                        </MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="PastePlainTextMenuItem" Text="纯文本粘贴 (Shift+Enter)" Click="PastePlainTextMenuItem_Click">
+                                        <MenuFlyoutItem.Icon>
+                                            <ImageIcon Source="{x:Bind services:Lucide.FileText}" />
+                                        </MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="CopyPlainTextMenuItem" Text="复制为纯文本" Click="CopyPlainTextMenuItem_Click">
                                         <MenuFlyoutItem.Icon>
                                             <ImageIcon Source="{x:Bind services:Lucide.Copy}" />
                                         </MenuFlyoutItem.Icon>
@@ -170,6 +204,11 @@
                                     <MenuFlyoutItem Text="收藏" Click="StarMenuItem_Click">
                                         <MenuFlyoutItem.Icon>
                                             <ImageIcon Source="{x:Bind services:Lucide.Star}" />
+                                        </MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="RemarkMenuItem" Text="添加/修改备注" Click="RemarkMenuItem_Click">
+                                        <MenuFlyoutItem.Icon>
+                                            <ImageIcon Source="{x:Bind services:Lucide.Edit}" />
                                         </MenuFlyoutItem.Icon>
                                     </MenuFlyoutItem>
                                     <MenuFlyoutItem x:Name="EditMenuItem" Text="编辑" Click="EditMenuItem_Click">
@@ -214,11 +253,10 @@
                                 <!-- 元信息行 + 操作按钮(hover/选中显示,位于条目右上角) -->
                                 <Grid>
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" HorizontalAlignment="Left">
                                         <Image Source="{x:Bind TypeIconSource, Mode=OneWay}" Width="13" Height="13" />
                                         <TextBlock Text="{x:Bind MetaText, Mode=OneWay}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                         <TextBlock Text="·" FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
@@ -243,7 +281,7 @@
                                                 FontSize="12"
                                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                                 TextTrimming="CharacterEllipsis"
-                                                MaxWidth="140" />
+                                                MaxWidth="72" />
                                         </StackPanel>
 
                                         <!-- 远端同步设备来源 -->
@@ -251,9 +289,11 @@
                                             Text="{x:Bind DeviceName}"
                                             FontSize="12"
                                             Foreground="#2563EB"
+                                            TextTrimming="CharacterEllipsis"
+                                            MaxWidth="72"
                                             Visibility="{x:Bind HasSourceApp, Mode=OneWay, Converter={StaticResource InverseBoolToVis}}" />
                                     </StackPanel>
-                                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center"
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center"
                                         Opacity="{x:Bind ActionOpacityFor(IsHovered, IsSelected), Mode=OneWay}"
                                         IsHitTestVisible="{x:Bind ActionHitTestFor(IsHovered, IsSelected), Mode=OneWay}">
                                         <Button Padding="6,3" Background="Transparent" BorderThickness="0" Command="{x:Bind CopyCommand}" ToolTipService.ToolTip="复制">
@@ -267,47 +307,202 @@
                                         </Button>
                                     </StackPanel>
                                 </Grid>
-                                <!-- 预览 -->
-                                <Image
-                                    Source="{x:Bind Thumbnail, Mode=OneTime}"
-                                    MaxHeight="140"
-                                    HorizontalAlignment="Left"
-                                    Tapped="ImageThumbnail_Tapped"
-                                    ToolTipService.ToolTip="点击查看大图 (Esc 退出)"
-                                    Visibility="{x:Bind IsImage, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
-                                <TextBlock
-                                    Text="{x:Bind PreviewText, Mode=OneWay}"
-                                    TextWrapping="Wrap"
-                                    MaxHeight="60"
-                                    TextTrimming="CharacterEllipsis"
-                                    FontSize="14"
-                                    Visibility="{x:Bind IsImage, Mode=OneWay, Converter={StaticResource InverseBoolToVis}}" />
+                                <!-- ====== 预览区域：自动按备注与原内容中较大高度排版，鼠标悬停时平滑无缝切换 ====== -->
+                                <Grid>
+                                    <!-- 备注信息 (左侧带备注小图标，有备注且未悬停时展示；不使用额外卡片包裹以防撑大间距) -->
+                                    <Grid
+                                        ColumnSpacing="6"
+                                        VerticalAlignment="Top"
+                                        ToolTipService.ToolTip="悬停查看原内容"
+                                        Visibility="{x:Bind HasRemark, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                                        Opacity="{x:Bind RemarkOpacity, Mode=OneWay}"
+                                        IsHitTestVisible="{x:Bind RemarkHitTest, Mode=OneWay}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Image
+                                            Source="{x:Bind services:Lucide.Edit}"
+                                            Width="14"
+                                            Height="14"
+                                            VerticalAlignment="Top"
+                                            Margin="0,3,0,0" />
+                                        <TextBlock
+                                            Grid.Column="1"
+                                            Text="{x:Bind Remark, Mode=OneWay}"
+                                            FontSize="14"
+                                            FontWeight="SemiBold"
+                                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                            TextWrapping="Wrap"
+                                            MaxHeight="60"
+                                            TextTrimming="CharacterEllipsis"
+                                            VerticalAlignment="Top" />
+                                    </Grid>
+
+                                    <!-- 原始内容预览层 (无备注或悬停时展示；未悬停且有备注时以 Opacity=0 占位测量确保卡片高度恒定) -->
+                                    <Grid
+                                        VerticalAlignment="Top"
+                                        Opacity="{x:Bind OriginalOpacity, Mode=OneWay}"
+                                        IsHitTestVisible="{x:Bind OriginalHitTest, Mode=OneWay}">
+                                        <!-- 预览:图片 / 颜色色块 / 代码片段 / 普通文本 -->
+                                        <Image
+                                            Source="{x:Bind Thumbnail, Mode=OneTime}"
+                                            MaxHeight="140"
+                                            HorizontalAlignment="Left"
+                                            Tapped="ImageThumbnail_Tapped"
+                                            DoubleTapped="ImageThumbnail_DoubleTapped"
+                                            ToolTipService.ToolTip="单击预览大图，双击直接粘贴"
+                                            Visibility="{x:Bind IsImage, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                                        <!-- 颜色代码与色块微预览 -->
+                                        <StackPanel
+                                            Orientation="Horizontal"
+                                            Spacing="8"
+                                            VerticalAlignment="Center"
+                                            Visibility="{x:Bind IsColor, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                                            <Border
+                                                Width="16"
+                                                Height="16"
+                                                CornerRadius="4"
+                                                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                                BorderThickness="1"
+                                                Background="{x:Bind ColorBrush, Mode=OneWay}"
+                                                VerticalAlignment="Center" />
+                                            <TextBlock
+                                                Text="{x:Bind PreviewText, Mode=OneWay}"
+                                                FontFamily="Cascadia Code, Consolas"
+                                                FontWeight="SemiBold"
+                                                FontSize="14"
+                                                VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <!-- 代码 / JSON 片段等宽排版与微底纹 -->
+                                        <Border
+                                            Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="6"
+                                            Padding="8,6"
+                                            Visibility="{x:Bind IsCodeOrJson, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                                            <TextBlock
+                                                Text="{x:Bind PreviewText, Mode=OneWay}"
+                                                FontFamily="Cascadia Code, Consolas"
+                                                TextWrapping="Wrap"
+                                                MaxHeight="80"
+                                                TextTrimming="CharacterEllipsis"
+                                                FontSize="13" />
+                                        </Border>
+                                        <!-- 普通文本预览 -->
+                                        <TextBlock
+                                            Text="{x:Bind PreviewText, Mode=OneWay}"
+                                            TextWrapping="Wrap"
+                                            MaxHeight="60"
+                                            TextTrimming="CharacterEllipsis"
+                                            FontSize="14"
+                                            Visibility="{x:Bind IsNormalText, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                                    </Grid>
+                                </Grid>
+
+                                <!-- 条目底部：智能直达快捷微胶囊操作栏 (有识别动作时展示) -->
+                                <StackPanel
+                                    Orientation="Horizontal"
+                                    Spacing="6"
+                                    Margin="0,2,0,0"
+                                    Visibility="{x:Bind HasSmartAction, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                                    <!-- 主动作胶囊按钮 -->
+                                    <Button
+                                        Padding="8,3"
+                                        MinHeight="26"
+                                        CornerRadius="4"
+                                        Background="{ThemeResource LayerFillColorDefaultBrush}"
+                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        BorderThickness="1"
+                                        Command="{x:Bind SmartPrimaryCommand}"
+                                        ToolTipService.ToolTip="{x:Bind SmartPrimaryToolTip, Mode=OneWay}">
+                                        <StackPanel Orientation="Horizontal" Spacing="5">
+                                            <Image Source="{x:Bind SmartPrimaryIcon, Mode=OneWay}" Width="12" Height="12" />
+                                            <TextBlock Text="{x:Bind SmartPrimaryText, Mode=OneWay}" FontSize="11" FontWeight="Medium" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                                        </StackPanel>
+                                    </Button>
+
+                                    <!-- 副动作胶囊按钮 (如复制 Git Clone、复制提取码、复制 HSL 等) -->
+                                    <Button
+                                        Padding="8,3"
+                                        MinHeight="26"
+                                        CornerRadius="4"
+                                        Background="{ThemeResource LayerFillColorDefaultBrush}"
+                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        BorderThickness="1"
+                                        Visibility="{x:Bind HasSmartSecondary, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                                        Command="{x:Bind SmartSecondaryCommand}"
+                                        ToolTipService.ToolTip="{x:Bind SmartSecondaryToolTip, Mode=OneWay}">
+                                        <StackPanel Orientation="Horizontal" Spacing="5">
+                                            <Image Source="{x:Bind SmartSecondaryIcon, Mode=OneWay}" Width="12" Height="12" />
+                                            <TextBlock Text="{x:Bind SmartSecondaryText, Mode=OneWay}" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                        </StackPanel>
+                                    </Button>
+                                </StackPanel>
                             </StackPanel>
                         </Border>
                     </DataTemplate>
                 </ListView.ItemTemplate>
+                <ListView.Footer>
+                    <StackPanel
+                        Orientation="Horizontal"
+                        Spacing="8"
+                        HorizontalAlignment="Center"
+                        Padding="0,10,0,16"
+                        Visibility="{Binding IsLoadingMore, Converter={StaticResource BoolToVis}}">
+                        <ProgressRing Width="14" Height="14" IsActive="True" />
+                        <TextBlock Text="正在加载更多…" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                    </StackPanel>
+                </ListView.Footer>
             </ListView>
-            <!-- 底部状态区 (空态提示与加载更多指示器) -->
-            <StackPanel Grid.Row="1" HorizontalAlignment="Center" Margin="0,10,0,8" Spacing="6">
-                <TextBlock
-                    Text="{Binding EmptyHint}"
-                    Visibility="{Binding EmptyHintVisibility}"
-                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                    HorizontalAlignment="Center" />
-                <StackPanel
-                    Orientation="Horizontal"
-                    Spacing="8"
-                    HorizontalAlignment="Center"
-                    Visibility="{Binding IsLoadingMore, Converter={StaticResource BoolToVis}}">
-                    <ProgressRing Width="14" Height="14" IsActive="True" />
-                    <TextBlock Text="正在加载更多…" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+
+            <!-- 居中精美图形化空状态插画 -->
+            <StackPanel
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Spacing="14"
+                Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVis}}">
+                <Border
+                    Width="64"
+                    Height="64"
+                    CornerRadius="32"
+                    Background="{ThemeResource LayerFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    HorizontalAlignment="Center">
+                    <Grid Width="28" Height="28" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Image
+                            Source="{x:Bind services:Lucide.Clipboard}"
+                            Width="28"
+                            Height="28"
+                            Visibility="{Binding IsSearching, Converter={StaticResource InverseBoolToVis}}" />
+                        <Image
+                            Source="{x:Bind services:Lucide.Search}"
+                            Width="28"
+                            Height="28"
+                            Visibility="{Binding IsSearching, Converter={StaticResource BoolToVis}}" />
+                    </Grid>
+                </Border>
+                <StackPanel Spacing="4" HorizontalAlignment="Center">
+                    <TextBlock
+                        Text="{Binding EmptyTitle}"
+                        Style="{ThemeResource SubtitleTextBlockStyle}"
+                        FontSize="15"
+                        FontWeight="SemiBold"
+                        HorizontalAlignment="Center" />
+                    <TextBlock
+                        Text="{Binding EmptySubtitle}"
+                        FontSize="12"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        HorizontalAlignment="Center" />
                 </StackPanel>
             </StackPanel>
+
             <!-- 回到顶部悬浮按钮:下滑超过阈值后,上滑时出现;点击回到列表顶部 -->
             <Button
                 x:Name="BackToTopButton"
                 AutomationProperties.AutomationId="BackToTopButton"
-                Grid.RowSpan="2"
                 Width="36"
                 Height="36"
                 HorizontalAlignment="Right"

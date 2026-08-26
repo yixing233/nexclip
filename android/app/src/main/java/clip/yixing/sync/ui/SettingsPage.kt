@@ -5,7 +5,9 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
+import clip.yixing.sync.MainActivity
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -19,8 +21,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -28,6 +34,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.Image
@@ -72,6 +79,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import clip.yixing.sync.hook.ModuleStatusStore
+import clip.yixing.sync.shizuku.ShizukuClipboardManager
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -103,10 +111,13 @@ import clip.yixing.sync.data.PairingCode
 import clip.yixing.sync.data.SyncApi
 import clip.yixing.sync.service.ClipboardMonitorService
 import clip.yixing.sync.ui.LucideIcons
+import clip.yixing.sync.util.CaptureMethod
 import clip.yixing.sync.util.NotificationStyle
 import clip.yixing.sync.util.SyncSettings
+import clip.yixing.sync.smartaction.SmartActionSettingsPage
 import kotlinx.coroutines.isActive
 import top.yukonga.miuix.kmp.basic.ScrollBehavior
+import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Icon
@@ -143,6 +154,7 @@ import java.util.Locale
 enum class SettingsSubPage(val title: String) {
     Devices("设备列表与配对"),
     Filter("过滤规则"),
+    SmartActions("智能动作与应用直达"),
     About("关于")
 }
 
@@ -183,6 +195,7 @@ internal fun SettingsPage(
     }
 
     var predictiveBackEnabled by remember { mutableStateOf(SyncSettings.predictiveBackEnabled(context)) }
+    var hideFromRecents by remember { mutableStateOf(SyncSettings.isHideFromRecents(context)) }
     var notificationEnabled by remember { mutableStateOf(SyncSettings.notificationEnabled(context)) }
 
     // ---- 1. 基础设置与设备状态 ----
@@ -192,6 +205,7 @@ internal fun SettingsPage(
     val nameDialogState = remember { TextFieldState(deviceName) }
 
     var bootStart by remember { mutableStateOf(SyncSettings.bootStartEnabled(context)) }
+    var autoCheckUpdate by remember { mutableStateOf(SyncSettings.autoCheckUpdate(context)) }
     var notificationStyle by remember { mutableStateOf(SyncSettings.notificationStyle(context)) }
     val notificationStyles = remember { NotificationStyle.entries }
     val notificationStyleLabels = remember { notificationStyles.map { it.label } }
@@ -201,6 +215,13 @@ internal fun SettingsPage(
     var glowColorIndex by remember {
         mutableStateOf(
             glowColors.indexOfFirst { it.first.equals(SyncSettings.hyperOsGlowColor(context), ignoreCase = true) }.coerceAtLeast(0)
+        )
+    }
+    val islandTimeoutOptions = remember { SyncSettings.ISLAND_TIMEOUT_OPTIONS }
+    val islandTimeoutLabels = remember { SyncSettings.ISLAND_TIMEOUT_LABELS }
+    var islandTimeoutIndex by remember {
+        mutableStateOf(
+            islandTimeoutOptions.indexOf(SyncSettings.hyperOsIslandTimeout(context)).let { if (it >= 0) it else 1 }
         )
     }
     val historyOptions = SyncSettings.MAX_HISTORY_OPTIONS.toList()
@@ -225,6 +246,8 @@ internal fun SettingsPage(
     var deleteTargetDevice by remember { mutableStateOf<DeviceInfo?>(null) }
     var showAppPickerDialog by remember { mutableStateOf(false) }
     var isDropdownExpanded by remember { mutableStateOf(false) }
+    var checkingUpdate by remember { mutableStateOf(false) }
+    var updateDialogInfo by remember { mutableStateOf<clip.yixing.sync.util.UpdateInfo?>(null) }
 
     // 是否有任何弹窗、Bottom Sheet 或选择器处于打开状态
     val isAnyOverlayOpen = showNameDialog ||
@@ -232,7 +255,8 @@ internal fun SettingsPage(
         showCodeSheet ||
         deleteTargetDevice != null ||
         showAppPickerDialog ||
-        isDropdownExpanded
+        isDropdownExpanded ||
+        updateDialogInfo != null
 
     val dispatcherOwner = androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner.current
     val directInput = remember { androidx.navigationevent.DirectNavigationEventInput() }
@@ -501,6 +525,10 @@ internal fun SettingsPage(
         }
     }
 
+    val captureMethods = remember { CaptureMethod.entries }
+    val captureMethodLabels = remember { captureMethods.map { it.label } }
+    var captureMethod by remember { mutableStateOf(SyncSettings.captureMethod(context)) }
+
     // 页面 Resume 时自动刷新所有权限与系统状态
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -513,6 +541,8 @@ internal fun SettingsPage(
                     powerManager.isIgnoringBatteryOptimizations(context.packageName)
                 } else true
                 isCameraGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                ShizukuClipboardManager.updateStatus(context)
+                captureMethod = SyncSettings.captureMethod(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -525,6 +555,8 @@ internal fun SettingsPage(
     LaunchedEffect(currentSubPage) {
         onOverlayActiveChanged(currentSubPage != null)
     }
+
+    val screenCornerRadius = rememberScreenCornerRadius()
 
     Box(modifier = Modifier.fillMaxSize()) {
         // ---- 1. 底层：一级设置主页 ----
@@ -539,6 +571,8 @@ internal fun SettingsPage(
                         scaleX = s
                         scaleY = s
                         alpha = 0.82f + 0.18f * baseProgress
+                        clip = true
+                        shape = RoundedCornerShape(screenCornerRadius)
                     }
                 }
         ) {
@@ -587,6 +621,14 @@ internal fun SettingsPage(
                                 title = "开机自启"
                             )
                             SwitchPreference(
+                                checked = autoCheckUpdate,
+                                onCheckedChange = { checked ->
+                                    autoCheckUpdate = checked
+                                    SyncSettings.setAutoCheckUpdate(context, checked)
+                                },
+                                title = "启动检查新版本"
+                            )
+                            SwitchPreference(
                                 checked = floatingBarEnabled,
                                 onCheckedChange = onFloatingBarChange,
                                 title = "悬浮底栏"
@@ -598,6 +640,15 @@ internal fun SettingsPage(
                                     SyncSettings.setPredictiveBackEnabled(context, checked)
                                 },
                                 title = "预测返回手势"
+                            )
+                            SwitchPreference(
+                                checked = hideFromRecents,
+                                onCheckedChange = { checked ->
+                                    hideFromRecents = checked
+                                    SyncSettings.setHideFromRecents(context, checked)
+                                    context.findMainActivity()?.updateRecentsVisibility(checked)
+                                },
+                                title = "从最近任务隐藏"
                             )
                         }
                     }
@@ -724,6 +775,18 @@ internal fun SettingsPage(
                                             }
                                         )
                                     }
+                                    WindowDropdownPreference(
+                                        items = islandTimeoutLabels,
+                                        selectedIndex = islandTimeoutIndex,
+                                        onSelectedIndexChange = { index ->
+                                            islandTimeoutIndex = index
+                                            val timeoutSec = islandTimeoutOptions[index]
+                                            SyncSettings.setHyperOsIslandTimeout(context, timeoutSec)
+                                            ClipboardMonitorService.updateNotification(context)
+                                        },
+                                        onExpandedChange = { isDropdownExpanded = it },
+                                        title = "小岛常驻有效时长"
+                                    )
                                 }
                             }
                             SwitchPreference(
@@ -733,6 +796,18 @@ internal fun SettingsPage(
                                     SyncSettings.setIgnoreSensitive(context, checked)
                                 },
                                 title = "忽略敏感与密码标记"
+                            )
+                            ArrowPreference(
+                                title = "智能动作与应用直达",
+                                endActions = {
+                                    val isSmartEnabled = SyncSettings.isSmartActionMasterEnabled(context)
+                                    Text(
+                                        text = if (isSmartEnabled) "已开启" else "已关闭",
+                                        color = if (isSmartEnabled) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.7f),
+                                        fontSize = 14.sp
+                                    )
+                                },
+                                onClick = { openSubPage(SettingsSubPage.SmartActions) }
                             )
                             val totalFilterRules = filterKeywords.size + filterPackages.size
                             ArrowPreference(
@@ -764,15 +839,31 @@ internal fun SettingsPage(
                                 onExpandedChange = { isDropdownExpanded = it },
                                 title = "记录上限"
                             )
-                            ArrowPreference(
+                            BasicComponent(
                                 title = "导出记录备份",
+                                endActions = {
+                                    Icon(
+                                        imageVector = LucideIcons.Upload,
+                                        contentDescription = null,
+                                        tint = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.6f),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
                                 onClick = {
                                     val timeStr = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
                                     exportLauncher.launch("sync_clipboard_backup_$timeStr.json")
                                 }
                             )
-                            ArrowPreference(
+                            BasicComponent(
                                 title = "导入记录备份",
+                                endActions = {
+                                    Icon(
+                                        imageVector = LucideIcons.Download,
+                                        contentDescription = null,
+                                        tint = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.6f),
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
                                 onClick = {
                                     importLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
                                 }
@@ -802,8 +893,91 @@ internal fun SettingsPage(
                     item {
                         val moduleStatus by ModuleStatusStore.moduleStatus.collectAsState()
                         val isModuleActivated = moduleStatus.activated
+                        val shizukuStatus by ShizukuClipboardManager.status.collectAsState()
 
                         SectionBlock(title = "权限与保活", insideMargin = PaddingValues()) {
+                            val captureMethodIndex = captureMethods.indexOf(captureMethod).coerceAtLeast(0)
+                            WindowDropdownPreference(
+                                items = captureMethodLabels,
+                                selectedIndex = captureMethodIndex,
+                                onSelectedIndexChange = { index ->
+                                    val method = captureMethods[index]
+                                    captureMethod = method
+                                    SyncSettings.setCaptureMethod(context, method)
+                                    ClipboardMonitorService.updateMonitoringState(context)
+                                },
+                                onExpandedChange = { isDropdownExpanded = it },
+                                title = "后台监听与授权模式"
+                            )
+
+                            if (captureMethod == CaptureMethod.AUTO || captureMethod == CaptureMethod.LSPOSED) {
+                                ArrowPreference(
+                                    title = "LSPosed 系统框架模块",
+                                    endActions = {
+                                        Text(
+                                            text = if (isModuleActivated) (moduleStatus.frameworkVersion?.let { "v$it 已激活" } ?: "已激活") else "未激活",
+                                            color = if (isModuleActivated) Color(0xFF34C759) else Color(0xFFFF9500),
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    },
+                                    onClick = {
+                                        val opened = openLsposedManager(context)
+                                        if (!opened) {
+                                            scope.launch {
+                                                snackbarHostState.showAppSnack("未检测到 LSPosed 管理器应用，请手动打开", SnackType.Info)
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+
+                            if (captureMethod == CaptureMethod.AUTO || captureMethod == CaptureMethod.SHIZUKU) {
+                                ArrowPreference(
+                                    title = "Shizuku 授权 (免 Root 监听)",
+                                    endActions = {
+                                        val (label, color) = when (shizukuStatus) {
+                                            ShizukuClipboardManager.ShizukuStatus.AUTHORIZED_RUNNING -> "已授权" to Color(0xFF34C759)
+                                            ShizukuClipboardManager.ShizukuStatus.UNAUTHORIZED -> "去授权" to MiuixTheme.colorScheme.primary
+                                            ShizukuClipboardManager.ShizukuStatus.DEAD_OR_STOPPED -> "未运行" to Color(0xFFFF9500)
+                                            ShizukuClipboardManager.ShizukuStatus.NOT_INSTALLED -> "未安装" to MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.6f)
+                                        }
+                                        Text(
+                                            text = label,
+                                            color = color,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    },
+                                    onClick = {
+                                        when (shizukuStatus) {
+                                            ShizukuClipboardManager.ShizukuStatus.AUTHORIZED_RUNNING -> {
+                                                scope.launch {
+                                                    snackbarHostState.showAppSnack("Shizuku 剪贴板服务正常运行中", SnackType.Success)
+                                                }
+                                            }
+                                            ShizukuClipboardManager.ShizukuStatus.UNAUTHORIZED -> {
+                                                ShizukuClipboardManager.requestPermission()
+                                            }
+                                            ShizukuClipboardManager.ShizukuStatus.DEAD_OR_STOPPED,
+                                            ShizukuClipboardManager.ShizukuStatus.NOT_INSTALLED -> {
+                                                val opened = openShizukuManager(context)
+                                                if (!opened) {
+                                                    val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://shizuku.rikka.app/download/")).apply {
+                                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    }
+                                                    runCatching { context.startActivity(browserIntent) }.onFailure {
+                                                        scope.launch {
+                                                            snackbarHostState.showAppSnack("未检测到 Shizuku 应用，请先安装并启动", SnackType.Info)
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                )
+                            }
+
                             ArrowPreference(
                                 title = "通知与前台服务权限",
                                 endActions = {
@@ -890,25 +1064,6 @@ internal fun SettingsPage(
                                     runCatching { context.startActivity(intent) }
                                 }
                             )
-                            ArrowPreference(
-                                title = "LSPosed 系统框架模块",
-                                endActions = {
-                                    Text(
-                                        text = if (isModuleActivated) (moduleStatus.frameworkVersion?.let { "v$it 已激活" } ?: "已激活") else "未激活",
-                                        color = if (isModuleActivated) Color(0xFF34C759) else Color(0xFFFF9500),
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                },
-                                onClick = {
-                                    val opened = openLsposedManager(context)
-                                    if (!opened) {
-                                        scope.launch {
-                                            snackbarHostState.showAppSnack("未检测到 LSPosed 管理器应用，请手动打开", SnackType.Info)
-                                        }
-                                    }
-                                }
-                            )
                         }
                     }
 
@@ -958,7 +1113,8 @@ internal fun SettingsPage(
                         scaleY = s
                         transformOrigin = TransformOrigin(0f, 0.5f)
                         clip = true
-                        shape = RoundedCornerShape((p * 24).dp)
+                        val corner = screenCornerRadius + (p * 4).dp
+                        shape = RoundedCornerShape(corner)
                         shadowElevation = (1f - p) * 24f
                     }
             ) {
@@ -1395,6 +1551,14 @@ internal fun SettingsPage(
                         }
                     }
 
+                    SettingsSubPage.SmartActions -> {
+                        SmartActionSettingsPage(
+                            bottomInnerPadding = bottomInnerPadding,
+                            snackbarHostState = snackbarHostState,
+                            onBack = { closeSubPage() }
+                        )
+                    }
+
                     SettingsSubPage.About -> {
                         // ---- 二级页面 3: 关于与开源致谢 ----
                         val openUrl: (String) -> Unit = { targetUrl ->
@@ -1409,6 +1573,16 @@ internal fun SettingsPage(
                                 scope.launch { snackbarHostState.showAppSnack("链接已复制", SnackType.Success) }
                             }
                         }
+
+                        val infiniteTransition = rememberInfiniteTransition(label = "update_spin")
+                        val spinRotation by infiniteTransition.animateFloat(
+                            initialValue = 0f,
+                            targetValue = 360f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(900, easing = LinearEasing)
+                            ),
+                            label = "spin_angle"
+                        )
 
                         PageShell(
                             title = "关于",
@@ -1467,17 +1641,62 @@ internal fun SettingsPage(
                                         Spacer(Modifier.height(8.dp))
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
-                                                .padding(horizontal = 10.dp, vertical = 3.dp)
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                                         ) {
-                                            Text(
-                                                text = "版本 v" + appVersion(context),
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = MiuixTheme.colorScheme.primary
-                                            )
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f))
+                                                    .padding(horizontal = 10.dp, vertical = 3.dp)
+                                            ) {
+                                                Text(
+                                                    text = "版本 v" + appVersion(context),
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = MiuixTheme.colorScheme.primary
+                                                )
+                                            }
+
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                                                    .clickable(enabled = !checkingUpdate) {
+                                                        scope.launch {
+                                                            checkingUpdate = true
+                                                            val curVer = appVersion(context)
+                                                            val res = clip.yixing.sync.util.UpdateChecker.check(curVer)
+                                                            checkingUpdate = false
+                                                            res.onSuccess { info ->
+                                                                if (info.hasUpdate) {
+                                                                    updateDialogInfo = info
+                                                                } else {
+                                                                    snackbarHostState.showAppSnack("当前已是最新版本 (v$curVer)", SnackType.Success)
+                                                                }
+                                                            }.onFailure { err ->
+                                                                snackbarHostState.showAppSnack("检查更新失败: ${err.message ?: "网络错误"}", SnackType.Error)
+                                                            }
+                                                        }
+                                                    }
+                                                    .padding(horizontal = 10.dp, vertical = 3.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = LucideIcons.RefreshCw,
+                                                    contentDescription = "检查更新",
+                                                    tint = if (checkingUpdate) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackgroundVariant,
+                                                    modifier = Modifier
+                                                        .size(12.dp)
+                                                        .rotate(if (checkingUpdate) spinRotation else 0f)
+                                                )
+                                                Spacer(Modifier.width(4.dp))
+                                                Text(
+                                                    text = if (checkingUpdate) "检查中..." else "检查更新",
+                                                    fontSize = 12.sp,
+                                                    color = if (checkingUpdate) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -1485,6 +1704,56 @@ internal fun SettingsPage(
                                 // 2. 项目信息
                                 item {
                                     SectionBlock(title = "项目信息", insideMargin = PaddingValues()) {
+                                        SwitchPreference(
+                                            checked = autoCheckUpdate,
+                                            onCheckedChange = { checked ->
+                                                autoCheckUpdate = checked
+                                                SyncSettings.setAutoCheckUpdate(context, checked)
+                                            },
+                                            title = "启动检查新版本"
+                                        )
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable(enabled = !checkingUpdate) {
+                                                    scope.launch {
+                                                        checkingUpdate = true
+                                                        val curVer = appVersion(context)
+                                                        val res = clip.yixing.sync.util.UpdateChecker.check(curVer)
+                                                        checkingUpdate = false
+                                                        res.onSuccess { info ->
+                                                            if (info.hasUpdate) {
+                                                                updateDialogInfo = info
+                                                            } else {
+                                                                snackbarHostState.showAppSnack("当前已是最新版本 (v$curVer)", SnackType.Success)
+                                                            }
+                                                        }.onFailure { err ->
+                                                            snackbarHostState.showAppSnack("检查更新失败: ${err.message ?: "网络错误"}", SnackType.Error)
+                                                        }
+                                                    }
+                                                }
+                                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text("检查新版本", fontSize = 15.sp, color = MiuixTheme.colorScheme.onSurface)
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = if (checkingUpdate) "正在检查更新..." else "v" + appVersion(context),
+                                                    color = if (checkingUpdate) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackgroundVariant,
+                                                    fontSize = 13.sp
+                                                )
+                                                Spacer(Modifier.width(4.dp))
+                                                Icon(
+                                                    imageVector = LucideIcons.RefreshCw,
+                                                    contentDescription = "检查更新",
+                                                    tint = if (checkingUpdate) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.6f),
+                                                    modifier = Modifier
+                                                        .size(13.dp)
+                                                        .rotate(if (checkingUpdate) spinRotation else 0f)
+                                                )
+                                            }
+                                        }
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -1592,6 +1861,15 @@ internal fun SettingsPage(
     }
 
     // ---- 对话框与弹层 ----
+
+    // 发现新版本更新弹窗
+    updateDialogInfo?.let { info ->
+        AppUpdateDialog(
+            info = info,
+            snackbarHostState = snackbarHostState,
+            onDismiss = { updateDialogInfo = null }
+        )
+    }
 
     // 配对对话框 (6 位纯数字配对码或扫码接入)
     WindowDialog(
@@ -2245,6 +2523,33 @@ private fun openLsposedManager(context: Context): Boolean {
     return false
 }
 
+/** 尝试拉起 Shizuku 管理器应用 */
+private fun openShizukuManager(context: Context): Boolean {
+    val pm = context.packageManager
+    val explicitComponents = listOf(
+        ComponentName("moe.shizuku.privileged.api", "moe.shizuku.manager.MainActivity"),
+        ComponentName("moe.shizuku.privileged.api", "moe.shizuku.privileged.api.MainActivity")
+    )
+    for (comp in explicitComponents) {
+        try {
+            val intent = Intent(Intent.ACTION_MAIN).apply {
+                component = comp
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            return true
+        } catch (_: Exception) {
+        }
+    }
+    val launchIntent = pm.getLaunchIntentForPackage("moe.shizuku.privileged.api")
+    if (launchIntent != null) {
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return runCatching { context.startActivity(launchIntent); true }.getOrDefault(false)
+    }
+    return false
+}
+
 /** 开源依赖组件实体模型 */
 private data class OpenSourceLib(
     val name: String,
@@ -2605,3 +2910,7 @@ private fun InstalledAppPickerDialog(
         }
     }
 }
+
+private fun Context.findMainActivity(): MainActivity? = generateSequence(this) {
+    (it as? ContextWrapper)?.baseContext
+}.filterIsInstance<MainActivity>().firstOrNull()

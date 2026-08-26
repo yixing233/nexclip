@@ -29,12 +29,6 @@ public partial class DeviceSelectViewModel : ObservableObject
 
 public partial class ChatMessageItem : ObservableObject
 {
-    private static readonly SolidColorBrush ManualBadgeBg = new(ColorHelper.FromArgb(36, 14, 165, 233));   // Sky soft
-    private static readonly SolidColorBrush ManualBadgeFg = new(ColorHelper.FromArgb(255, 2, 132, 199));   // Sky 600
-    private static readonly SolidColorBrush AutoBadgeBg = new(ColorHelper.FromArgb(28, 100, 116, 139));     // Slate soft
-    private static readonly SolidColorBrush AutoBadgeFg = new(ColorHelper.FromArgb(255, 100, 116, 139));   // Slate 500
-    private static readonly SolidColorBrush SelfBadgeBg = new(ColorHelper.FromArgb(45, 255, 255, 255));
-    private static readonly SolidColorBrush SelfBadgeFg = new(ColorHelper.FromArgb(255, 255, 255, 255));
     private static readonly SolidColorBrush WhiteBrush = new(ColorHelper.FromArgb(255, 255, 255, 255));
     private static readonly SolidColorBrush WhiteTransBrush = new(ColorHelper.FromArgb(200, 255, 255, 255));
 
@@ -50,12 +44,14 @@ public partial class ChatMessageItem : ObservableObject
     public bool IsManual { get; set; }
     public ImageSource? Thumbnail { get; set; }
 
+    [ObservableProperty]
+    private bool showDateHeader;
+
+    [ObservableProperty]
+    private string dateHeaderText = "";
+
     public bool IsImage => Type == "Image";
     public bool IsText => Type == "Text";
-
-    public string SourceTypeText => IsManual ? "手动发送" : "剪贴板同步";
-    public Brush SourceBadgeBackground => IsFromSelf ? SelfBadgeBg : (IsManual ? ManualBadgeBg : AutoBadgeBg);
-    public Brush SourceBadgeForeground => IsFromSelf ? SelfBadgeFg : (IsManual ? ManualBadgeFg : AutoBadgeFg);
 
     public HorizontalAlignment Alignment => IsFromSelf ? HorizontalAlignment.Right : HorizontalAlignment.Left;
     public Visibility FromRemoteVisibility => IsFromSelf ? Visibility.Collapsed : Visibility.Visible;
@@ -112,7 +108,7 @@ public partial class ChatMessageItem : ObservableObject
         try
         {
             var bmp = new BitmapImage();
-            bmp.DecodePixelHeight = 240;
+            bmp.DecodePixelHeight = 720;
             bmp.UriSource = new Uri("file:///" + path.Replace('\\', '/'));
             return bmp;
         }
@@ -164,9 +160,41 @@ public partial class TransferChatViewModel : ObservableObject
         RefreshDevicesCommand = new AsyncRelayCommand(RefreshDevicesAsync);
         ClearSelectedImageCommand = new RelayCommand(ClearSelectedImage);
 
+        LoadCachedDevicesFromStore();
+
         if (_services.Engine is not null)
         {
             AttachEngine(_services.Engine);
+        }
+    }
+
+    private void LoadCachedDevicesFromStore()
+    {
+        try
+        {
+            var cached = _services.Settings.LoadCachedDevices();
+            if (cached.Count == 0) return;
+            var selfId = _services.Settings.DeviceId;
+            var others = cached.Where(d => !string.Equals(d.Id, selfId, StringComparison.OrdinalIgnoreCase)).ToList();
+            Devices.Clear();
+            foreach (var d in others)
+            {
+                var devVm = new DeviceSelectViewModel
+                {
+                    Id = d.Id,
+                    Name = d.Name,
+                    Platform = d.Platform ?? "Unknown",
+                    IsOnline = d.Online,
+                    IsSelected = SelectAllDevices ? d.Online : false,
+                };
+                Devices.Add(devVm);
+            }
+            var onlineCount = others.Count(d => d.Online);
+            OnlineSummary = $"{onlineCount} 台设备在线";
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"互传面板初始化设备缓存失败: {ex.Message}");
         }
     }
 
@@ -211,6 +239,55 @@ public partial class TransferChatViewModel : ObservableObject
         }
     }
 
+    public static void UpdateDateHeaders(IList<ChatMessageItem> list)
+    {
+        DateTime? lastDate = null;
+        foreach (var msg in list)
+        {
+            var msgDate = msg.CreatedAt.ToLocalTime().Date;
+            if (lastDate == null || msgDate != lastDate.Value)
+            {
+                msg.ShowDateHeader = true;
+                msg.DateHeaderText = FormatDateHeader(msg.CreatedAt.ToLocalTime());
+                lastDate = msgDate;
+            }
+            else
+            {
+                msg.ShowDateHeader = false;
+                msg.DateHeaderText = "";
+            }
+        }
+    }
+
+    public static string FormatDateHeader(DateTime localTime)
+    {
+        var now = DateTime.Now;
+        var date = localTime.Date;
+        if (date == now.Date) return "今天";
+        if (date == now.Date.AddDays(-1)) return "昨天";
+        if (date == now.Date.AddDays(-2)) return "前天";
+        if (date.Year == now.Year) return localTime.ToString("M月d日");
+        return localTime.ToString("yyyy年M月d日");
+    }
+
+    private void AppendMessage(ChatMessageItem msg)
+    {
+        var lastMsg = _allMessages.LastOrDefault();
+        var msgDate = msg.CreatedAt.ToLocalTime().Date;
+        if (lastMsg == null || lastMsg.CreatedAt.ToLocalTime().Date != msgDate)
+        {
+            msg.ShowDateHeader = true;
+            msg.DateHeaderText = FormatDateHeader(msg.CreatedAt.ToLocalTime());
+        }
+        else
+        {
+            msg.ShowDateHeader = false;
+            msg.DateHeaderText = "";
+        }
+        _allMessages.Add(msg);
+        Messages.Add(msg);
+    }
+
     public void ClearMessages()
     {
         var manualItems = _services.History.Query(limit: 1000).Where(h => h.IsManual).ToList();
@@ -248,8 +325,7 @@ public partial class TransferChatViewModel : ObservableObject
             Thumbnail = BuildThumbnail(localImagePath),
         };
 
-        _allMessages.Add(msg);
-        Messages.Add(msg);
+        AppendMessage(msg);
     }
 
     private static ImageSource? BuildThumbnail(string? path)
@@ -258,7 +334,7 @@ public partial class TransferChatViewModel : ObservableObject
         try
         {
             var bmp = new BitmapImage();
-            bmp.DecodePixelHeight = 240;
+            bmp.DecodePixelHeight = 720;
             bmp.UriSource = new Uri("file:///" + path.Replace('\\', '/'));
             return bmp;
         }
@@ -300,6 +376,7 @@ public partial class TransferChatViewModel : ObservableObject
 
             var onlineCount = others.Count(d => d.Online);
             OnlineSummary = $"{onlineCount} 台设备在线";
+            s.SaveCachedDevices(list);
             ApplyFilter();
         }
         catch (Exception ex)
@@ -315,6 +392,8 @@ public partial class TransferChatViewModel : ObservableObject
         var isAll = SelectAllDevices || selectedDevices.Count == 0 || selectedDevices.Count == Devices.Count;
 
         var filtered = _allMessages.Where(m => isAll || m.IsFromSelf || selectedDevices.Contains(m.DeviceId)).ToList();
+
+        UpdateDateHeaders(filtered);
 
         Messages.Clear();
         foreach (var msg in filtered)
@@ -452,8 +531,7 @@ public partial class TransferChatViewModel : ObservableObject
                     IsManual = true,
                     Thumbnail = SelectedImageThumbnail,
                 };
-                _allMessages.Add(selfImgMsg);
-                Messages.Add(selfImgMsg);
+                AppendMessage(selfImgMsg);
             }
             else if (!string.IsNullOrEmpty(text))
             {
@@ -468,8 +546,7 @@ public partial class TransferChatViewModel : ObservableObject
                     IsFromSelf = true,
                     IsManual = true,
                 };
-                _allMessages.Add(selfTextMsg);
-                Messages.Add(selfTextMsg);
+                AppendMessage(selfTextMsg);
             }
 
             // 清理输入框

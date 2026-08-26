@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using NexClip.Desktop.Models;
 
 namespace NexClip.Desktop.Services;
 
@@ -30,11 +31,23 @@ public sealed class SettingsStore
     public bool BootStartEnabled { get; set; } = true;
     public bool StartMinimized { get; set; } = true;
     public bool CloseToTray { get; set; } = true;
+    /// <summary>启动时自动检查更新。</summary>
+    public bool AutoCheckUpdate { get; set; } = true;
     public bool MonitorEnabled { get; set; } = true;
     public bool AutoPaste { get; set; } = true;
     public bool NotifyEnabled { get; set; } = true;
-    /// <summary>复制链接时显示右下角直达卡片。</summary>
+    /// <summary>复制内容时显示右下角直达卡片(总开关)。</summary>
     public bool CopyDirectEnabled { get; set; } = true;
+    /// <summary>智能识别:颜色代码微预览与格式转换。</summary>
+    public bool SmartColorEnabled { get; set; } = true;
+    /// <summary>智能识别:本地文件与路径直达。</summary>
+    public bool SmartPathEnabled { get; set; } = true;
+    /// <summary>智能识别:GitHub 仓库深度识别。</summary>
+    public bool SmartDeepLinkEnabled { get; set; } = true;
+    /// <summary>智能识别:网盘链接与提取码识别。</summary>
+    public bool SmartNetDiskEnabled { get; set; } = true;
+    /// <summary>智能识别:通用网页链接直达。</summary>
+    public bool SmartUrlEnabled { get; set; } = true;
     public int MaxHistory { get; set; } = 200;
     /// <summary>剪贴板窗口出现位置:center=屏幕中心 | cursor=跟随鼠标(默认)。</summary>
     public string WindowPositionMode { get; set; } = "cursor";
@@ -139,10 +152,16 @@ public sealed class SettingsStore
             BootStartEnabled = dto.BootStartEnabled ?? BootStartEnabled;
             StartMinimized = dto.StartMinimized ?? StartMinimized;
             CloseToTray = dto.CloseToTray ?? CloseToTray;
+            AutoCheckUpdate = dto.AutoCheckUpdate ?? AutoCheckUpdate;
             MonitorEnabled = dto.MonitorEnabled ?? MonitorEnabled;
             AutoPaste = dto.AutoPaste ?? AutoPaste;
             NotifyEnabled = dto.NotifyEnabled ?? NotifyEnabled;
             CopyDirectEnabled = dto.CopyDirectEnabled ?? CopyDirectEnabled;
+            SmartColorEnabled = dto.SmartColorEnabled ?? SmartColorEnabled;
+            SmartPathEnabled = dto.SmartPathEnabled ?? SmartPathEnabled;
+            SmartDeepLinkEnabled = dto.SmartDeepLinkEnabled ?? SmartDeepLinkEnabled;
+            SmartNetDiskEnabled = dto.SmartNetDiskEnabled ?? SmartNetDiskEnabled;
+            SmartUrlEnabled = dto.SmartUrlEnabled ?? SmartUrlEnabled;
             MaxHistory = dto.MaxHistory ?? MaxHistory;
             WindowPositionMode = dto.WindowPositionMode ?? WindowPositionMode;
             RetentionDays = dto.RetentionDays ?? RetentionDays;
@@ -189,10 +208,16 @@ public sealed class SettingsStore
                 BootStartEnabled = BootStartEnabled,
                 StartMinimized = StartMinimized,
                 CloseToTray = CloseToTray,
+                AutoCheckUpdate = AutoCheckUpdate,
                 MonitorEnabled = MonitorEnabled,
                 AutoPaste = AutoPaste,
                 NotifyEnabled = NotifyEnabled,
                 CopyDirectEnabled = CopyDirectEnabled,
+                SmartColorEnabled = SmartColorEnabled,
+                SmartPathEnabled = SmartPathEnabled,
+                SmartDeepLinkEnabled = SmartDeepLinkEnabled,
+                SmartNetDiskEnabled = SmartNetDiskEnabled,
+                SmartUrlEnabled = SmartUrlEnabled,
                 MaxHistory = MaxHistory,
                 WindowPositionMode = WindowPositionMode,
                 RetentionDays = RetentionDays,
@@ -207,6 +232,58 @@ public sealed class SettingsStore
         catch (Exception ex)
         {
             Log.Error("设置保存失败", ex);
+        }
+    }
+
+    /// <summary>设备列表本地缓存文件路径。</summary>
+    public string DevicesCacheFilePath => Path.Combine(ResolveStorageDir(), "devices_cache.json");
+
+    /// <summary>加载本地缓存的设备列表 (SWR 策略首屏直出)。</summary>
+    public List<DeviceInfo> LoadCachedDevices()
+    {
+        try
+        {
+            var path = DevicesCacheFilePath;
+            if (!File.Exists(path)) return new List<DeviceInfo>();
+            var json = File.ReadAllText(path);
+            if (string.IsNullOrWhiteSpace(json)) return new List<DeviceInfo>();
+            return JsonSerializer.Deserialize<List<DeviceInfo>>(json) ?? new List<DeviceInfo>();
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"加载本地设备缓存失败: {ex.Message}");
+            return new List<DeviceInfo>();
+        }
+    }
+
+    /// <summary>持久化保存设备列表到本地缓存文件。</summary>
+    public void SaveCachedDevices(IEnumerable<DeviceInfo> devices)
+    {
+        try
+        {
+            var path = DevicesCacheFilePath;
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            var json = JsonSerializer.Serialize(devices, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(path, json);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"保存本地设备缓存失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>清空本地设备列表缓存 (如重置服务器或生成新设备 ID 时)。</summary>
+    public void ClearCachedDevices()
+    {
+        try
+        {
+            var path = DevicesCacheFilePath;
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"清空本地设备缓存失败: {ex.Message}");
         }
     }
 
@@ -242,10 +319,16 @@ public sealed class SettingsStore
         public bool? BootStartEnabled { get; set; }
         public bool? StartMinimized { get; set; }
         public bool? CloseToTray { get; set; }
+        public bool? AutoCheckUpdate { get; set; }
         public bool? MonitorEnabled { get; set; }
         public bool? AutoPaste { get; set; }
         public bool? NotifyEnabled { get; set; }
         public bool? CopyDirectEnabled { get; set; }
+        public bool? SmartColorEnabled { get; set; }
+        public bool? SmartPathEnabled { get; set; }
+        public bool? SmartDeepLinkEnabled { get; set; }
+        public bool? SmartNetDiskEnabled { get; set; }
+        public bool? SmartUrlEnabled { get; set; }
         public int? MaxHistory { get; set; }
         public string? WindowPositionMode { get; set; }
         public int? RetentionDays { get; set; }
