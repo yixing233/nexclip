@@ -26,7 +26,7 @@ object UpdateChecker {
     suspend fun check(currentVersion: String): Result<UpdateInfo> = withContext(Dispatchers.IO) {
         runCatching {
             val request = Request.Builder()
-                .url("https://api.github.com/repos/yixing233/easy-clip/releases/latest")
+                .url("https://api.github.com/repos/yixing233/nexclip/releases/latest")
                 .header("User-Agent", "NexClip-Android")
                 .header("Accept", "application/vnd.github.v3+json")
                 .build()
@@ -45,7 +45,7 @@ object UpdateChecker {
 
             val title = json.optString("name", "")
             val body = json.optString("body", "")
-            val htmlUrl = json.optString("html_url", "https://github.com/yixing233/easy-clip/releases")
+            val htmlUrl = json.optString("html_url", "https://github.com/yixing233/nexclip/releases")
 
             var downloadUrl: String? = null
             val assets = json.optJSONArray("assets")
