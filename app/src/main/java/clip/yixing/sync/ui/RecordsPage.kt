@@ -2011,7 +2011,7 @@ private fun ActiveFilterChip(
 }
 
 private fun copyToClipboard(context: Context, text: String) {
-    clip.yixing.sync.service.ClipboardMonitorService.copyToClipboardInternal(context, ClipData.newPlainText("NexClip", text))
+    clip.yixing.sync.service.ClipboardMonitorService.copyToClipboardInternal(context, ClipData.newPlainText("NexClip", text), rawText = text)
 }
 
 private fun shareText(context: Context, text: String) {

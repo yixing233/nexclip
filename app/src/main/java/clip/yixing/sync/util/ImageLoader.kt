@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.content.FileProvider
 import clip.yixing.sync.data.SyncApi
+import clip.yixing.sync.service.ClipboardMonitorService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -161,9 +162,12 @@ object ImageLoader {
         }.getOrNull() ?: return@withContext false
 
         withContext(Dispatchers.Main) {
-            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val clip = ClipData.newUri(context.contentResolver, "NexClip Image", uri)
-            cm.setPrimaryClip(clip)
+            ClipboardMonitorService.copyToClipboardInternal(
+                context = context,
+                clipData = clip,
+                imageRef = imageRef
+            )
         }
         true
     }

@@ -68,8 +68,6 @@ class ClipboardMonitorService : Service() {
         clipboard.addPrimaryClipChangedListener(listener)
         isRunning.value = true
         connectPush()
-        // 启动时拉取服务器当前剪贴板作为初始记录
-        scope.launch { pullAndApply() }
 
         // 初始化 Shizuku 免 Root 剪贴板监听
         clip.yixing.sync.shizuku.ShizukuClipboardManager.init(this)
@@ -221,77 +219,6 @@ class ClipboardMonitorService : Service() {
         client.connect()
     }
 
-    private fun isFreshEntry(createdAtStr: String?, maxAgeMs: Long = 5 * 60 * 1000L): Boolean {
-        if (createdAtStr.isNullOrBlank()) return false
-        return try {
-            val instant = java.time.Instant.parse(createdAtStr)
-            val now = java.time.Instant.now()
-            val diffMs = java.time.Duration.between(instant, now).abs().toMillis()
-            diffMs <= maxAgeMs
-        } catch (_: Exception) {
-            try {
-                val format = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
-                format.timeZone = java.util.TimeZone.getTimeZone("UTC")
-                val clean = createdAtStr.substringBefore('.').substringBefore('Z')
-                val date = format.parse(clean)
-                val diffMs = Math.abs(System.currentTimeMillis() - (date?.time ?: 0L))
-                diffMs <= maxAgeMs
-            } catch (_: Exception) {
-                false
-            }
-        }
-    }
-
-    private fun pullAndApply() {
-        try {
-            if (!SyncSettings.isPaired(this) || SyncSettings.deviceToken(this).isBlank()) return
-            val localDeviceId = SyncSettings.ensureDeviceId(this)
-            val api = SyncApi(SyncSettings.serverUrl(this), localDeviceId, SyncSettings.deviceToken(this))
-            val cur = api.getCurrent() ?: return
-            if (cur.deviceId == localDeviceId) return
-
-            // 严格时效性校验: 仅同步距今 5 分钟以内的“新鲜”剪贴板条目，禁止自动同步陈旧历史条目覆写本机剪贴板
-            if (!isFreshEntry(cur.createdAt, maxAgeMs = 5 * 60 * 1000L)) {
-                android.util.Log.i("NexClip", "pullAndApply ignored: remote entry is stale (${cur.createdAt})")
-                return
-            }
-
-            val remoteDevName = cur.deviceName?.ifBlank { null } ?: "其他设备"
-            if (!cur.imageRef.isNullOrBlank() && captured.value.firstOrNull()?.imageRef != cur.imageRef) {
-                addCaptured(this, "[图片]", cur.imageRef, sourceDevice = remoteDevName, sourceApp = remoteDevName)
-                notifyPush(remoteDevName, "[图片]", cur.imageRef)
-            } else if (!cur.text.isNullOrBlank() && captured.value.firstOrNull()?.text != cur.text) {
-                val hash = sha256(cur.text)
-                lastUploadHash = hash
-                addCaptured(this, cur.text, null, sourceDevice = remoteDevName, sourceApp = remoteDevName)
-                isApplyingRemote = true
-                val newClip = ClipData.newPlainText("NexClip", cur.text)
-                try {
-                    val method = SyncSettings.captureMethod(this)
-                    val useShizuku = (method == clip.yixing.sync.util.CaptureMethod.AUTO || method == clip.yixing.sync.util.CaptureMethod.SHIZUKU)
-                    val shizukuApplied = if (useShizuku) clip.yixing.sync.shizuku.ShizukuClipboardManager.setPrimaryClip(newClip) else false
-                    if (!shizukuApplied) {
-                        clipboard.setPrimaryClip(newClip)
-                    }
-                } finally {
-                    scope.launch {
-                        delay(1000)
-                        isApplyingRemote = false
-                    }
-                }
-                notifyPush(remoteDevName, cur.text)
-            }
-        } catch (e: clip.yixing.sync.data.ApiException) {
-            if (e.statusCode == 401 || e.statusCode == 403 || e.statusCode == 410) {
-                SyncSettings.clearPairing(this)
-                push?.disconnect()
-                push = null
-            }
-        } catch (_: Exception) {
-            // 未配置/离线时静默
-        }
-    }
-
     private val listener = ClipboardManager.OnPrimaryClipChangedListener {
         if (isApplyingRemote) {
             android.util.Log.i("NexClip", "OnPrimaryClipChangedListener ignored (applying remote push)")
@@ -304,10 +231,11 @@ class ClipboardMonitorService : Service() {
     fun processIncomingClip(clipData: ClipData, overrideSourcePkg: String? = null) {
         val item = clipData.getItemAt(0) ?: return
 
+        val isMarkedInternal = clipData.description?.extras?.getBoolean("is_nexclip_internal") == true
         val sourcePkg = overrideSourcePkg?.takeIf { it.isNotBlank() } ?: AppSourceHelper.resolvePackageName(this, clipData)
-        // 关键防护: 若剪贴板内容由 NexClip 自身在软件内复制，保持原位且不生成新条目
-        if (isInternalCopy || sourcePkg == packageName) {
-            android.util.Log.i("NexClip", "Incoming clip ignored (source is self app or internal copy, maintaining original position)")
+        // 关键防护 1: 若剪贴板内容由 NexClip 自身在软件内复制，保持原位且不生成新条目、不上报
+        if (isInternalCopy || sourcePkg == packageName || isMarkedInternal) {
+            android.util.Log.i("NexClip", "Incoming clip ignored (source is self app or marked internal, maintaining original state)")
             return
         }
         if (SyncSettings.isPackageFiltered(this, sourcePkg)) {
@@ -330,6 +258,12 @@ class ClipboardMonitorService : Service() {
 
             if (bytes != null && bytes.isNotEmpty() && bytes.size <= 30 * 1024 * 1024) {
                 val hash = sha256Bytes(bytes)
+                // 关键防护 2: 检查是否与近期应用内点击复制的图片 Hash 一致
+                if (isRecentInternalCopy(null, hash)) {
+                    android.util.Log.i("NexClip", "Incoming image ignored (matches recent in-app copied image hash $hash)")
+                    return
+                }
+
                 val now = System.currentTimeMillis()
                 if (hash == lastLocalImgHash && (now - lastLocalTime) < 800L) {
                     android.util.Log.i("NexClip", "Incoming image ignored (debounced within 800ms)")
@@ -391,6 +325,13 @@ class ClipboardMonitorService : Service() {
         if (text.isNullOrBlank() || text.length > 500_000) return
         if (SyncSettings.isContentFiltered(this, text)) return
 
+        val hash = sha256(text)
+        // 关键防护 2: 检查是否与近期应用内点击复制的文本 Hash 一致
+        if (isRecentInternalCopy(text, null)) {
+            android.util.Log.i("NexClip", "Incoming text ignored (matches recent in-app copied text hash)")
+            return
+        }
+
         val now = System.currentTimeMillis()
         if (text == lastLocalText && (now - lastLocalTime) < 800L) {
             android.util.Log.i("NexClip", "Incoming text ignored (debounced within 800ms)")
@@ -398,7 +339,6 @@ class ClipboardMonitorService : Service() {
         }
         lastLocalText = text
         lastLocalTime = now
-        val hash = sha256(text)
         lastUploadHash = hash
 
         addCaptured(this, text, null, sourceDevice = "本机", sourcePackage = sourcePkg, sourceApp = sourceApp)
@@ -441,16 +381,6 @@ class ClipboardMonitorService : Service() {
             sourceApp = "来自 $deviceName"
         )
         SyncNotificationManager.notifyNewClip(this, clip, deviceName, isPush = true)
-    }
-
-    private fun sha256(s: String): String {
-        val md = java.security.MessageDigest.getInstance("SHA-256")
-        return md.digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
-    }
-
-    private fun sha256Bytes(bytes: ByteArray): String {
-        val md = java.security.MessageDigest.getInstance("SHA-256")
-        return md.digest(bytes).joinToString("") { "%02x".format(it) }
     }
 
     private fun refreshForegroundNotification() {
@@ -525,21 +455,76 @@ class ClipboardMonitorService : Service() {
         }
 
         /**
-         * 标记本次写入剪贴板由 App 内部发起 (点击卡片复制等)
+         * 记录由 App 内部发起复制的内容 Hash (SHA256 文本或 imageRef) 及时间戳
          */
+        private val internalCopyHashes = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
         @Volatile
         var isInternalCopy: Boolean = false
             private set
 
-        fun copyToClipboardInternal(context: Context, clipData: ClipData) {
+        fun sha256(s: String): String {
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            return md.digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
+        }
+
+        fun sha256Bytes(bytes: ByteArray): String {
+            val md = java.security.MessageDigest.getInstance("SHA-256")
+            return md.digest(bytes).joinToString("") { "%02x".format(it) }
+        }
+
+        fun registerInternalCopy(text: String?, imageRef: String? = null) {
+            val hash = if (!imageRef.isNullOrBlank()) {
+                imageRef
+            } else if (!text.isNullOrBlank()) {
+                sha256(text)
+            } else {
+                null
+            }
+            if (hash != null) {
+                val now = System.currentTimeMillis()
+                internalCopyHashes[hash] = now
+                internalCopyHashes.entries.removeIf { now - it.value > 30_000L }
+            }
+        }
+
+        fun isRecentInternalCopy(text: String?, imageRef: String? = null): Boolean {
+            val hash = if (!imageRef.isNullOrBlank()) {
+                imageRef
+            } else if (!text.isNullOrBlank()) {
+                sha256(text)
+            } else {
+                null
+            }
+            if (hash == null) return false
+            val time = internalCopyHashes[hash] ?: return false
+            return (System.currentTimeMillis() - time) <= 30_000L
+        }
+
+        fun copyToClipboardInternal(
+            context: Context,
+            clipData: ClipData,
+            rawText: String? = null,
+            imageRef: String? = null
+        ) {
             isInternalCopy = true
+            val text = rawText ?: runCatching { clipData.getItemAt(0)?.text?.toString() }.getOrNull()
+            registerInternalCopy(text, imageRef)
+
+            runCatching {
+                val extras = clipData.description?.extras ?: android.os.PersistableBundle()
+                extras.putBoolean("is_nexclip_internal", true)
+                extras.putString("source_pkg", context.packageName)
+                clipData.description?.extras = extras
+            }
+
             try {
                 val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 cm.setPrimaryClip(clipData)
             } finally {
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                     isInternalCopy = false
-                }, 800)
+                }, 1500L)
             }
         }
 

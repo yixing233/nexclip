@@ -1580,8 +1580,7 @@ internal fun SettingsPage(
                                 }
                                 context.startActivity(intent)
                             }.onFailure {
-                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                cm.setPrimaryClip(ClipData.newPlainText("Link", targetUrl))
+                                clip.yixing.sync.service.ClipboardMonitorService.copyToClipboardInternal(context, ClipData.newPlainText("Link", targetUrl), rawText = targetUrl)
                                 scope.launch { snackbarHostState.showAppSnack("链接已复制", SnackType.Success) }
                             }
                         }
@@ -2404,8 +2403,11 @@ private fun relativeTime(iso: String): String = try {
 }
 
 private fun copyPairingCode(context: android.content.Context, code: String) {
-    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-    cm.setPrimaryClip(android.content.ClipData.newPlainText("PairingCode", code))
+    clip.yixing.sync.service.ClipboardMonitorService.copyToClipboardInternal(
+        context = context,
+        clipData = android.content.ClipData.newPlainText("PairingCode", code),
+        rawText = code
+    )
     android.widget.Toast.makeText(context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
 }
 

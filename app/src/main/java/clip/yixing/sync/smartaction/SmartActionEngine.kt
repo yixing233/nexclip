@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.widget.Toast
 import androidx.compose.ui.graphics.Color
+import clip.yixing.sync.service.ClipboardMonitorService
 import clip.yixing.sync.service.NotificationActionReceiver
 import clip.yixing.sync.ui.LucideIcons
 import clip.yixing.sync.util.SyncSettings
@@ -147,8 +148,7 @@ object SmartActionEngine {
                         targetIntent = copyIntent,
                         isBroadcast = true
                     ) { ctx ->
-                        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cm.setPrimaryClip(ClipData.newPlainText("Code", codeResult))
+                        ClipboardMonitorService.copyToClipboardInternal(ctx, ClipData.newPlainText("Code", codeResult), rawText = codeResult)
                         Toast.makeText(ctx, "已复制验证码: $codeResult", Toast.LENGTH_SHORT).show()
                     }
                 )
@@ -289,8 +289,7 @@ object SmartActionEngine {
                         targetIntent = copyIntent,
                         isBroadcast = true
                     ) { ctx ->
-                        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        cm.setPrimaryClip(ClipData.newPlainText("Color", colorHex))
+                        ClipboardMonitorService.copyToClipboardInternal(ctx, ClipData.newPlainText("Color", colorHex), rawText = colorHex)
                         Toast.makeText(ctx, "已复制色值: $colorHex", Toast.LENGTH_SHORT).show()
                     }
                 )
@@ -388,8 +387,7 @@ object SmartActionEngine {
                             targetIntent = copyIntent,
                             isBroadcast = true
                         ) { ctx ->
-                            val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            cm.setPrimaryClip(ClipData.newPlainText(rule.name, group1))
+                            ClipboardMonitorService.copyToClipboardInternal(ctx, ClipData.newPlainText(rule.name, group1), rawText = group1)
                             Toast.makeText(ctx, "已复制: $group1", Toast.LENGTH_SHORT).show()
                         }
                     }

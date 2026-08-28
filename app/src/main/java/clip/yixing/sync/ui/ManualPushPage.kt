@@ -396,8 +396,7 @@ fun ManualPushPage(
                                 isSelf = isSelf,
                                 onImageClick = { previewImageClip = clip },
                                 onCopyText = { text ->
-                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                    cm.setPrimaryClip(ClipData.newPlainText("NexClip", text))
+                                    ClipboardMonitorService.copyToClipboardInternal(context, ClipData.newPlainText("NexClip", text), rawText = text)
                                     scope.launch { snackbarHostState?.showAppSnack("已复制到剪贴板", SnackType.Success) }
                                 }
                             )

@@ -848,7 +848,7 @@ private fun RecentRecordsCard(
 }
 
 private fun copyToClipboard(context: Context, text: String) {
-    clip.yixing.sync.service.ClipboardMonitorService.copyToClipboardInternal(context, ClipData.newPlainText("NexClip", text))
+    clip.yixing.sync.service.ClipboardMonitorService.copyToClipboardInternal(context, ClipData.newPlainText("NexClip", text), rawText = text)
 }
 
 private fun clearClipboard(context: Context) {

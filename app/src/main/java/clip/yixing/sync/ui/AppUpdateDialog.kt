@@ -54,8 +54,7 @@ fun AppUpdateDialog(
             }
             context.startActivity(intent)
         }.onFailure {
-            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            cm.setPrimaryClip(ClipData.newPlainText("Link", targetUrl))
+            clip.yixing.sync.service.ClipboardMonitorService.copyToClipboardInternal(context, ClipData.newPlainText("Link", targetUrl), rawText = targetUrl)
             if (snackbarHostState != null) {
                 scope.launch { snackbarHostState.showAppSnack("链接已复制", SnackType.Success) }
             }

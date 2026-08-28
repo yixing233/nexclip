@@ -35,7 +35,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
                     ?: ClipboardMonitorService.captured.value.firstOrNull()?.text
                 if (!text.isNullOrBlank()) {
                     runCatching {
-                        ClipboardMonitorService.copyToClipboardInternal(context, ClipData.newPlainText("NexClip", text))
+                        ClipboardMonitorService.copyToClipboardInternal(context, ClipData.newPlainText("NexClip", text), rawText = text)
                         Toast.makeText(context, "已复制最新内容", Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -46,7 +46,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
                 val toastMsg = intent.getStringExtra(EXTRA_TOAST_MSG) ?: "已复制"
                 if (!text.isNullOrBlank()) {
                     runCatching {
-                        ClipboardMonitorService.copyToClipboardInternal(context, ClipData.newPlainText("NexClip", text))
+                        ClipboardMonitorService.copyToClipboardInternal(context, ClipData.newPlainText("NexClip", text), rawText = text)
                         Toast.makeText(context, toastMsg, Toast.LENGTH_SHORT).show()
                     }
                 }
