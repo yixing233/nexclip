@@ -269,6 +269,20 @@ public sealed partial class SettingsPage : Page
         ResetContentScroll();   // 切换分组回到顶部
     }
 
+    /// <summary>对外提供快速跳转到“关于”分组的能力。</summary>
+    public void NavigateToAbout()
+    {
+        foreach (var item in NavView.FooterMenuItems)
+        {
+            if (item is NavigationViewItem nvi && (nvi.Tag as string) == "about")
+            {
+                NavView.SelectedItem = nvi;
+                ShowGroup("about");
+                return;
+            }
+        }
+    }
+
     /// <summary>
     /// 将当前分组滚动到顶部。窗口隐藏后再次打开时也会调用，使用低优先级队列
     /// 确保内容已经完成测量，避免 ChangeView 在布局前被忽略。

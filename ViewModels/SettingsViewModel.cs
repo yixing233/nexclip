@@ -221,7 +221,7 @@ public partial class SettingsViewModel : ObservableObject
 
     public string VersionText { get; } = "v" + (
         (System.Attribute.GetCustomAttribute(typeof(SettingsViewModel).Assembly, typeof(System.Reflection.AssemblyInformationalVersionAttribute)) as System.Reflection.AssemblyInformationalVersionAttribute)?.InformationalVersion?.Split('+')[0]
-        ?? "20260828.02");
+        ?? "20260828.01");
 
     private readonly UpdateService _updateService = new();
 
@@ -1187,38 +1187,7 @@ public partial class SettingsViewModel : ObservableObject
             {
                 if (result.HasUpdate)
                 {
-                    HasNewVersion = true;
-                    LatestVersionText = $"v{result.LatestVersion}";
-                    UpdateReleaseNotes = string.IsNullOrWhiteSpace(result.ReleaseNotes) ? "有新版本可用。" : result.ReleaseNotes;
-                    UpdateReleaseUrl = string.IsNullOrWhiteSpace(result.ReleaseUrl) ? "https://github.com/yixing233/nexclip/releases" : result.ReleaseUrl;
-                    UpdateDownloadUrl = result.DownloadUrl;
-                    UpdateSha256 = result.Sha256;
-                    UpdateFileSize = result.FileSize;
-                    var isDirect = string.Equals(_svc.Settings.UpdateSource, "direct", StringComparison.OrdinalIgnoreCase);
-                    UpdateSourceLabel = isDirect ? "直连加速" : "GitHub 官方源";
-                    UpdateStatusText = $"发现新版本 v{result.LatestVersion} ({UpdateSourceLabel})";
-                    
-                    // 重置下载状态并检查本地是否已存在完整的安装包
-                    IsDownloadingUpdate = false;
-                    IsUpdateDownloaded = false;
-                    UpdateDownloadProgress = 0;
-                    DownloadedInstallerPath = null;
-
-                    var tempDir = Path.Combine(Path.GetTempPath(), "NexClip_Update");
-                    var expectedPath = Path.Combine(tempDir, $"NexClip_Setup_v{result.LatestVersion}_x64.exe");
-                    if (File.Exists(expectedPath))
-                    {
-                        if (string.IsNullOrWhiteSpace(result.Sha256) || UpdateService.VerifySha256(expectedPath, result.Sha256))
-                        {
-                            IsUpdateDownloaded = true;
-                            DownloadedInstallerPath = expectedPath;
-                            UpdateDownloadProgress = 100;
-                            UpdateDownloadSpeedText = "安装包已就绪";
-                            var len = new FileInfo(expectedPath).Length;
-                            UpdateDownloadBytesText = $"{UpdateService.FormatBytes(len)} / {UpdateService.FormatBytes(len)}";
-                        }
-                    }
-
+                    ApplyUpdateCheckResult(result);
                     ShowMessage($"发现新版本 v{result.LatestVersion} ({UpdateSourceLabel})，可直接在软件内下载更新。", InfoBarSeverity.Informational);
                 }
                 else
@@ -1246,6 +1215,45 @@ public partial class SettingsViewModel : ObservableObject
         finally
         {
             IsCheckingUpdate = false;
+        }
+    }
+
+    /// <summary>
+    /// 将后台或主动检查更新的结果应用到 ViewModel 状态中。
+    /// </summary>
+    public void ApplyUpdateCheckResult(UpdateCheckResult result)
+    {
+        if (!result.Success || !result.HasUpdate) return;
+
+        HasNewVersion = true;
+        LatestVersionText = $"v{result.LatestVersion}";
+        UpdateReleaseNotes = string.IsNullOrWhiteSpace(result.ReleaseNotes) ? "有新版本可用。" : result.ReleaseNotes;
+        UpdateReleaseUrl = string.IsNullOrWhiteSpace(result.ReleaseUrl) ? "https://github.com/yixing233/nexclip/releases" : result.ReleaseUrl;
+        UpdateDownloadUrl = result.DownloadUrl;
+        UpdateSha256 = result.Sha256;
+        UpdateFileSize = result.FileSize;
+        var isDirect = string.Equals(_svc.Settings.UpdateSource, "direct", StringComparison.OrdinalIgnoreCase);
+        UpdateSourceLabel = isDirect ? "直连加速" : "GitHub 官方源";
+        UpdateStatusText = $"发现新版本 v{result.LatestVersion} ({UpdateSourceLabel})";
+
+        IsDownloadingUpdate = false;
+        IsUpdateDownloaded = false;
+        UpdateDownloadProgress = 0;
+        DownloadedInstallerPath = null;
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "NexClip_Update");
+        var expectedPath = Path.Combine(tempDir, $"NexClip_Setup_v{result.LatestVersion}_x64.exe");
+        if (File.Exists(expectedPath))
+        {
+            if (string.IsNullOrWhiteSpace(result.Sha256) || UpdateService.VerifySha256(expectedPath, result.Sha256))
+            {
+                IsUpdateDownloaded = true;
+                DownloadedInstallerPath = expectedPath;
+                UpdateDownloadProgress = 100;
+                UpdateDownloadSpeedText = "安装包已就绪";
+                var len = new FileInfo(expectedPath).Length;
+                UpdateDownloadBytesText = $"{UpdateService.FormatBytes(len)} / {UpdateService.FormatBytes(len)}";
+            }
         }
     }
 

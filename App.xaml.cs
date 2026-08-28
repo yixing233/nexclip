@@ -185,7 +185,7 @@ public partial class App : Application
         Services.Tray = new TrayIconService(
             () => dispatcher?.TryEnqueue(ToggleClipboardWindow),
             () => dispatcher?.TryEnqueue(ShowClipboardWindow),
-            () => dispatcher?.TryEnqueue(OpenSettings),
+            () => dispatcher?.TryEnqueue(() => OpenSettings()),
             () => dispatcher?.TryEnqueue(ExitApp));
         Services.Tray.Initialize();
         WireTrayState(Services);
@@ -220,30 +220,39 @@ public partial class App : Application
                 await Task.Delay(3000);
                 try
                 {
-                    var rawVersion = (System.Attribute.GetCustomAttribute(typeof(App).Assembly, typeof(System.Reflection.AssemblyInformationalVersionAttribute)) as System.Reflection.AssemblyInformationalVersionAttribute)?.InformationalVersion?.Split('+')[0] ?? "20260828.02";
+                    var rawVersion = (System.Attribute.GetCustomAttribute(typeof(App).Assembly, typeof(System.Reflection.AssemblyInformationalVersionAttribute)) as System.Reflection.AssemblyInformationalVersionAttribute)?.InformationalVersion?.Split('+')[0] ?? "20260828.01";
                     var updateService = new UpdateService();
                     var result = await updateService.CheckForUpdateAsync(rawVersion, Services.Settings.UpdateSource, Services.Settings.ServerUrl);
                     if (result.Success && result.HasUpdate)
                     {
                         dispatcher?.TryEnqueue(() =>
                         {
+                            Services.SettingsVm.ApplyUpdateCheckResult(result);
                             var action = new SmartAction
                             {
                                 Kind = SmartActionKind.Url,
                                 Title = $"发现新版本 v{result.LatestVersion}",
-                                Subtitle = string.IsNullOrWhiteSpace(result.ReleaseNotes) ? "检测到新版本发布，点击前往下载更新" : result.ReleaseNotes.Split('\n')[0].Trim(),
-                                Icon = Lucide.DownloadAccent,
-                                PrimaryButtonText = "前往下载",
-                                PrimaryButtonIcon = Lucide.DownloadAccent,
+                                Subtitle = string.IsNullOrWhiteSpace(result.ReleaseNotes) ? "检测到新版本发布，点击即可在应用内直接下载更新" : result.ReleaseNotes.Split('\n')[0].Trim(),
+                                Icon = Lucide.SparklesAccent,
+                                PrimaryButtonText = "立即更新",
+                                PrimaryButtonIcon = Lucide.DownloadWhite,
                                 PrimaryAction = () =>
                                 {
-                                    var url = result.DownloadUrl ?? result.ReleaseUrl ?? "https://github.com/yixing233/nexclip/releases";
-                                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+                                    OpenSettings("about");
+                                    if (Services.SettingsVm.CanInstallUpdate)
+                                    {
+                                        Services.SettingsVm.InstallUpdate();
+                                    }
+                                    else if (Services.SettingsVm.CanDownloadUpdate)
+                                    {
+                                        _ = Services.SettingsVm.DownloadUpdateCommand.ExecuteAsync(null);
+                                    }
                                 },
                                 SecondaryButtonText = "查看详情",
+                                SecondaryButtonIcon = Lucide.ExternalLink,
                                 SecondaryAction = () =>
                                 {
-                                    OpenSettings();
+                                    OpenSettings("about");
                                 }
                             };
                             ShowSmartActionToast(action);
@@ -321,7 +330,7 @@ public partial class App : Application
     }
 
     /// <summary>打开设置窗口(托盘菜单 / 剪贴板窗口按钮)。</summary>
-    public static void OpenSettings()
+    public static void OpenSettings(string? targetTag = null)
     {
         try
         {
@@ -334,6 +343,10 @@ public partial class App : Application
                 isNewWindow = true;
             }
             SettingsWindow.PrepareForShow(isNewWindow);
+            if (targetTag == "about")
+            {
+                SettingsWindow.NavigateToAbout();
+            }
             SettingsWindow.AppWindow.Show();
             SettingsWindow.Activate();
             var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(SettingsWindow);

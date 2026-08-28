@@ -1,4 +1,4 @@
-﻿using Microsoft.UI.Windowing;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using NexClip.Desktop.Services;
 using Windows.Graphics;
@@ -57,6 +57,12 @@ public sealed partial class SettingsWindow : Window
         {
             CenterOnCursorMonitor();
         }
+    }
+
+    /// <summary>跳转到“关于”页面。</summary>
+    public void NavigateToAbout()
+    {
+        SettingsHost.NavigateToAbout();
     }
 
     private void CenterOnCursorMonitor()
