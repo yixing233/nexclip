@@ -24,7 +24,7 @@ NexClip 是一套专为多端设备打造的现代化、轻量高效跨平台剪
 
 | 产物文件 | 适用平台 | 文件大小 | SHA256 校验码 |
 | :--- | :--- | :--- | :--- |
-| **`NexClip_Setup_v20260825.02_x64.exe`** | Windows 10 (1809+) / Windows 11 (x64) | 22.03 MB | `1a586a4873bedd3318a43f99ce7d138c5c4e0aa3bb3ebe1db02f7cabbfcfd264` |
+| **`NexClip_Setup_v20260825.02_x64.exe`** | Windows 10 (1809+) / Windows 11 (x64) | 17.71 MB | `6dcdeb9041833baad1af6962453db48d152a4fe1eda5b0817f92d23ed4fd8eaf` |
 | **`NexClip_v20260825.02_Android.apk`** | Android 8.0+ (推荐 HyperOS / MIUI) | 15.28 MB | `94c23181737b8056fe2187302476e6ac82a620c18810643921ef50a7b2a63391` |
 
 ---
