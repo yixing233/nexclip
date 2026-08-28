@@ -161,6 +161,13 @@ public static class Lucide
     public static ImageSource Save => Get("save", "primary");
     public static ImageSource ZoomIn => Get("zoom-in", "primary");
     public static ImageSource X => Get("x", "secondary");
+    public static ImageSource Check => Get("check", "primary");
+    public static ImageSource CheckWhite => Get("check", "#F8FAFC");
+    public static ImageSource CheckCircle => Get("check-circle", "primary");
+    public static ImageSource CheckCircleWhite => Get("check-circle", "#F8FAFC");
+    public static ImageSource Sparkles => Get("sparkles", "primary");
+    public static ImageSource SparklesAccent => Get("sparkles", "#2563EB");
+    public static ImageSource SparklesWhite => Get("sparkles", "#F8FAFC");
 
     /// <summary>获取图标对应的纯白高对比度变体 (用于深色/强调色背景主按钮)。</summary>
     public static ImageSource GetWhiteVariant(ImageSource? icon)

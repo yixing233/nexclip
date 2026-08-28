@@ -1261,32 +1261,146 @@
                                     TextWrapping="Wrap"
                                     LineHeight="20" />
 
-                                <!-- 发现新版本提示卡片 -->
+                                <!-- 发现新版本提示卡片: Fluent 2 现代卡片设计, 高对比度, 支持端内下载进度与安装 -->
                                 <Border
                                     Visibility="{Binding HasNewVersion, Mode=OneWay, Converter={StaticResource BoolToVis}}"
-                                    Background="{ThemeResource AccentFillColorTertiaryBrush}"
-                                    BorderBrush="{ThemeResource AccentFillColorSecondaryBrush}"
+                                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                     BorderThickness="1"
-                                    CornerRadius="8"
-                                    Padding="16">
-                                    <StackPanel Spacing="10">
-                                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                            <Image Source="{x:Bind services:Lucide.DownloadAccent}" Width="16" Height="16" VerticalAlignment="Center" />
-                                            <TextBlock Text="{Binding LatestVersionText}" Style="{ThemeResource BodyStrongTextBlockStyle}" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" VerticalAlignment="Center" />
-                                            <Border Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="4" Padding="6,2">
-                                                <TextBlock Text="NEW" FontSize="10" FontWeight="Bold" Foreground="White" />
-                                            </Border>
-                                        </StackPanel>
-                                        <TextBlock Text="{Binding UpdateReleaseNotes}" TextWrapping="Wrap" MaxHeight="120" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" LineHeight="18" />
-                                        <StackPanel Orientation="Horizontal" Spacing="8">
-                                            <Button Style="{StaticResource AccentButtonStyle}" Click="OpenRelease_Click">
-                                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                                    <Image Source="{x:Bind services:Lucide.ExternalLinkWhite}" Width="14" Height="14" />
-                                                    <TextBlock Text="前往查看与下载新版本" />
+                                    CornerRadius="10"
+                                    Margin="0,4,0,0">
+                                    <Grid>
+                                        <!-- 左侧 Accent 状态柱 -->
+                                        <Border
+                                            Width="4"
+                                            HorizontalAlignment="Left"
+                                            Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                            CornerRadius="10,0,0,10" />
+
+                                        <StackPanel Spacing="14" Margin="18,16,18,16">
+                                            <!-- 头部: 图标 + 发现新版本 + 版本号 + NEW 胶囊 + 通道标签 -->
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                                    <Border Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="6" Width="26" Height="26">
+                                                        <Image Source="{x:Bind services:Lucide.SparklesWhite}" Width="14" Height="14" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                    </Border>
+                                                    <TextBlock Text="发现新版本" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center" />
+                                                    <TextBlock Text="{Binding LatestVersionText}" FontWeight="Bold" FontSize="14" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" VerticalAlignment="Center" />
+                                                    <Border Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="4" Padding="6,2" VerticalAlignment="Center">
+                                                        <TextBlock Text="NEW" FontSize="10" FontWeight="Bold" Foreground="White" />
+                                                    </Border>
                                                 </StackPanel>
-                                            </Button>
+
+                                                <!-- 右侧通道胶囊 -->
+                                                <Border
+                                                    Grid.Column="1"
+                                                    Background="{ThemeResource LayerFillColorAltBrush}"
+                                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="12"
+                                                    Padding="10,3"
+                                                    VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding UpdateSourceLabel}" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                                </Border>
+                                            </Grid>
+
+                                            <!-- 更新日志内容容器 (带滚动与高对比度文字) -->
+                                            <Border
+                                                Background="{ThemeResource LayerFillColorDefaultBrush}"
+                                                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="8"
+                                                Padding="14,12">
+                                                <ScrollViewer MaxHeight="160" VerticalScrollBarVisibility="Auto">
+                                                    <TextBlock
+                                                        Text="{Binding UpdateReleaseNotes}"
+                                                        TextWrapping="Wrap"
+                                                        FontSize="12"
+                                                        Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                                        LineHeight="20" />
+                                                </ScrollViewer>
+                                            </Border>
+
+                                            <!-- 下载进度条 (下载中可见) -->
+                                            <StackPanel
+                                                Spacing="6"
+                                                Visibility="{Binding IsDownloadingUpdate, Converter={StaticResource BoolToVis}}">
+                                                <ProgressBar
+                                                    Value="{Binding UpdateDownloadProgress}"
+                                                    Maximum="100"
+                                                    IsIndeterminate="False"
+                                                    Height="6"
+                                                    CornerRadius="3"
+                                                    Foreground="{ThemeResource AccentFillColorDefaultBrush}" />
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Text="{Binding UpdateDownloadBytesText}" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                                                    <TextBlock Grid.Column="1" Text="{Binding UpdateDownloadSpeedText}" FontSize="11" FontWeight="SemiBold" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" VerticalAlignment="Center" />
+                                                </Grid>
+                                            </StackPanel>
+
+                                            <!-- 操作按钮工具栏 (多状态切换) -->
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <!-- 状态 A: 未下载 -> 立即下载更新 (主操作) -->
+                                                <Button
+                                                    Style="{StaticResource AccentButtonStyle}"
+                                                    Command="{Binding DownloadUpdateCommand}"
+                                                    Visibility="{Binding CanDownloadUpdate, Converter={StaticResource BoolToVis}}">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <Image Source="{x:Bind services:Lucide.DownloadWhite}" Width="14" Height="14" />
+                                                        <TextBlock Text="立即下载更新" />
+                                                    </StackPanel>
+                                                </Button>
+
+                                                <!-- 状态 B: 下载中 -> 取消下载 -->
+                                                <Button
+                                                    Command="{Binding CancelDownloadUpdateCommand}"
+                                                    Visibility="{Binding IsDownloadingUpdate, Converter={StaticResource BoolToVis}}">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <Image Source="{x:Bind services:Lucide.X}" Width="14" Height="14" />
+                                                        <TextBlock Text="取消下载" />
+                                                    </StackPanel>
+                                                </Button>
+
+                                                <!-- 状态 C: 下载完成 -> 立即安装并重启 (主操作) -->
+                                                <Button
+                                                    Style="{StaticResource AccentButtonStyle}"
+                                                    Command="{Binding InstallUpdateCommand}"
+                                                    Visibility="{Binding CanInstallUpdate, Converter={StaticResource BoolToVis}}">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <Image Source="{x:Bind services:Lucide.CheckCircleWhite}" Width="14" Height="14" />
+                                                        <TextBlock Text="立即安装并重启" />
+                                                    </StackPanel>
+                                                </Button>
+
+                                                <!-- 状态 C 辅助: 打开安装包目录 -->
+                                                <Button
+                                                    Click="OpenDownloadFolder_Click"
+                                                    Visibility="{Binding CanInstallUpdate, Converter={StaticResource BoolToVis}}">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <Image Source="{x:Bind services:Lucide.FolderOpen}" Width="14" Height="14" />
+                                                        <TextBlock Text="打开文件位置" />
+                                                    </StackPanel>
+                                                </Button>
+
+                                                <!-- 通用辅助按钮: 前往网页发布页 -->
+                                                <Button Click="OpenRelease_Click">
+                                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                                        <Image Source="{x:Bind services:Lucide.ExternalLink}" Width="14" Height="14" />
+                                                        <TextBlock Text="在浏览器中查看" />
+                                                    </StackPanel>
+                                                </Button>
+                                            </StackPanel>
                                         </StackPanel>
-                                    </StackPanel>
+                                    </Grid>
                                 </Border>
 
                                 <!-- 操作按钮栏:检查更新 / 打开主页 / 复制信息 -->

@@ -237,6 +237,8 @@ public partial class SettingsViewModel : ObservableObject
     private string updateStatusText = "";
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanDownloadUpdate))]
+    [NotifyPropertyChangedFor(nameof(CanInstallUpdate))]
     private bool hasNewVersion;
 
     [ObservableProperty]
@@ -250,6 +252,41 @@ public partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private string? updateDownloadUrl;
+
+    [ObservableProperty]
+    private string? updateSha256;
+
+    [ObservableProperty]
+    private long? updateFileSize;
+
+    [ObservableProperty]
+    private string updateSourceLabel = "直连加速";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanDownloadUpdate))]
+    private bool isDownloadingUpdate;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanDownloadUpdate))]
+    [NotifyPropertyChangedFor(nameof(CanInstallUpdate))]
+    private bool isUpdateDownloaded;
+
+    public bool CanDownloadUpdate => HasNewVersion && !IsDownloadingUpdate && !IsUpdateDownloaded;
+    public bool CanInstallUpdate => HasNewVersion && IsUpdateDownloaded;
+
+    [ObservableProperty]
+    private double updateDownloadProgress;
+
+    [ObservableProperty]
+    private string updateDownloadSpeedText = "";
+
+    [ObservableProperty]
+    private string updateDownloadBytesText = "";
+
+    [ObservableProperty]
+    private string? downloadedInstallerPath;
+
+    private CancellationTokenSource? _downloadCts;
 
     public SettingsViewModel(AppServices svc)
     {
@@ -1155,14 +1192,40 @@ public partial class SettingsViewModel : ObservableObject
                     UpdateReleaseNotes = string.IsNullOrWhiteSpace(result.ReleaseNotes) ? "有新版本可用。" : result.ReleaseNotes;
                     UpdateReleaseUrl = string.IsNullOrWhiteSpace(result.ReleaseUrl) ? "https://github.com/yixing233/nexclip/releases" : result.ReleaseUrl;
                     UpdateDownloadUrl = result.DownloadUrl;
+                    UpdateSha256 = result.Sha256;
+                    UpdateFileSize = result.FileSize;
                     var isDirect = string.Equals(_svc.Settings.UpdateSource, "direct", StringComparison.OrdinalIgnoreCase);
-                    var sourceLabel = isDirect ? "直连加速" : "GitHub";
-                    UpdateStatusText = $"发现新版本 v{result.LatestVersion} ({sourceLabel})";
-                    ShowMessage($"发现新版本 v{result.LatestVersion} ({sourceLabel})，可点击前往查看下载。", InfoBarSeverity.Informational);
+                    UpdateSourceLabel = isDirect ? "直连加速" : "GitHub 官方源";
+                    UpdateStatusText = $"发现新版本 v{result.LatestVersion} ({UpdateSourceLabel})";
+                    
+                    // 重置下载状态并检查本地是否已存在完整的安装包
+                    IsDownloadingUpdate = false;
+                    IsUpdateDownloaded = false;
+                    UpdateDownloadProgress = 0;
+                    DownloadedInstallerPath = null;
+
+                    var tempDir = Path.Combine(Path.GetTempPath(), "NexClip_Update");
+                    var expectedPath = Path.Combine(tempDir, $"NexClip_Setup_v{result.LatestVersion}_x64.exe");
+                    if (File.Exists(expectedPath))
+                    {
+                        if (string.IsNullOrWhiteSpace(result.Sha256) || UpdateService.VerifySha256(expectedPath, result.Sha256))
+                        {
+                            IsUpdateDownloaded = true;
+                            DownloadedInstallerPath = expectedPath;
+                            UpdateDownloadProgress = 100;
+                            UpdateDownloadSpeedText = "安装包已就绪";
+                            var len = new FileInfo(expectedPath).Length;
+                            UpdateDownloadBytesText = $"{UpdateService.FormatBytes(len)} / {UpdateService.FormatBytes(len)}";
+                        }
+                    }
+
+                    ShowMessage($"发现新版本 v{result.LatestVersion} ({UpdateSourceLabel})，可直接在软件内下载更新。", InfoBarSeverity.Informational);
                 }
                 else
                 {
                     HasNewVersion = false;
+                    IsDownloadingUpdate = false;
+                    IsUpdateDownloaded = false;
                     UpdateStatusText = "当前已是最新版本";
                     ShowMessage("当前已是最新版本 (" + VersionText + ")", InfoBarSeverity.Success);
                 }
@@ -1183,6 +1246,95 @@ public partial class SettingsViewModel : ObservableObject
         finally
         {
             IsCheckingUpdate = false;
+        }
+    }
+
+    [RelayCommand]
+    public async Task DownloadUpdateAsync()
+    {
+        if (IsDownloadingUpdate || string.IsNullOrWhiteSpace(UpdateDownloadUrl)) return;
+
+        var targetVer = LatestVersionText.TrimStart('v', 'V').Trim();
+        if (string.IsNullOrWhiteSpace(targetVer)) return;
+
+        _downloadCts?.Cancel();
+        _downloadCts = new CancellationTokenSource();
+        var ct = _downloadCts.Token;
+
+        IsDownloadingUpdate = true;
+        IsUpdateDownloaded = false;
+        UpdateDownloadProgress = 0;
+        UpdateDownloadSpeedText = "正在连接下载节点...";
+        UpdateDownloadBytesText = "";
+
+        try
+        {
+            var progress = new Progress<UpdateProgressInfo>(info =>
+            {
+                UpdateDownloadProgress = info.ProgressPercentage;
+                UpdateDownloadSpeedText = info.FormattedSpeed;
+                UpdateDownloadBytesText = info.FormattedProgress;
+            });
+
+            var installerPath = await _updateService.DownloadUpdateAsync(
+                downloadUrl: UpdateDownloadUrl,
+                targetVersion: targetVer,
+                expectedSha256: UpdateSha256,
+                progress: progress,
+                cancellationToken: ct
+            );
+
+            DownloadedInstallerPath = installerPath;
+            IsUpdateDownloaded = true;
+            IsDownloadingUpdate = false;
+            UpdateDownloadProgress = 100;
+            UpdateDownloadSpeedText = "下载完成";
+            ShowMessage("新版本安装包已就绪，点击'立即安装并重启'即可完成升级。", InfoBarSeverity.Success);
+        }
+        catch (OperationCanceledException)
+        {
+            IsDownloadingUpdate = false;
+            UpdateDownloadSpeedText = "已取消下载";
+            ShowMessage("已取消安装包下载", InfoBarSeverity.Informational);
+        }
+        catch (Exception ex)
+        {
+            IsDownloadingUpdate = false;
+            IsUpdateDownloaded = false;
+            UpdateDownloadSpeedText = "下载失败";
+            Log.Error("下载更新安装包失败", ex);
+            ShowMessage($"下载更新失败：{ex.Message}", InfoBarSeverity.Error);
+        }
+    }
+
+    [RelayCommand]
+    public void CancelDownloadUpdate()
+    {
+        try
+        {
+            _downloadCts?.Cancel();
+        }
+        catch { }
+    }
+
+    [RelayCommand]
+    public void InstallUpdate()
+    {
+        if (string.IsNullOrWhiteSpace(DownloadedInstallerPath) || !File.Exists(DownloadedInstallerPath))
+        {
+            ShowMessage("安装包文件不存在，请重新下载。", InfoBarSeverity.Warning);
+            IsUpdateDownloaded = false;
+            return;
+        }
+
+        try
+        {
+            UpdateService.LaunchInstallerAndExit(DownloadedInstallerPath);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("启动安装器失败", ex);
+            ShowMessage($"启动安装程序失败：{ex.Message}", InfoBarSeverity.Error);
         }
     }
 }

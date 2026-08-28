@@ -333,6 +333,22 @@ public sealed partial class SettingsPage : Page
         }
     }
 
+    private void OpenDownloadFolder_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), "NexClip_Update");
+            if (Directory.Exists(tempDir))
+            {
+                Process.Start(new ProcessStartInfo("explorer.exe", tempDir) { UseShellExecute = true });
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error("打开下载目录失败", ex);
+        }
+    }
+
     // ========== 数据管理:导入 / 导出 ==========
 
     private async void ExportButton_Click(object sender, RoutedEventArgs e)
