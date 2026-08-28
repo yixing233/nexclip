@@ -1,6 +1,6 @@
-# NexClip v20260825.02 - 双端更新通道切换与平滑覆盖安装升级
+# NexClip v20260828.01 - 双端更新通道切换与平滑覆盖安装升级
 
-NexClip 是一套专为多端设备打造的现代化、轻量高效跨平台剪贴板同步与局域网文件/消息流转系统。本次 **v20260825.02** 重点增强了多端更新通道调度、网络容灾降级机制，并彻底解决了 Windows 端覆盖安装时的进程占用卡死问题。
+NexClip 是一套专为多端设备打造的现代化、轻量高效跨平台剪贴板同步与局域网文件/消息流转系统。本次 **v20260828.01** 重点增强了多端更新通道调度、网络容灾降级机制，并彻底解决了 Windows 端覆盖安装时的进程占用卡死问题。
 
 ---
 
@@ -11,7 +11,8 @@ NexClip 是一套专为多端设备打造的现代化、轻量高效跨平台剪
 - **国内高速直连**：选中直连加速后，客户端优先向服务端直连节点探测最新版本并下发直连高速安装包，免去大陆网络下 GitHub 访问受限困扰。
 - **智能网络容灾降级**：若 GitHub 官方源发生连接超时或不可达，客户端将自动无缝回退至服务端直连源探测版本，保障更新链路高可用。
 
-### 2. Windows 桌面端平滑覆盖安装优化
+### 2. Windows 桌面端平滑覆盖安装与视觉曲率优化
+- **Native AOT 现代安装向导**：全面优化安装器与主程序图标卡片、胶囊徽章与操作按钮的 Fluent Design 圆角曲率。
 - **进程自动平滑终止**：修复旧版安装程序在应用运行时覆盖升级被系统 Restart Manager 阻塞或文件锁死卡住的问题。
 - **无感生命周期接管**：安装向导在初始化与解包前自动安全终止旧版进程并释放句柄，升级后即可无缝重启启动。
 
@@ -24,8 +25,8 @@ NexClip 是一套专为多端设备打造的现代化、轻量高效跨平台剪
 
 | 产物文件 | 适用平台 | 文件大小 | SHA256 校验码 |
 | :--- | :--- | :--- | :--- |
-| **`NexClip_Setup_v20260825.02_x64.exe`** | Windows 10 (1809+) / Windows 11 (x64) | 17.71 MB | `6dcdeb9041833baad1af6962453db48d152a4fe1eda5b0817f92d23ed4fd8eaf` |
-| **`NexClip_v20260825.02_Android.apk`** | Android 8.0+ (推荐 HyperOS / MIUI) | 15.28 MB | `94c23181737b8056fe2187302476e6ac82a620c18810643921ef50a7b2a63391` |
+| **`NexClip_Setup_v20260828.01_x64.exe`** | Windows 10 (1809+) / Windows 11 (x64) | 17.71 MB | `bbc57c6186df9750fcebc7b70de4c28558f4baa528ad31adf4af7c6f16ec4df7` |
+| **`NexClip_v20260828.01_Android.apk`** | Android 8.0+ (推荐 HyperOS / MIUI) | 15.28 MB | `45854ff9cf129850b7d7abb8cfd42be8b13b6eb45f2645d26500ad6fb5ee08ca` |
 
 ---
 
@@ -33,8 +34,8 @@ NexClip 是一套专为多端设备打造的现代化、轻量高效跨平台剪
 
 - **GitHub 官方源**：[GitHub Releases](https://github.com/yixing233/nexclip/releases)
 - **服务端直连加速**：
-  - Windows 安装包：`https://nexclip.157342.xyz/releases/NexClip_Setup_v20260825.02_x64.exe`
-  - Android 安装包：`https://nexclip.157342.xyz/releases/NexClip_v20260825.02_Android.apk`
+  - Windows 安装包：`https://nexclip.157342.xyz/releases/NexClip_Setup_v20260828.01_x64.exe`
+  - Android 安装包：`https://nexclip.157342.xyz/releases/NexClip_v20260828.01_Android.apk`
   - Web 控制台与门户：[https://nexclip.157342.xyz](https://nexclip.157342.xyz)
 
 ---
