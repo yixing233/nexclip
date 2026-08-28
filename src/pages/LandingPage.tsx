@@ -38,7 +38,7 @@ const releaseInfo = {
     size: '15.3 MB',
     serverUrl: '/releases/NexClip_v20260828.01_Android.apk',
     githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260828.01/NexClip_v20260828.01_Android.apk',
-    sha256: '45854ff9cf129850b7d7abb8cfd42be8b13b6eb45f2645d26500ad6fb5ee08ca',
+    sha256: '48c61679fd80e060695732e27bdcc484e7c61c8b9a94d563c41490983d2c4639',
   },
 }
 
