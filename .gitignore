@@ -1,6 +1,7 @@
 # Visual Studio / MSBuild 构建产物
 bin/
 obj/
+publish/
 AppPackages/
 BundleArtifacts/
 Generated Files/
