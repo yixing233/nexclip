@@ -220,7 +220,7 @@ public partial class App : Application
                 await Task.Delay(3000);
                 try
                 {
-                    var rawVersion = (System.Attribute.GetCustomAttribute(typeof(App).Assembly, typeof(System.Reflection.AssemblyInformationalVersionAttribute)) as System.Reflection.AssemblyInformationalVersionAttribute)?.InformationalVersion?.Split('+')[0] ?? "20260828.01";
+                    var rawVersion = (System.Attribute.GetCustomAttribute(typeof(App).Assembly, typeof(System.Reflection.AssemblyInformationalVersionAttribute)) as System.Reflection.AssemblyInformationalVersionAttribute)?.InformationalVersion?.Split('+')[0] ?? "20260828.02";
                     var updateService = new UpdateService();
                     var result = await updateService.CheckForUpdateAsync(rawVersion, Services.Settings.UpdateSource, Services.Settings.ServerUrl);
                     if (result.Success && result.HasUpdate)

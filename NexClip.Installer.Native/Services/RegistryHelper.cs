@@ -8,7 +8,7 @@ public static class RegistryHelper
 {
     private const string UninstallRootKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\NexClip";
 
-    public static void RegisterUninstall(string installDir, string version = "20260828.01")
+    public static void RegisterUninstall(string installDir, string version = "20260828.02")
     {
         try
         {

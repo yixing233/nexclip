@@ -6,7 +6,7 @@ $desktopDir = Join-Path $root "desktop"
 $installerDir = Join-Path $desktopDir "NexClip.Installer.Native"
 $resourcesDir = Join-Path $installerDir "Resources"
 $releasesDir = "e:\Code\syncclipboard-releases"
-$version = "20260828.01"
+$version = "20260828.02"
 
 Write-Host ">>> 1. 编译 NexClip.Desktop 主程序 (Release win-x64, 轻量框架依赖)..." -ForegroundColor Cyan
 $tempStaging = Join-Path ([System.IO.Path]::GetTempPath()) "NexClip_Staging_$([Guid]::NewGuid().ToString('N'))"

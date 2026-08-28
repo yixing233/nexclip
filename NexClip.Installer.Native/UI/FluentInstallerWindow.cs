@@ -138,7 +138,7 @@ public class FluentInstallerWindow
                 if (File.Exists(exe))
                 {
                     var vi = FileVersionInfo.GetVersionInfo(exe);
-                    return vi.FileVersion ?? "20260828.01";
+                    return vi.FileVersion ?? "20260828.02";
                 }
             }
         }
@@ -729,7 +729,7 @@ public class FluentInstallerWindow
 
                 _targetProgress = 0.98;
                 _statusText = "正在注册系统卸载信息...";
-                RegistryHelper.RegisterUninstall(_installDir, "20260828.01");
+                RegistryHelper.RegisterUninstall(_installDir, "20260828.02");
                 await Task.Delay(100);
 
                 // 5. 完成过渡 (98% -> 100%)
@@ -967,7 +967,7 @@ public class FluentInstallerWindow
         }
 
         string brand = "NexClip 剪贴板管理";
-        string verStr = "v20260828.01";
+        string verStr = "v20260828.02";
 
         var dummyLayout = new GdiPlus.RECTF(0, 0, S(600), S(100));
         GdiPlus.GdipMeasureString(g, brand, brand.Length, _fontTitle, ref dummyLayout, IntPtr.Zero, out var brandBox, out _, out _);
