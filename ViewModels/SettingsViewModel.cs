@@ -221,7 +221,7 @@ public partial class SettingsViewModel : ObservableObject
 
     public string VersionText { get; } = "v" + (
         (System.Attribute.GetCustomAttribute(typeof(SettingsViewModel).Assembly, typeof(System.Reflection.AssemblyInformationalVersionAttribute)) as System.Reflection.AssemblyInformationalVersionAttribute)?.InformationalVersion?.Split('+')[0]
-        ?? "20260825.02");
+        ?? "20260828.01");
 
     private readonly UpdateService _updateService = new();
 

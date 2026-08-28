@@ -11,19 +11,19 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <UseWinUI>true</UseWinUI>
     <WindowsPackageType>None</WindowsPackageType>
-    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
-    <Version>20260825.02</Version>
-    <AssemblyVersion>2026.8.25.2</AssemblyVersion>
-    <FileVersion>2026.8.25.2</FileVersion>
-    <InformationalVersion>20260825.02</InformationalVersion>
+    <Version>20260828.01</Version>
+    <AssemblyVersion>2026.8.28.1</AssemblyVersion>
+    <FileVersion>2026.8.28.1</FileVersion>
+    <InformationalVersion>20260828.01</InformationalVersion>
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
     <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
     <SatelliteResourceLanguages>zh-Hans;zh-CN;en-US;en</SatelliteResourceLanguages>
     <WindowsSdkPackageVersion>10.0.19041.57</WindowsSdkPackageVersion>
-    <DefaultItemExcludes>$(DefaultItemExcludes);tmp\**;backup\**;server\**;server-node\**;android\**;web\**;syncclipboard-client\**;NexClip.Installer\**;installer\**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);tmp\**;backup\**;server\**;server-node\**;android\**;web\**;syncclipboard-client\**;NexClip.Installer\**;NexClip.Installer.Native\**;installer\**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
     <Content Include="Assets\lucide\*.svg">
@@ -60,5 +60,13 @@
   </ItemGroup>
   <Target Name="GenerateResourcesPri" AfterTargets="Build">
     <Copy SourceFiles="$(TargetDir)$(AssemblyName).pri" DestinationFiles="$(TargetDir)resources.pri" Condition="Exists('$(TargetDir)$(AssemblyName).pri')" />
+  </Target>
+  <Target Name="CopyPriAndXbfToPublish" AfterTargets="Publish">
+    <Copy SourceFiles="$(TargetDir)$(AssemblyName).pri" DestinationFolder="$(PublishDir)" Condition="Exists('$(TargetDir)$(AssemblyName).pri')" />
+    <Copy SourceFiles="$(TargetDir)resources.pri" DestinationFolder="$(PublishDir)" Condition="Exists('$(TargetDir)resources.pri')" />
+    <ItemGroup>
+      <_XbfFiles Include="$(TargetDir)**\*.xbf" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_XbfFiles)" DestinationFolder="$(PublishDir)%(RecursiveDir)" Condition="Exists('%(FullPath)')" />
   </Target>
 </Project>

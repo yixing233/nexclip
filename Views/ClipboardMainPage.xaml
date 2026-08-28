@@ -411,7 +411,7 @@
                                     <Button
                                         Padding="8,3"
                                         MinHeight="26"
-                                        CornerRadius="4"
+                                        CornerRadius="13"
                                         Background="{ThemeResource LayerFillColorDefaultBrush}"
                                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                         BorderThickness="1"
@@ -427,7 +427,7 @@
                                     <Button
                                         Padding="8,3"
                                         MinHeight="26"
-                                        CornerRadius="4"
+                                        CornerRadius="13"
                                         Background="{ThemeResource LayerFillColorDefaultBrush}"
                                         BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                                         BorderThickness="1"

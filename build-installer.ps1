@@ -3,18 +3,14 @@ $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
 $desktopDir = Join-Path $root "desktop"
-$installerDir = Join-Path $desktopDir "NexClip.Installer"
+$installerDir = Join-Path $desktopDir "NexClip.Installer.Native"
 $resourcesDir = Join-Path $installerDir "Resources"
 $releasesDir = "e:\Code\syncclipboard-releases"
-$version = "20260825.02"
+$version = "20260828.01"
 
-Write-Host ">>> 1. 编译 NexClip.Desktop 主程序 (Release win-x64)..." -ForegroundColor Cyan
-$mainAppOutput = Join-Path $desktopDir "bin\Release\net9.0-windows10.0.19041.0\win-x64"
-dotnet build "$desktopDir\NexClip.Desktop.csproj" -c Release
-
-if (!(Test-Path $mainAppOutput)) {
-    throw "主程序编译产物目录未找到: $mainAppOutput"
-}
+Write-Host ">>> 1. 编译 NexClip.Desktop 主程序 (Release win-x64, 轻量框架依赖)..." -ForegroundColor Cyan
+$tempStaging = Join-Path ([System.IO.Path]::GetTempPath()) "NexClip_Staging_$([Guid]::NewGuid().ToString('N'))"
+dotnet publish "$desktopDir\NexClip.Desktop.csproj" -c Release -r win-x64 -p:WindowsAppSDKSelfContained=false --self-contained false -p:PublishSingleFile=false -p:DebugType=none -o $tempStaging
 
 Write-Host ">>> 2. 准备 Payload 压缩包..." -ForegroundColor Cyan
 if (!(Test-Path $resourcesDir)) {
@@ -26,33 +22,32 @@ if (Test-Path $payloadZip) {
     Remove-Item $payloadZip -Force
 }
 
-$tempStaging = Join-Path ([System.IO.Path]::GetTempPath()) "NexClip_Staging_$([Guid]::NewGuid().ToString('N'))"
-New-Item -ItemType Directory -Path $tempStaging | Out-Null
-
 try {
     # 过滤拷贝主程序文件
     $excludePatterns = @("*.pdb", "publish*", "*onnxruntime*", "*DirectML*", "*NPUDetect*", "*NpuDetect*", "*Microsoft.Windows.Widgets*")
     
-    Get-ChildItem -Path $mainAppOutput -Recurse | ForEach-Object {
-        $relPath = $_.FullName.Substring($mainAppOutput.Length).TrimStart('\', '/')
-        
-        $shouldExclude = $false
+    Get-ChildItem -Path $tempStaging -Recurse | ForEach-Object {
+        $item = $_
         foreach ($pat in $excludePatterns) {
-            if ($relPath -like $pat -or $_.Name -like $pat) {
-                $shouldExclude = $true
+            if ($item.Name -like $pat) {
+                Remove-Item $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
                 break
             }
         }
-        
-        if (!$shouldExclude) {
-            $destPath = Join-Path $tempStaging $relPath
-            if ($_.PSIsContainer) {
-                if (!(Test-Path $destPath)) { New-Item -ItemType Directory -Path $destPath | Out-Null }
-            } else {
-                $destParent = Split-Path -Parent $destPath
-                if (!(Test-Path $destParent)) { New-Item -ItemType Directory -Path $destParent | Out-Null }
-                Copy-Item $_.FullName $destPath -Force
-            }
+    }
+
+    # 确保 XAML XBF 与 PRI 资源索引文件完整包含进 Staging
+    $binDir = Join-Path $desktopDir "bin\Release\net9.0-windows10.0.19041.0\win-x64"
+    if (Test-Path $binDir) {
+        Get-ChildItem -Path $binDir -Filter "*.pri" | ForEach-Object {
+            Copy-Item $_.FullName $tempStaging -Force
+        }
+        Get-ChildItem -Path $binDir -Filter "*.xbf" -Recurse | ForEach-Object {
+            $rel = $_.FullName.Substring($binDir.Length).TrimStart('\', '/')
+            $dest = Join-Path $tempStaging $rel
+            $destParent = Split-Path $dest -Parent
+            if (!(Test-Path $destParent)) { New-Item -ItemType Directory -Path $destParent -Force | Out-Null }
+            Copy-Item $_.FullName $dest -Force
         }
     }
 
@@ -68,9 +63,9 @@ finally {
     }
 }
 
-Write-Host ">>> 3. 单文件自包含发布编译 NexClip.Installer..." -ForegroundColor Cyan
-$installerPublishDir = Join-Path $desktopDir "bin\Release\CustomInstaller"
-dotnet publish "$installerDir\NexClip.Installer.csproj" -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o $installerPublishDir
+Write-Host ">>> 3. Native AOT 纯机器码编译 NexClip.Installer.Native..." -ForegroundColor Cyan
+$installerPublishDir = Join-Path $desktopDir "bin\Release\CustomInstallerNative"
+dotnet publish "$installerDir\NexClip.Installer.Native.csproj" -c Release -r win-x64 -p:PublishAot=true -o $installerPublishDir
 
 $installerExe = Join-Path $installerPublishDir "NexClip_Setup.exe"
 if (!(Test-Path $installerExe)) {
@@ -78,6 +73,8 @@ if (!(Test-Path $installerExe)) {
 }
 
 Write-Host ">>> 4. 归档发布安装包..." -ForegroundColor Cyan
+Get-Process | Where-Object { $_.ProcessName -like "*NexClip_Setup*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 200
 if (!(Test-Path $releasesDir)) {
     New-Item -ItemType Directory -Path $releasesDir | Out-Null
 }

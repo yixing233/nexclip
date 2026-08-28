@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>NexClip_Setup</AssemblyName>
+    <RootNamespace>NexClip.Installer.Native</RootNamespace>
+    <ApplicationIcon>..\Assets\icon.ico</ApplicationIcon>
+    <Version>20260828.01</Version>
+    <AssemblyVersion>2026.8.28.1</AssemblyVersion>
+    <FileVersion>2026.8.28.1</FileVersion>
+    <InformationalVersion>20260828.01</InformationalVersion>
+    
+    <!-- Native AOT 纯机器码编译 -->
+    <PublishAot>true</PublishAot>
+    <StripSymbols>true</StripSymbols>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <OptimizationPreference>Size</OptimizationPreference>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\payload.zip" Condition="Exists('Resources\payload.zip')" />
+    <EmbeddedResource Include="Resources\app_icon.png" Condition="Exists('Resources\app_icon.png')" />
+    <EmbeddedResource Include="Resources\app_icon.ico" Condition="Exists('Resources\app_icon.ico')" />
+  </ItemGroup>
+
+</Project>

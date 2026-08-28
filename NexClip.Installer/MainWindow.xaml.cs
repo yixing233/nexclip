@@ -92,11 +92,23 @@ public partial class MainWindow : Window
 
         try
         {
-            // 1. 平滑释放可能正在运行的 NexClip 进程
+            // 1. 检查并按需在线安装前置依赖 (.NET 9 Desktop Runtime / Windows App SDK)
+            InstallStatusTextBlock.Text = "正在检查系统运行环境依赖...";
+            await DependencyService.EnsureDependenciesAsync((progress, detail) =>
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    InstallProgressBar.Value = progress * 100;
+                    InstallDetailTextBlock.Text = $"{(int)(progress * 100)}%";
+                    InstallStatusTextBlock.Text = detail;
+                });
+            });
+
+            // 2. 平滑释放可能正在运行的 NexClip 进程
             InstallStatusTextBlock.Text = "正在检查并释放后台运行中的旧版本进程...";
             await ProcessHelper.TerminateRunningInstancesAsync();
 
-            // 2. 解压核心 Payload 文件
+            // 3. 解压核心 Payload 文件
             InstallStatusTextBlock.Text = "正在解压核心组件...";
             await PayloadService.ExtractPayloadAsync(_installDir, (progress, fileName) =>
             {
