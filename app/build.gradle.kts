@@ -12,8 +12,8 @@ android {
         applicationId = "clip.yixing.sync"
         minSdk = 33
         targetSdk = 36
-        versionCode = 2
-        versionName = "20260825.02"
+        versionCode = 3
+        versionName = "20260828.01"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
