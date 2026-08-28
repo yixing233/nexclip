@@ -184,7 +184,7 @@ export default function SettingsPage({ themeMode, onThemeChange, onRefresh }: Se
           <Space direction="vertical" size={12}>
             <Space size={8} align="center">
               <ShieldCheck size={18} color="#10B981" />
-              <Text strong style={{ fontSize: 15 }}>ClipSync 剪贴板共享服务端</Text>
+              <Text strong style={{ fontSize: 15 }}>NexClip 跨平台剪贴板服务</Text>
               {version ? <Tag color="blue">v{version}</Tag> : null}
             </Space>
             <Text type="secondary">自建部署 · 配对码配对 + 会话鉴权 · 登录限流与审计</Text>

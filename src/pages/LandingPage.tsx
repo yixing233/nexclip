@@ -25,20 +25,20 @@ import {
 } from 'lucide-react'
 
 const releaseInfo = {
-  version: 'v20260825.02',
+  version: 'v20260828.01',
   windows: {
-    filename: 'NexClip_Setup_v20260825.02_x64.exe',
-    size: '101.0 MB',
-    serverUrl: '/releases/NexClip_Setup_v20260825.02_x64.exe',
-    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260825.02/NexClip_Setup_v20260825.02_x64.exe',
-    sha256: '75f339e30e7f1d4a8d92829ad1bbed7015e9643b66f7b923e104e08700be9926',
+    filename: 'NexClip_Setup_v20260828.01_x64.exe',
+    size: '17.7 MB',
+    serverUrl: '/releases/NexClip_Setup_v20260828.01_x64.exe',
+    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260828.01/NexClip_Setup_v20260828.01_x64.exe',
+    sha256: 'bbc57c6186df9750fcebc7b70de4c28558f4baa528ad31adf4af7c6f16ec4df7',
   },
   android: {
-    filename: 'NexClip_v20260825.02_Android.apk',
+    filename: 'NexClip_v20260828.01_Android.apk',
     size: '15.3 MB',
-    serverUrl: '/releases/NexClip_v20260825.02_Android.apk',
-    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260825.02/NexClip_v20260825.02_Android.apk',
-    sha256: '94c23181737b8056fe2187302476e6ac82a620c18810643921ef50a7b2a63391',
+    serverUrl: '/releases/NexClip_v20260828.01_Android.apk',
+    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260828.01/NexClip_v20260828.01_Android.apk',
+    sha256: '45854ff9cf129850b7d7abb8cfd42be8b13b6eb45f2645d26500ad6fb5ee08ca',
   },
 }
 
@@ -740,7 +740,7 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
                 </span>
               </div>
               <p style={{ fontSize: 13, color: c.textSecondary, lineHeight: 1.6, marginBottom: 24 }}>
-                WinUI 3 原生 Fluent 视觉，支持智能动作识别、色值预览转换、文件路径直达、跨端互传与全拼检索。
+                WinUI 3 原生 Fluent 视觉，内置 Native AOT 现代安装向导，支持智能动作识别、色值预览转换、文件路径直达、跨端互传与全拼检索。
               </p>
             </div>
 
@@ -847,7 +847,7 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
                 </span>
               </div>
               <p style={{ fontSize: 13, color: c.textSecondary, lineHeight: 1.6, marginBottom: 24 }}>
-                Jetpack Compose + Miuix 视觉，支持 Xposed/Shizuku/前台服务全方案后台监听、验证码智能提取与灵动通知。
+                Jetpack Compose + Miuix 深度视觉规范，支持 HyperOS 灵动超级岛、前台通知流光、Xposed/Shizuku/前台服务全方案后台监听与验证码智能提取。
               </p>
             </div>
 
