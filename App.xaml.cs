@@ -185,7 +185,9 @@ public partial class App : Application
         Services.Tray = new TrayIconService(
             () => dispatcher?.TryEnqueue(ToggleClipboardWindow),
             () => dispatcher?.TryEnqueue(ShowClipboardWindow),
+            () => dispatcher?.TryEnqueue(CheckForUpdatesFromTray),
             () => dispatcher?.TryEnqueue(() => OpenSettings()),
+            () => dispatcher?.TryEnqueue(RestartApp),
             () => dispatcher?.TryEnqueue(ExitApp));
         Services.Tray.Initialize();
         WireTrayState(Services);
@@ -359,6 +361,87 @@ public partial class App : Application
         {
             Log.Error("打开设置窗口失败", ex);
         }
+    }
+
+    /// <summary>安全重启应用(托盘菜单)。</summary>
+    public static void RestartApp()
+    {
+        try
+        {
+            var exePath = Environment.ProcessPath;
+            if (!string.IsNullOrEmpty(exePath))
+            {
+                var startInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = exePath,
+                    UseShellExecute = true,
+                    WorkingDirectory = AppContext.BaseDirectory
+                };
+                System.Diagnostics.Process.Start(startInfo);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error("重启应用失败", ex);
+        }
+        finally
+        {
+            ExitApp();
+        }
+    }
+
+    /// <summary>从托盘菜单手动触发检查更新。</summary>
+    public static void CheckForUpdatesFromTray()
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var rawVersion = (System.Attribute.GetCustomAttribute(typeof(App).Assembly, typeof(System.Reflection.AssemblyInformationalVersionAttribute)) as System.Reflection.AssemblyInformationalVersionAttribute)?.InformationalVersion?.Split('+')[0] ?? "20260828.01";
+                var updateService = new UpdateService();
+                var result = await updateService.CheckForUpdateAsync(rawVersion, Services.Settings.UpdateSource, Services.Settings.ServerUrl);
+
+                var dispatcher = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread() ?? ClipboardWindow?.DispatcherQueue;
+                dispatcher?.TryEnqueue(() =>
+                {
+                    if (result.Success && result.HasUpdate)
+                    {
+                        var action = new SmartAction
+                        {
+                            Kind = SmartActionKind.Url,
+                            Title = $"发现新版本 v{result.LatestVersion}",
+                            Subtitle = string.IsNullOrWhiteSpace(result.ReleaseNotes) ? "检测到新版本发布，点击前往下载更新" : result.ReleaseNotes.Split('\n')[0].Trim(),
+                            Icon = Lucide.DownloadAccent,
+                            PrimaryButtonText = "前往下载",
+                            PrimaryButtonIcon = Lucide.DownloadAccent,
+                            PrimaryAction = () =>
+                            {
+                                var url = result.DownloadUrl ?? result.ReleaseUrl ?? "https://github.com/yixing233/nexclip/releases";
+                                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+                            },
+                            SecondaryButtonText = "查看详情",
+                            SecondaryAction = () =>
+                            {
+                                OpenSettings("about");
+                            }
+                        };
+                        ShowSmartActionToast(action);
+                    }
+                    else if (result.Success)
+                    {
+                        Services.Tray?.Notify("NexClip", $"当前已是最新版本 (v{rawVersion})");
+                    }
+                    else
+                    {
+                        Services.Tray?.Notify("NexClip", $"检查更新失败: {result.ErrorMessage}");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Error("托盘检查更新异常", ex);
+            }
+        });
     }
 
     /// <summary>退出应用(托盘菜单)。</summary>

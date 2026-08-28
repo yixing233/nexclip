@@ -14,12 +14,20 @@ public sealed class TrayIconService : IDisposable
     private readonly TrayManager _trayManager;
     private readonly List<DispatcherQueueTimer> _retryTimers = new();
 
-    public TrayIconService(Action onActivate, Action onShow, Action onSettings, Action onExit)
+    public TrayIconService(
+        Action onActivate,
+        Action onShow,
+        Action onCheckUpdate,
+        Action onSettings,
+        Action onRestart,
+        Action onExit)
     {
         _trayManager = new TrayManager(
             onActivate,
             onShow,
+            onCheckUpdate,
             onSettings,
+            onRestart,
             onExit,
             AppContext.BaseDirectory,
             Log.Info);
