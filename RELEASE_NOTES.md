@@ -1,23 +1,21 @@
-# NexClip v20260828.01 - 双端更新通道切换与平滑覆盖安装升级
+# NexClip v20260828.02 - Android 去重防自环优化与即时同步策略升级
 
-NexClip 是一套专为多端设备打造的现代化、轻量高效跨平台剪贴板同步与局域网文件/消息流转系统。本次 **v20260828.01** 重点增强了多端更新通道调度、网络容灾降级机制，并彻底解决了 Windows 端覆盖安装时的进程占用卡死问题。
+NexClip 是一套专为多端设备打造的现代化、轻量高效跨平台剪贴板同步与局域网文件/消息流转系统。本次 **v20260828.02** 重点解决了 Android 移动端应用内点击复制导致的自环重复建档、来源篡改与时间覆写问题，并移除了设备上线覆写本地剪贴板的逻辑，全面回归纯净秒级即时同步。
 
 ---
 
 ## 本次更新核心亮点 (Changelog)
 
-### 1. 双端更新来源自由切换 (Update Channels)
-- **支持多通道下拉选择**：在 Windows 端与 Android 端设置中新增“更新下载来源”选项（提供 `GitHub Releases (默认)` 与 `服务端直连加速` 两档下拉切换）。
-- **国内高速直连**：选中直连加速后，客户端优先向服务端直连节点探测最新版本并下发直连高速安装包，免去大陆网络下 GitHub 访问受限困扰。
-- **智能网络容灾降级**：若 GitHub 官方源发生连接超时或不可达，客户端将自动无缝回退至服务端直连源探测版本，保障更新链路高可用。
+### 1. Android 端内容特征去重与应用内防自环
+- **全局内容特征白名单池 (`internalCopyHashes`)**：建立线程安全的内部复制 Hash 注册与校验机制，有效覆盖 30 秒监听窗口。
+- **杜绝应用内复制重复建档**：凡在 Android 软件内发起的复制操作（列表项复制、聊天室消息复制、验证码/色值/自定义规则直达、图片预览复制等），绝不生成重复新条目，绝不篡改条目原始来源设备，绝不更新条目时间戳，绝不上报服务端自环广播。
+- **ClipData 隐式指纹标记**：在复制写入时注入应用内 PersistableBundle 标记，双重保险规避系统跳板异步捕获导致的误判。
 
-### 2. Windows 桌面端平滑覆盖安装与视觉曲率优化
-- **Native AOT 现代安装向导**：全面优化安装器与主程序图标卡片、胶囊徽章与操作按钮的 Fluent Design 圆角曲率。
-- **进程自动平滑终止**：修复旧版安装程序在应用运行时覆盖升级被系统 Restart Manager 阻塞或文件锁死卡住的问题。
-- **无感生命周期接管**：安装向导在初始化与解包前自动安全终止旧版进程并释放句柄，升级后即可无缝重启启动。
+### 2. 即时同步策略纯净化
+- **移除上线拉取覆写逻辑**：移除了后台服务启动与重连时的 `pullAndApply` 强制覆写操作，设备上线或手机解锁时不再拉取服务器历史覆盖本地剪贴板，仅在两端同时在线时执行实时的 WebSocket 广播同步。
 
-### 3. Web 门户与直连分发升级
-- **双通道组合按钮**：网页门户下载区域支持主按钮直达 GitHub 官方源，下拉扩展菜单直连高速通道、版本日志与 SHA256 校验。
+### 3. Windows 桌面端平滑覆盖安装与 Native AOT 架构
+- **Native AOT 现代安装向导**：安装包精简至 17.71 MB，60 FPS Win32 缓动插值引擎，解决进度跳变与覆盖升级句柄锁死。
 
 ---
 
@@ -25,8 +23,8 @@ NexClip 是一套专为多端设备打造的现代化、轻量高效跨平台剪
 
 | 产物文件 | 适用平台 | 文件大小 | SHA256 校验码 |
 | :--- | :--- | :--- | :--- |
-| **`NexClip_Setup_v20260828.01_x64.exe`** | Windows 10 (1809+) / Windows 11 (x64) | 17.71 MB | `bbc57c6186df9750fcebc7b70de4c28558f4baa528ad31adf4af7c6f16ec4df7` |
-| **`NexClip_v20260828.01_Android.apk`** | Android 8.0+ (推荐 HyperOS / MIUI) | 15.28 MB | `45854ff9cf129850b7d7abb8cfd42be8b13b6eb45f2645d26500ad6fb5ee08ca` |
+| **`NexClip_Setup_v20260828.02_x64.exe`** | Windows 10 (1809+) / Windows 11 (x64) | 17.71 MB | `2a58a0ed720497867061c2313b3a720739e63637c61cd41b6de52b338c9d2c58` |
+| **`NexClip_v20260828.02_Android.apk`** | Android 8.0+ (推荐 HyperOS / MIUI) | 15.28 MB | `efbe40868516980fa202a08c25e26f5a582319b6f6b2a051b8226a13b337302d` |
 
 ---
 
@@ -34,8 +32,8 @@ NexClip 是一套专为多端设备打造的现代化、轻量高效跨平台剪
 
 - **GitHub 官方源**：[GitHub Releases](https://github.com/yixing233/nexclip/releases)
 - **服务端直连加速**：
-  - Windows 安装包：`https://nexclip.157342.xyz/releases/NexClip_Setup_v20260828.01_x64.exe`
-  - Android 安装包：`https://nexclip.157342.xyz/releases/NexClip_v20260828.01_Android.apk`
+  - Windows 安装包：`https://nexclip.157342.xyz/releases/NexClip_Setup_v20260828.02_x64.exe`
+  - Android 安装包：`https://nexclip.157342.xyz/releases/NexClip_v20260828.02_Android.apk`
   - Web 控制台与门户：[https://nexclip.157342.xyz](https://nexclip.157342.xyz)
 
 ---
