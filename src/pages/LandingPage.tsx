@@ -134,6 +134,23 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
     }
   }, [])
 
+  // 平滑丝滑滚动定位 (带顶栏高度避让与动画)
+  const scrollToSection = (e: React.MouseEvent<HTMLElement>, targetId: string) => {
+    e.preventDefault()
+    const element = document.getElementById(targetId)
+    if (element) {
+      const navHeaderHeight = 72
+      const targetPosition = element.getBoundingClientRect().top + window.pageYOffset - navHeaderHeight
+      window.scrollTo({
+        top: Math.max(0, targetPosition),
+        behavior: 'smooth',
+      })
+      if (window.history.pushState) {
+        window.history.pushState(null, '', `#${targetId}`)
+      }
+    }
+  }
+
   const isMobile = windowWidth < 768
   const isSmallMobile = windowWidth < 480
 
@@ -326,25 +343,41 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
           >
             <a
               href="#features"
+              onClick={(e) => scrollToSection(e, 'features')}
               style={{
                 color: c.textSecondary,
                 textDecoration: 'none',
-                transition: 'color 0.2s',
+                transition: 'color 0.2s, transform 0.2s',
+                cursor: 'pointer',
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.color = c.text)}
-              onMouseLeave={(e) => (e.currentTarget.style.color = c.textSecondary)}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = c.text
+                e.currentTarget.style.transform = 'translateY(-1px)'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = c.textSecondary
+                e.currentTarget.style.transform = 'translateY(0)'
+              }}
             >
               核心功能
             </a>
             <a
               href="#clients"
+              onClick={(e) => scrollToSection(e, 'clients')}
               style={{
                 color: c.textSecondary,
                 textDecoration: 'none',
-                transition: 'color 0.2s',
+                transition: 'color 0.2s, transform 0.2s',
+                cursor: 'pointer',
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.color = c.text)}
-              onMouseLeave={(e) => (e.currentTarget.style.color = c.textSecondary)}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = c.text
+                e.currentTarget.style.transform = 'translateY(-1px)'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = c.textSecondary
+                e.currentTarget.style.transform = 'translateY(0)'
+              }}
             >
               支持平台
             </a>
@@ -535,6 +568,7 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
             size="large"
             shape="round"
             href="#clients"
+            onClick={(e) => scrollToSection(e, 'clients')}
             style={{
               height: isMobile ? 44 : 48,
               padding: isMobile ? '0 22px' : '0 28px',

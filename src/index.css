@@ -1,4 +1,8 @@
 * { box-sizing: border-box; }
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 90px;
+}
 html, body, #root { height: 100%; margin: 0; padding: 0; }
 
 /* ===== 滚动条:细条 + 圆角 + 悬浮加深,全局统一(WebKit/Blink + Firefox) ===== */
