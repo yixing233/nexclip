@@ -24,21 +24,35 @@ import {
   ChevronDown,
 } from 'lucide-react'
 
-const releaseInfo = {
-  version: 'v20260828.02',
+interface ReleaseItem {
+  filename: string
+  size: string
+  serverUrl: string
+  githubUrl: string
+  sha256: string
+}
+
+interface ReleaseData {
+  version: string
+  windows: ReleaseItem
+  android: ReleaseItem
+}
+
+const defaultReleaseInfo: ReleaseData = {
+  version: 'v20260901.01',
   windows: {
-    filename: 'NexClip_Setup_v20260828.02_x64.exe',
-    size: '17.7 MB',
-    serverUrl: '/releases/NexClip_Setup_v20260828.02_x64.exe',
-    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260828.02/NexClip_Setup_v20260828.02_x64.exe',
-    sha256: '2a58a0ed720497867061c2313b3a720739e63637c61cd41b6de52b338c9d2c58',
+    filename: 'NexClip_Setup_v20260901.01_x64.exe',
+    size: '18.3 MB',
+    serverUrl: '/releases/NexClip_Setup_v20260901.01_x64.exe',
+    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260901.01/NexClip_Setup_v20260901.01_x64.exe',
+    sha256: '8fb9e32c586a7538a7bad5d93b386afa9f25f0795f77d236b55cbfb1930bb4ad',
   },
   android: {
-    filename: 'NexClip_v20260828.02_Android.apk',
+    filename: 'NexClip_v20260901.01_Android.apk',
     size: '15.3 MB',
-    serverUrl: '/releases/NexClip_v20260828.02_Android.apk',
-    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260828.02/NexClip_v20260828.02_Android.apk',
-    sha256: 'efbe40868516980fa202a08c25e26f5a582319b6f6b2a051b8226a13b337302d',
+    serverUrl: '/releases/NexClip_v20260901.01_Android.apk',
+    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260901.01/NexClip_v20260901.01_Android.apk',
+    sha256: 'a8b42c9776c4129dca043c641fcbd5631d3af0c5257f5d6d7811a075c2289083',
   },
 }
 
@@ -60,10 +74,50 @@ interface LandingPageProps {
 
 export default function LandingPage({ isDark, onToggleTheme, c }: LandingPageProps) {
   const navigate = useNavigate()
+  const [releaseInfo, setReleaseInfo] = useState<ReleaseData>(defaultReleaseInfo)
   const [isScrolled, setIsScrolled] = useState(false)
   const [windowWidth, setWindowWidth] = useState(
     typeof window !== 'undefined' ? window.innerWidth : 1200
   )
+
+  useEffect(() => {
+    // 动态拉取服务端 /releases/version.json 实现版本自动同步
+    fetch('/releases/version.json')
+      .then((res) => {
+        if (res.ok) return res.json()
+        throw new Error('Failed to load version.json')
+      })
+      .then((data) => {
+        if (data && data.version && data.windows && data.android) {
+          const winBytes = data.windows.file_size_bytes || 0
+          const winSizeStr = winBytes > 0 ? `${(winBytes / (1024 * 1024)).toFixed(1)} MB` : '18.3 MB'
+          const apkBytes = data.android.file_size_bytes || 0
+          const apkSizeStr = apkBytes > 0 ? `${(apkBytes / (1024 * 1024)).toFixed(1)} MB` : '15.3 MB'
+          const tag = data.version.startsWith('v') ? data.version : `v${data.version}`
+
+          setReleaseInfo({
+            version: tag,
+            windows: {
+              filename: data.windows.filename || `NexClip_Setup_${tag}_x64.exe`,
+              size: winSizeStr,
+              serverUrl: data.windows.download_url || `/releases/${data.windows.filename}`,
+              githubUrl: `https://github.com/yixing233/nexclip/releases/download/${tag}/${data.windows.filename || `NexClip_Setup_${tag}_x64.exe`}`,
+              sha256: data.windows.sha256 || '',
+            },
+            android: {
+              filename: data.android.filename || `NexClip_${tag}_Android.apk`,
+              size: apkSizeStr,
+              serverUrl: data.android.download_url || `/releases/${data.android.filename}`,
+              githubUrl: `https://github.com/yixing233/nexclip/releases/download/${tag}/${data.android.filename || `NexClip_${tag}_Android.apk`}`,
+              sha256: data.android.sha256 || '',
+            },
+          })
+        }
+      })
+      .catch((err) => {
+        console.warn('Auto version sync fallback:', err)
+      })
+  }, [])
 
   useEffect(() => {
     const handleScroll = () => {
