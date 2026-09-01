@@ -1032,7 +1032,7 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
                 </div>
               </div>
               <p style={{ fontSize: 13, color: c.textSecondary, lineHeight: 1.6, marginBottom: 24 }}>
-                无需安装任何客户端软件，在任意电脑或平板浏览器中即可实时查看剪贴板历史流、图片预览与在线设备监控。
+                无需安装客户端软件，在任意电脑或平板浏览器中即可实时查看剪贴板历史流、图片预览与在线设备管理。
               </p>
             </div>
             <Button
