@@ -828,7 +828,7 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
                 </span>
               </div>
               <p style={{ fontSize: 13, color: c.textSecondary, lineHeight: 1.6, marginBottom: 24 }}>
-                WinUI 3 原生 Fluent 视觉，内置 Native AOT 现代安装向导，支持智能动作识别、色值预览转换、文件路径直达、跨端互传与全拼检索。
+                WinUI 3 原生 Fluent 视觉，全新 Native AOT 现代安装向导，支持跨端互传、动作识别、色值预览转换、文件路径直达、与智能检索等功能。
               </p>
             </div>
 
