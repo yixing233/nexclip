@@ -935,7 +935,7 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
                 </span>
               </div>
               <p style={{ fontSize: 13, color: c.textSecondary, lineHeight: 1.6, marginBottom: 24 }}>
-                Jetpack Compose + Miuix 深度视觉规范，支持 HyperOS 灵动超级岛、前台通知流光、Xposed/Shizuku/前台服务全方案后台监听与验证码智能提取。
+                Miuix UI 组件规范，支持 HyperOS 灵动超级岛、提供Xposed/Shizuku双方案实现后台监听, 支持验证码/链接等智能直达功能。
               </p>
             </div>
 
