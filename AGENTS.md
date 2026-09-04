@@ -1,6 +1,6 @@
 # AI Agent 规范与项目开发指南 (SyncClipboard / NexClip)
 
-本项目为多端剪贴板与局域网文件传输同步工具（包含 Android 端、Windows WinUI 3 桌面端、Server 服务端）。所有协助本项目的 AI 编程助手与开发者必须严格遵守以下核心规范：
+本项目为多端剪贴板同步与文本 / 图片互传工具（包含 Android 端、Windows WinUI 3 桌面端、Server 服务端）。所有协助本项目的 AI 编程助手与开发者必须严格遵守以下核心规范：
 
 ---
 
