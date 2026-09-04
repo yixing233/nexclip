@@ -11,6 +11,7 @@ import { randomHex, extractClientIpv4 } from './util.js';
 export interface HubConn {
   token: string;
   deviceId: string | null;
+  userId: string | null;
   ws: WebSocket;
   lastActivity: number;
   /** 用户网页会话:不接收剪贴板推送(全站广播对其是噪音),仅保留设备变更通知 */
@@ -19,6 +20,7 @@ export interface HubConn {
 
 export interface HubAuthorization {
   deviceId: string | null;
+  userId?: string | null;
   mutedClipboard: boolean;
 }
 
@@ -55,6 +57,11 @@ export class SignalRHub {
         ],
       },
     };
+  }
+
+  /** 获取并保留 negotiate 记录(用于 upgrade 鉴权校验),WS 握手完成时再消费 */
+  getNegotiated(id: string): HubAuthorization | null {
+    return this.negotiated.get(id) ?? null;
   }
 
   attach(server: Server, authorize: (url: URL, req: IncomingMessage) => HubAuthorization | null): void {
@@ -113,6 +120,7 @@ export class SignalRHub {
       const conn: HubConn = {
         token,
         deviceId: auth.deviceId ?? negotiated?.deviceId ?? deviceId,
+        userId: auth.userId ?? negotiated?.userId ?? null,
         ws,
         lastActivity: Date.now(),
         mutedClipboard: auth.mutedClipboard || negotiated?.mutedClipboard === true,
@@ -167,10 +175,11 @@ export class SignalRHub {
     }
   }
 
-  /** 全员广播 ClipboardUpdated(Windows / Android / Web 实时同步) */
-  broadcastUpdated(entry: unknown): void {
+  /** 广播 ClipboardUpdated 给属于同用户的设备(若未指定 userId 则全量广播以兼容单用户模式) */
+  broadcastUpdated(entry: unknown, userId?: string | null): void {
     const msg = { type: 1, target: 'ClipboardUpdated', arguments: [entry] };
     for (const conn of this.conns.values()) {
+      if (userId && conn.userId && conn.userId !== userId) continue;
       this.sendJson(conn.ws, msg);
     }
   }
@@ -184,21 +193,25 @@ export class SignalRHub {
     }
   }
 
-  /** 全员广播 ClipboardCleared */
-  broadcastCleared(): void {
+  /** 广播 ClipboardCleared(支持按用户隔离) */
+  broadcastCleared(userId?: string | null): void {
     const msg = { type: 1, target: 'ClipboardCleared', arguments: [] };
     for (const conn of this.conns.values()) {
+      if (userId && conn.userId && conn.userId !== userId) continue;
       this.sendJson(conn.ws, msg);
     }
   }
 
-  /** 全员广播设备列表变更(配对/重命名/移除/上下线),各端收到后自行刷新列表 */
-  broadcastDevicesChanged(): void {
+  /** 广播设备列表变更(配对/重命名/移除/上下线),各端收到后自行刷新列表 */
+  broadcastDevicesChanged(userId?: string | null): void {
     if (this.devicesChangedTimer) clearTimeout(this.devicesChangedTimer);
     this.devicesChangedTimer = setTimeout(() => {
       this.devicesChangedTimer = null;
       const msg = { type: 1, target: 'DevicesChanged', arguments: [] };
-      for (const conn of this.conns.values()) this.sendJson(conn.ws, msg);
+      for (const conn of this.conns.values()) {
+        if (userId && conn.userId && conn.userId !== userId) continue;
+        this.sendJson(conn.ws, msg);
+      }
     }, 150);
     this.devicesChangedTimer.unref?.();
   }

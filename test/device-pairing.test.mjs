@@ -189,6 +189,86 @@ try {
   assert.equal(noHubToken.res.status, 401);
   const badHubToken = await api('/hubs/clipboard/negotiate?deviceId=device-b&deviceToken=invalid');
   assert.equal(badHubToken.res.status, 401);
+
+  // 验证未认证设备或未绑定设备请求 /api/devices 时不会泄露他人设备
+  const unauthDevices = await api('/api/devices');
+  assert.equal(unauthDevices.res.status, 200);
+  assert.deepEqual(unauthDevices.body, []);
+
+  // 模拟未配对新设备请求自身的 /api/devices?deviceId=new-unknown-device
+  const newDeviceQuery = await api('/api/devices?deviceId=new-unknown-device');
+  assert.equal(newDeviceQuery.res.status, 200);
+  assert.deepEqual(newDeviceQuery.body, []);
+
+  // --- 测试完整流程：新用户组创建 -> 两个设备配对 -> 再次生成配对码保持同用户组 -> 第三个设备加入 ---
+  // 1. 用户组1已由 device-a 与 device-b 组成（userId: first.body.userId）
+  // 验证从 device-b 再次生成配对码，其 userId 必须仍为该用户组
+  const group1CodeFromB = await api('/api/pairing-codes', {
+    method: 'POST',
+    headers: { ...deviceHeaders('device-b', newToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId: 'device-b', deviceName: 'B re-paired' }),
+  });
+  assert.equal(group1CodeFromB.res.status, 200);
+  assert.equal(group1CodeFromB.body.userId, first.body.userId);
+
+  // 2. 第三台设备 device-c 加入用户组1
+  const pairDeviceC = await api('/api/pair', json({
+    code: group1CodeFromB.body.code,
+    deviceId: 'device-c',
+    deviceName: 'C',
+  }));
+  assert.equal(pairDeviceC.res.status, 200);
+  assert.equal(pairDeviceC.body.userId, first.body.userId);
+  const tokenC = pairDeviceC.body.deviceToken;
+  assert.ok(tokenC);
+
+  // 3. 验证此时用户组1中的设备列表包含 A, B, C 以及测试前置的 legacy-device（共4台）
+  const group1Devices = await api('/api/devices', {
+    headers: deviceHeaders('device-c', tokenC),
+  });
+  assert.equal(group1Devices.res.status, 200);
+  assert.equal(group1Devices.body.length, 4);
+  const group1Ids = group1Devices.body.map((d) => d.id).sort();
+  assert.deepEqual(group1Ids, ['device-a', 'device-b', 'device-c', 'legacy-device']);
+
+  // 4. 全新用户设备 X 首次生成配对码，必须创建全新的独立用户组 userX
+  const group2First = await api('/api/pairing-codes', json({
+    deviceId: 'device-x',
+    deviceName: 'Device X',
+  }));
+  assert.equal(group2First.res.status, 200);
+  assert.ok(group2First.body.userId);
+  assert.notEqual(group2First.body.userId, first.body.userId); // 必须是不同用户组
+  const tokenX = group2First.body.deviceToken;
+  assert.ok(tokenX);
+
+  // 设备 X 查看设备列表，只能看到自己，绝看不到用户组1的设备
+  const group2Devices = await api('/api/devices', {
+    headers: deviceHeaders('device-x', tokenX),
+  });
+  assert.equal(group2Devices.res.status, 200);
+  assert.equal(group2Devices.body.length, 1);
+  assert.equal(group2Devices.body[0].id, 'device-x');
+
+  // 5. 设备 Y 通过设备 X 的配对码加入用户组2
+  const pairDeviceY = await api('/api/pair', json({
+    code: group2First.body.code,
+    deviceId: 'device-y',
+    deviceName: 'Device Y',
+  }));
+  assert.equal(pairDeviceY.res.status, 200);
+  assert.equal(pairDeviceY.body.userId, group2First.body.userId);
+  const tokenY = pairDeviceY.body.deviceToken;
+  assert.ok(tokenY);
+
+  // 用户组2内查设备列表：包含 X 和 Y（2台），不含 A, B, C
+  const group2DevicesAfterY = await api('/api/devices', {
+    headers: deviceHeaders('device-y', tokenY),
+  });
+  assert.equal(group2DevicesAfterY.res.status, 200);
+  assert.equal(group2DevicesAfterY.body.length, 2);
+  const group2Ids = group2DevicesAfterY.body.map((d) => d.id).sort();
+  assert.deepEqual(group2Ids, ['device-x', 'device-y']);
 } finally {
   child.kill('SIGTERM');
   await Promise.race([

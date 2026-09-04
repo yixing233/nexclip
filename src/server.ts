@@ -83,7 +83,8 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
     }
     // 网页会话与设备连接均接收实时剪贴板推送与设备变更
     const boundDeviceId = hubDevice?.Id ?? actor?.deviceId ?? null;
-    const r = hub.negotiate(url, { mutedClipboard: false, deviceId: boundDeviceId });
+    const boundUserId = hubDevice?.UserId ?? actor?.userId ?? null;
+    const r = hub.negotiate(url, { mutedClipboard: false, deviceId: boundDeviceId, userId: boundUserId });
     sendJson(res, r.status, r.body);
     return;
   }
@@ -120,10 +121,19 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 });
 
 hub.attach(server, (url, req) => {
+  // 1. 优先通过 SignalR 协商产生的 connectionToken (id) 进行校验 (标准 Java/Android/JS SDK 行为)
+  const connectionId = url.searchParams.get('id');
+  if (connectionId) {
+    const negotiated = hub.getNegotiated(connectionId);
+    if (negotiated) return negotiated;
+  }
+
+  // 2. 直连携带设备凭证 (自定义 WebSocket 客户端行为)
   const deviceId = url.searchParams.get('deviceId') || extractDeviceId(req);
   const deviceToken = url.searchParams.get('deviceToken') || extractDeviceToken(req);
   if (deviceId && deviceToken && svc.authenticateDevice(deviceId, deviceToken)) {
-    return { deviceId, mutedClipboard: false };
+    const dev = svc.getDevice(deviceId);
+    return { deviceId, userId: dev?.UserId ?? null, mutedClipboard: false };
   }
   const sessionToken = extractToken(req);
   const session = sessionToken ? sessions.validate(sessionToken) : null;
@@ -134,7 +144,7 @@ hub.attach(server, (url, req) => {
       return null;
     }
   }
-  if (session) return { deviceId: session.deviceId ?? null, mutedClipboard: session.role === 'user' };
+  if (session) return { deviceId: session.deviceId ?? null, userId: session.userId ?? null, mutedClipboard: session.role === 'user' };
   return null;
 });
 
