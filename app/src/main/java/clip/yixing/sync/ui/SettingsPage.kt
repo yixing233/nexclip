@@ -1095,10 +1095,7 @@ internal fun SettingsPage(
                             )
                         }
                     }
-
-                    item {
-                        Spacer(Modifier.height(bottomInnerPadding))
-                    }
+                    // 底部避让已由 contentPadding.bottom 承担,勿再追加尾部 Spacer(会重复计一份 bottomInnerPadding)
                 }
             }
 
@@ -1677,7 +1674,7 @@ internal fun SettingsPage(
                                                     .clickable(enabled = !checkingUpdate) {
                                                         scope.launch {
                                                             checkingUpdate = true
-                                                            val curVer = appVersion(context)
+                                                            val curVer = appVersionName(context)
                                                             val res = clip.yixing.sync.util.UpdateChecker.check(
                                                                 currentVersion = curVer,
                                                                 updateSource = updateSourceIndex,
@@ -1719,31 +1716,13 @@ internal fun SettingsPage(
                                 // 2. 项目信息
                                 item {
                                     SectionBlock(title = "项目信息", insideMargin = PaddingValues()) {
-                                        SwitchPreference(
-                                            checked = autoCheckUpdate,
-                                            onCheckedChange = { checked ->
-                                                autoCheckUpdate = checked
-                                                SyncSettings.setAutoCheckUpdate(context, checked)
-                                            },
-                                            title = "启动检查新版本"
-                                        )
-                                        WindowDropdownPreference(
-                                            items = updateSourceLabels,
-                                            selectedIndex = updateSourceIndex,
-                                            onSelectedIndexChange = { index ->
-                                                updateSourceIndex = index
-                                                SyncSettings.setUpdateSource(context, index)
-                                            },
-                                            onExpandedChange = { isDropdownExpanded = it },
-                                            title = "更新下载来源"
-                                        )
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clickable(enabled = !checkingUpdate) {
                                                     scope.launch {
                                                         checkingUpdate = true
-                                                        val curVer = appVersion(context)
+                                                        val curVer = appVersionName(context)
                                                         val res = clip.yixing.sync.util.UpdateChecker.check(
                                                             currentVersion = curVer,
                                                             updateSource = updateSourceIndex,
@@ -2441,6 +2420,16 @@ private fun appVersion(context: android.content.Context): String {
             append(info.longVersionCode)
             append(")")
         }
+    }.getOrDefault("?")
+}
+
+/** 纯 versionName(不含 versionCode 后缀),用于版本号比较与检查更新请求 */
+private fun appVersionName(context: android.content.Context): String {
+    return runCatching {
+        context.packageManager.getPackageInfo(
+            context.packageName,
+            android.content.pm.PackageManager.PackageInfoFlags.of(0L)
+        ).versionName ?: "?"
     }.getOrDefault("?")
 }
 
