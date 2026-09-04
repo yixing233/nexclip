@@ -9,6 +9,19 @@ $resourcesDir = Join-Path $installerDir "Resources"
 $releasesDir = "e:\Code\syncclipboard-releases"
 $version = "20260902.02"
 
+# Native AOT 的链接步骤依赖 vswhere.exe 定位 MSVC link.exe。
+# VS 开发者命令行会自带,普通 PowerShell 里不在 PATH 上,链接会以 exit 123 失败,
+# 所以这里补一次探测,让脚本在任意 shell 下都能跑。
+if (-not (Get-Command vswhere.exe -ErrorAction SilentlyContinue)) {
+    $vsInstallerDir = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer"
+    if (Test-Path (Join-Path $vsInstallerDir "vswhere.exe")) {
+        $env:PATH = "$vsInstallerDir;$env:PATH"
+    }
+    else {
+        Write-Warning "未找到 vswhere.exe,Native AOT 链接可能失败;请改用 VS 开发者 PowerShell 运行本脚本。"
+    }
+}
+
 Write-Host ">>> 1. 编译 NexClip.Desktop 主程序 (Release win-x64, 轻量框架依赖)..." -ForegroundColor Cyan
 $tempStaging = Join-Path ([System.IO.Path]::GetTempPath()) "NexClip_Staging_$([Guid]::NewGuid().ToString('N'))"
 dotnet publish "$desktopDir\NexClip.Desktop.csproj" -c Release -r win-x64 -p:WindowsAppSDKSelfContained=false --self-contained false -p:PublishSingleFile=false -p:DebugType=none -o $tempStaging
