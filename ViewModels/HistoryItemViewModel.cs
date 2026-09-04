@@ -190,10 +190,15 @@ public partial class HistoryItemViewModel : ObservableObject
 
     public bool ActionHitTestFor(bool hovered, bool selected) => hovered || selected;
 
-    /// <summary>类型图标(lucide)。</summary>
+    /// <summary>条目是否携带富文本(HTML)片段。</summary>
+    public bool HasHtml => Item.HasHtml;
+
+    /// <summary>类型图标(lucide)。富文本条目用独立图标区分于纯文本。</summary>
     public ImageSource TypeIconSource => Item.Type == "Image"
         ? Services.Lucide.Image
-        : Services.Lucide.FileText;
+        : HasHtml
+            ? Services.Lucide.RichText
+            : Services.Lucide.FileText;
 
     /// <summary>收藏图标(选中=琥珀色)。</summary>
     public ImageSource StarSource => Starred ? Services.Lucide.StarActive : Services.Lucide.Star;
@@ -242,10 +247,26 @@ public partial class HistoryItemViewModel : ObservableObject
         if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
         try
         {
-            return new BitmapImage(new Uri("file:///" + path.Replace('\\', '/')))
+            // 解码尺寸必须在设置 UriSource 之前赋值：BitmapImage(Uri) 构造函数会立即开始解码，
+            // 之后再设 DecodePixel* 已经来不及，等于按原图原始尺寸解码并常驻内存。
+            // 按长边约束避免超宽/超高图片被反向放大：BitmapImage 只设一个维度时会按原始比例
+            // 推算另一维度，若一律限高 140，3840x200 的超宽长条图会被推算成 2688 宽，
+            // 解码面积反而比限宽时大几十倍。
+            var bmp = new BitmapImage();
+            bmp.DecodePixelType = DecodePixelType.Logical;
+            var size = ImageCodec.TryReadPngSize(path);
+            if (size is { } s && s.Width > s.Height)
             {
-                DecodePixelWidth = 960,
-            };
+                // 横图按列表卡片可用宽度量级限宽
+                bmp.DecodePixelWidth = 360;
+            }
+            else
+            {
+                // 竖图/方图，以及非 PNG 或读取头部失败时的兜底：按卡片显示高度上限限高
+                bmp.DecodePixelHeight = 140;
+            }
+            bmp.UriSource = new Uri("file:///" + path.Replace('\\', '/'));
+            return bmp;
         }
         catch
         {
@@ -258,11 +279,12 @@ public partial class HistoryItemViewModel : ObservableObject
         if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
         try
         {
-            return new BitmapImage(new Uri("file:///" + path.Replace('\\', '/')))
-            {
-                DecodePixelWidth = 32,
-                DecodePixelHeight = 32,
-            };
+            // 同上：解码尺寸必须先于 UriSource 设置才会生效。
+            var bmp = new BitmapImage();
+            bmp.DecodePixelWidth = 32;
+            bmp.DecodePixelHeight = 32;
+            bmp.UriSource = new Uri("file:///" + path.Replace('\\', '/'));
+            return bmp;
         }
         catch
         {

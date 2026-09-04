@@ -144,13 +144,14 @@ public sealed class ServerApi
         return await response.Content.ReadFromJsonAsync<ClipboardEntry>(cancellationToken: ct);
     }
 
-    /// <summary>PUT /api/clipboard:上传文本。返回新条目;内容未变化(unchanged)返回 null。</summary>
+    /// <summary>PUT /api/clipboard:上传文本(html 非空时一并上传富文本片段)。返回新条目;内容未变化(unchanged)返回 null。</summary>
     public async Task<ClipboardEntry?> PutTextAsync(
         string serverUrl, string token, string text,
         string deviceId, string deviceName,
-        string? platform = null, string? version = null, bool isManual = false, CancellationToken ct = default)
+        string? platform = null, string? version = null, bool isManual = false,
+        string? html = null, CancellationToken ct = default)
     {
-        var payload = new { type = "Text", text, deviceId, deviceName, platform, version, isManual };
+        var payload = new { type = "Text", text, html, deviceId, deviceName, platform, version, isManual };
         using var request = new HttpRequestMessage(HttpMethod.Put, Endpoint(serverUrl, "/api/clipboard"))
         {
             Content = JsonContent.Create(payload),

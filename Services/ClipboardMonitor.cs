@@ -11,7 +11,7 @@ namespace NexClip.Desktop.Services;
 /// </summary>
 public sealed class ClipboardMonitor
 {
-    public readonly record struct CapturedClip(string? Text, byte[]? ImagePng, string Hash, SourceAppInfo? SourceApp = null);
+    public readonly record struct CapturedClip(string? Text, byte[]? ImagePng, string Hash, SourceAppInfo? SourceApp = null, string? Html = null);
 
     private readonly DispatcherQueue _dispatcher;
     private readonly SettingsStore _settings;
@@ -25,6 +25,8 @@ public sealed class ClipboardMonitor
     private int _pauseCount;
     private DateTime _pauseUntil = DateTime.MinValue;
     private bool _started;
+    /// <summary>上一次已处理的剪贴板序列号:内容未变化时该值不变,用于零成本短路轮询。</summary>
+    private uint _lastClipboardSequence;
 
     public ClipboardMonitor(DispatcherQueue dispatcher, SettingsStore settings, Func<CapturedClip, CancellationToken, Task> onCapture)
     {
@@ -109,23 +111,35 @@ public sealed class ClipboardMonitor
         if (!_settings.MonitorEnabled) return;
         if (_pauseCount > 0 || DateTime.UtcNow < _pauseUntil) return;
 
+        // 零成本短路(必须放在所有剪贴板读取之前):剪贴板序列号只在内容真正变化时递增。
+        // 序列号与上次成功处理的一致说明内容完全没变,直接返回,避免 2 秒轮询在剪贴板里
+        // 存着截图时反复做整图解码 + PNG 重编码,以及反复跨进程读取剪贴板所有者。
+        // 取值失败(返回 0 或抛异常)时不做任何短路,退回原有完整流程,保证不漏掉剪贴板变更。
+        uint clipboardSequence = 0;
+        try
+        {
+            clipboardSequence = NativeMethods.GetClipboardSequenceNumber();
+        }
+        catch
+        {
+            // 序列号不可用:放弃此项优化,继续走完整捕获流程
+            clipboardSequence = 0;
+        }
+        if (clipboardSequence != 0 && clipboardSequence == _lastClipboardSequence) return;
+
         // 彻底杜绝自写回环: 若剪贴板内容由本程序写回(远端同步/历史列表复制),直接忽略
         if (ImageCodec.IsSelfWrittenClipboard() || SourceAppDetector.IsClipboardOwnedByCurrentProcess())
         {
+            // 这是"明确决定忽略本次剪贴板状态"而非"读取失败需要重试",必须记账序列号:
+            // 否则剪贴板长期停在自写内容上时,2 秒轮询会无限期反复执行昂贵的 Clipboard.GetContent()
+            if (clipboardSequence != 0) _lastClipboardSequence = clipboardSequence;
             return;
         }
 
         _capturing = true;
         try
         {
-            // 图片优先:Windows 中截图/设计软件经常同时提供 Bitmap + Text/HTML,
-            // 若先读文本会把图片误判成文本条目。只有确认没有位图时才读取文本。
-            byte[]? image = await ImageCodec.CaptureClipboardPngAsync();
-            string? text = null;
-            if (image is null || image.LongLength == 0)
-            {
-                text = await ImageCodec.ReadClipboardTextAsync();
-            }
+            var (text, html, image) = await ReadClipboardPayloadAsync();
 
         string hash;
         if (image is not null && image.LongLength > 0)
@@ -134,7 +148,7 @@ public sealed class ClipboardMonitor
         }
         else if (text is not null)
         {
-            hash = HashText(text);
+            hash = HashText(text, html);
         }
         else
         {
@@ -142,6 +156,8 @@ public sealed class ClipboardMonitor
         }
 
         if (hash.Length == 0) return;
+        // 序列号在确认拿到有效内容之后才记账:若本轮读取失败,下一轮轮询仍会完整重试,不会漏掉变更
+        if (clipboardSequence != 0) _lastClipboardSequence = clipboardSequence;
         // 应用自写内容:时间窗内消费一次性抑制,并记录 lastSeen,避免轮询把同一内容再次上传/置顶
         if (hash == _suppressHash && DateTime.UtcNow < _suppressUntil)
         {
@@ -153,7 +169,12 @@ public sealed class ClipboardMonitor
         if (hash == _lastSeenHash) return;
         _lastSeenHash = hash;
         var sourceApp = SourceAppDetector.DetectSourceApp();
-        await _onCapture(new CapturedClip(text, image, hash, sourceApp), ct);
+        if (ClipboardAppFilter.ShouldFilter(sourceApp, _settings.AppFilterEnabled, _settings.CustomFilteredProcesses))
+        {
+            Log.Debug($"已忽略来自远程控制应用的剪贴板内容: {sourceApp?.Name ?? sourceApp?.ProcessName}");
+            return;
+        }
+        await _onCapture(new CapturedClip(text, image, hash, sourceApp, html), ct);
         }
         finally
         {
@@ -161,16 +182,38 @@ public sealed class ClipboardMonitor
         }
     }
 
+    /// <summary>
+    /// 按统一优先级读取剪贴板载荷。
+    /// 位图优先:截图/设计软件常同时提供 Bitmap + Text/HTML,先读文本会把图片误判成文本条目。
+    /// 但 Word/Excel 复制带格式内容时同样"位图 + 纯文本 + HTML"三格式齐备,因此仅当位图与
+    /// "非空纯文本 + 去标签后仍有可见文字的 HTML"同时存在时判为富文本,其余仍按图片处理
+    /// (纯截图没有纯文本;浏览器复制图片虽带 HTML,但去掉 img 标签后为空)。
+    /// </summary>
+    private async Task<(string? Text, string? Html, byte[]? Image)> ReadClipboardPayloadAsync()
+    {
+        var image = await ImageCodec.CaptureClipboardPngAsync();
+        var hasImage = image is not null && image.LongLength > 0;
+
+        if (!_settings.RichTextEnabled)
+        {
+            return hasImage ? (null, null, image) : (await ImageCodec.ReadClipboardTextAsync(), null, null);
+        }
+
+        var (text, html) = await ImageCodec.ReadClipboardRichTextAsync();
+        if (hasImage)
+        {
+            return text is not null && ImageCodec.HasVisibleHtmlText(html)
+                ? (text, html, null)
+                : (null, null, image);
+        }
+        return (text, html, null);
+    }
+
     /// <summary>手动捕获(忽略自写抑制,用于"同步当前剪贴板")。返回 hash,空则无内容。</summary>
     public async Task<string> CaptureManualAsync(CancellationToken ct = default)
     {
-        // 与自动监听保持一致:位图优先，避免混合格式被当成文本同步。
-        byte[]? image = await ImageCodec.CaptureClipboardPngAsync();
-        string? text = null;
-        if (image is null || image.LongLength == 0)
-        {
-            text = await ImageCodec.ReadClipboardTextAsync();
-        }
+        // 与自动监听完全共用一套优先级判定,避免两条路径对同一剪贴板得出不同类型。
+        var (text, html, image) = await ReadClipboardPayloadAsync();
 
         string hash;
         if (image is not null && image.LongLength > 0)
@@ -179,18 +222,24 @@ public sealed class ClipboardMonitor
         }
         else if (text is not null)
         {
-            hash = HashText(text);
+            hash = HashText(text, html);
         }
         else
         {
             return "";
         }
         var sourceApp = SourceAppDetector.DetectSourceApp();
-        await _onCapture(new CapturedClip(text, image, hash, sourceApp), ct);
+        await _onCapture(new CapturedClip(text, image, hash, sourceApp, html), ct);
         return hash;
     }
 
-    public static string HashText(string text) => HashBytes(Encoding.UTF8.GetBytes(text));
+    /// <summary>
+    /// 文本内容哈希。html 为空时结果与不带富文本时逐字节一致(保证存量条目哈希不失效);
+    /// html 非空时把它一并纳入,使同一段文字的"纯文本版"与"富文本版"成为两条独立记录,
+    /// 而不会互相 TouchByHash 置顶把富文本吃掉。
+    /// </summary>
+    public static string HashText(string text, string? html = null) =>
+        HashBytes(Encoding.UTF8.GetBytes(string.IsNullOrEmpty(html) ? text : text + "\u0001" + html));
 
     public static string HashBytes(byte[] bytes)
     {

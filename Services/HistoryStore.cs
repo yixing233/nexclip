@@ -87,6 +87,7 @@ public sealed class HistoryStore : IDisposable
         EnsureContentHashColumn();
         EnsureSourceAppColumns();
         EnsureRemarkColumn();
+        EnsureHtmlColumn();
         BackfillContentHashes();
     }
 
@@ -200,13 +201,33 @@ public sealed class HistoryStore : IDisposable
         }
     }
 
+    /// <summary>兼容旧库:新增 html 列(富文本条目的 HTML 片段;纯文本条目为 NULL)。</summary>
+    private void EnsureHtmlColumn()
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info(entries)";
+        var hasHtml = false;
+        using (var r = cmd.ExecuteReader())
+        {
+            while (r.Read())
+            {
+                if (r.GetString(1) == "html") { hasHtml = true; break; }
+            }
+        }
+        if (!hasHtml)
+        {
+            cmd.CommandText = "ALTER TABLE entries ADD COLUMN html TEXT";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     /// <summary>为历史存量条目回填内容哈希(文本取文本哈希,图片取缓存文件字节哈希)。</summary>
     private void BackfillContentHashes()
     {
-        var rows = new List<(long Id, string Type, string? Text, string? ImagePath)>();
+        var rows = new List<(long Id, string Type, string? Text, string? ImagePath, string? Html)>();
         using (var q = _conn.CreateCommand())
         {
-            q.CommandText = "SELECT id, type, text, image_path FROM entries WHERE content_hash IS NULL";
+            q.CommandText = "SELECT id, type, text, image_path, html FROM entries WHERE content_hash IS NULL";
             using var r = q.ExecuteReader();
             while (r.Read())
             {
@@ -214,17 +235,19 @@ public sealed class HistoryStore : IDisposable
                     r.GetInt64(0),
                     r.GetString(1),
                     r.IsDBNull(2) ? null : r.GetString(2),
-                    r.IsDBNull(3) ? null : r.GetString(3)));
+                    r.IsDBNull(3) ? null : r.GetString(3),
+                    r.IsDBNull(4) ? null : r.GetString(4)));
             }
         }
-        foreach (var (id, type, text, imagePath) in rows)
+        foreach (var (id, type, text, imagePath, html) in rows)
         {
             string? hash = null;
             try
             {
                 if (type == "Text" && !string.IsNullOrEmpty(text))
                 {
-                    hash = ClipboardMonitor.HashText(text);
+                    // 存量条目 html 恒为 NULL,哈希与加富文本之前完全一致
+                    hash = ClipboardMonitor.HashText(text, html);
                 }
                 else if (type == "Image" && !string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
                 {
@@ -249,7 +272,7 @@ public sealed class HistoryStore : IDisposable
     {
         lock (_lock)
         {
-            var sql = "SELECT id, server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon, remark FROM entries";
+            var sql = "SELECT id, server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon, remark, html FROM entries";
             var conds = new List<string>();
             if (!string.IsNullOrWhiteSpace(search))
             {
@@ -263,8 +286,8 @@ public sealed class HistoryStore : IDisposable
 
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = sql;
-            cmd.Parameters.AddWithValue("@search", $"%{search}%");
-            cmd.Parameters.AddWithValue("@raw_search", search.Trim());
+            cmd.Parameters.AddWithValue("@search", $"%{search ?? ""}%");
+            cmd.Parameters.AddWithValue("@raw_search", search?.Trim() ?? "");
             cmd.Parameters.AddWithValue("@type", type ?? "");
             cmd.Parameters.AddWithValue("@limit", limit);
             cmd.Parameters.AddWithValue("@offset", offset);
@@ -286,9 +309,9 @@ public sealed class HistoryStore : IDisposable
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = """
                 INSERT OR IGNORE INTO entries
-                    (server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon, remark)
+                    (server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon, remark, html)
                 VALUES
-                    (@server_id, @type, @text, @image_path, @image_ref, @device_id, @device_name, @created_at, @origin, @starred, @content_hash, @source_app_name, @source_app_path, @source_app_icon, @remark);
+                    (@server_id, @type, @text, @image_path, @image_ref, @device_id, @device_name, @created_at, @origin, @starred, @content_hash, @source_app_name, @source_app_path, @source_app_icon, @remark, @html);
                 SELECT CASE WHEN changes() > 0 THEN last_insert_rowid() ELSE 0 END;
                 """;
             cmd.Parameters.AddWithValue("@server_id", (object?)item.ServerId ?? DBNull.Value);
@@ -306,6 +329,7 @@ public sealed class HistoryStore : IDisposable
             cmd.Parameters.AddWithValue("@source_app_path", (object?)item.SourceAppPath ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@source_app_icon", (object?)item.SourceAppIcon ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@remark", (object?)item.Remark ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@html", (object?)item.Html ?? DBNull.Value);
             var id = Convert.ToInt64(cmd.ExecuteScalar());
             if (id > 0) TrimToLimitLocked();
             return id;
@@ -320,7 +344,7 @@ public sealed class HistoryStore : IDisposable
         {
             if (item.Type == "Text" && !string.IsNullOrEmpty(item.Text))
             {
-                return ClipboardMonitor.HashText(item.Text);
+                return ClipboardMonitor.HashText(item.Text, item.Html);
             }
             if (item.Type == "Image" && !string.IsNullOrEmpty(item.ImagePath) && File.Exists(item.ImagePath))
             {
@@ -405,7 +429,7 @@ public sealed class HistoryStore : IDisposable
         lock (_lock)
         {
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = "SELECT id, server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon, remark FROM entries WHERE content_hash = @hash ORDER BY created_at DESC LIMIT 1";
+            cmd.CommandText = "SELECT id, server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon, remark, html FROM entries WHERE content_hash = @hash ORDER BY created_at DESC LIMIT 1";
             cmd.Parameters.AddWithValue("@hash", contentHash);
             using var reader = cmd.ExecuteReader();
             return reader.Read() ? ReadItem(reader) : null;
@@ -525,11 +549,11 @@ public sealed class HistoryStore : IDisposable
         }
     }
 
-    public void Clear(bool keepStarred = false)
+    public void Clear(bool keepStarred = true)
     {
         lock (_lock)
         {
-            // 先收集图片文件再删记录(清空历史含图片缓存,不可恢复)
+            // 先收集图片文件再删记录(清空历史含图片缓存,不可恢复,且始终保留收藏项)
             var files = new List<string>();
             using (var q = _conn.CreateCommand())
             {
@@ -610,6 +634,7 @@ public sealed class HistoryStore : IDisposable
         SourceAppPath = reader.FieldCount > 13 && !reader.IsDBNull(13) ? reader.GetString(13) : null,
         SourceAppIcon = reader.FieldCount > 14 && !reader.IsDBNull(14) ? reader.GetString(14) : null,
         Remark = reader.FieldCount > 15 && !reader.IsDBNull(15) ? reader.GetString(15) : null,
+        Html = reader.FieldCount > 16 && !reader.IsDBNull(16) ? reader.GetString(16) : null,
     };
 
     public void Dispose() => _conn.Dispose();

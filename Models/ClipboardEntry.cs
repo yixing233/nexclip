@@ -6,6 +6,7 @@ public sealed class ClipboardEntry
     public long Id { get; set; }
     public string Type { get; set; } = "Text";       // Text | Image
     public string? Text { get; set; }
+    public string? Html { get; set; }                // 富文本 HTML 片段(可选;老服务端不返回该字段时为 null)
     public string? ImageRef { get; set; }
     public string DeviceId { get; set; } = "";
     public string? DeviceName { get; set; }

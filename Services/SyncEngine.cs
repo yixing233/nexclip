@@ -19,7 +19,9 @@ public sealed class SyncEngine : IDisposable
     private readonly SemaphoreSlim _uploadGate = new(1, 1);
     private ConnState _state = ConnState.NotConfigured;
     private int _credentialRecoveryInProgress;
-    private DispatcherQueueTimer? _heartbeatTimer;
+    private System.Threading.Timer? _heartbeatTimer;
+    /// <summary>心跳回调重入闸门:1 表示上一轮心跳仍在执行中。</summary>
+    private int _heartbeatRunning;
 
     /// <summary>本地历史(SQLite)。</summary>
     public HistoryStore History { get; }
@@ -107,25 +109,55 @@ public sealed class SyncEngine : IDisposable
         if (_heartbeatTimer is not null) return;
         try
         {
-            _heartbeatTimer = _dispatcher.CreateTimer();
-            _heartbeatTimer.Interval = TimeSpan.FromSeconds(45);
-            _heartbeatTimer.IsRepeating = true;
-            _heartbeatTimer.Tick += async (_, _) =>
+            _heartbeatTimer = new System.Threading.Timer(async _ =>
             {
-                if (_state == ConnState.Connected && !IsPaused)
+                // 重入保护:回调是 async 且周期固定 30 秒,离线时内部 ConnectAsync() 可能超过 30 秒,
+                // 没有闸门会导致多轮回调并发叠加、反复重建 SignalR HubConnection。
+                if (Interlocked.Exchange(ref _heartbeatRunning, 1) == 1) return;
+                try
                 {
-                    try
+                    if (IsPaused) return;
+
+                    var s = _svc.Settings;
+                    if (!s.IsPaired || string.IsNullOrWhiteSpace(s.ServerUrl) || string.IsNullOrWhiteSpace(s.AuthToken))
+                        return;
+
+                    if (_state == ConnState.Connected && _push?.IsConnected == true)
                     {
-                        await _svc.SettingsVm.RefreshDevicesAsync();
-                        await _svc.ChatVm.RefreshDevicesAsync();
+                        try
+                        {
+                            await _svc.SettingsVm.RefreshDevicesAsync();
+                            await _svc.ChatVm.RefreshDevicesAsync();
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Debug($"后台定期刷新设备状态失败: {ex.Message}");
+                        }
                     }
-                    catch (Exception ex)
+                    else if (_state == ConnState.Offline || (_push is not null && !_push.IsConnected))
                     {
-                        Log.Debug($"后台定期刷新设备状态失败: {ex.Message}");
+                        Log.Debug("检测到后台处于离线或推送未连接状态，正在尝试恢复连接与对齐剪贴板…");
+                        try
+                        {
+                            await ConnectAsync();
+                            await PullCurrentAsync();
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Debug($"后台自动重连尝试失败: {ex.Message}");
+                        }
                     }
                 }
-            };
-            _heartbeatTimer.Start();
+                catch (Exception ex)
+                {
+                    // async void 语义下异常会逃逸到线程池并终止进程,此处必须兜底吞掉
+                    Log.Debug($"后台心跳回调异常: {ex.Message}");
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _heartbeatRunning, 0);
+                }
+            }, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
         }
         catch (Exception ex)
         {
@@ -362,6 +394,7 @@ public sealed class SyncEngine : IDisposable
         {
             Type = clip.ImagePng is { Length: > 0 } ? "Image" : "Text",
             Text = clip.Text,
+            Html = clip.Html,
             ImagePath = imagePath,
             DeviceId = s.DeviceId,
             DeviceName = s.DeviceName,
@@ -382,6 +415,7 @@ public sealed class SyncEngine : IDisposable
         Id = item.ServerId ?? 0,
         Type = item.Type,
         Text = item.Text,
+        Html = item.Html,
         ImageRef = item.ImageRef,
         DeviceId = item.DeviceId,
         DeviceName = item.DeviceName,
@@ -396,7 +430,7 @@ public sealed class SyncEngine : IDisposable
         {
             if (clip.Text is not null)
             {
-                var entry = await UploadTextWithRetryAsync(s, clip.Text, CancellationToken.None);
+                var entry = await UploadTextWithRetryAsync(s, clip.Text, clip.Html, CancellationToken.None);
                 if (entry is not null)
                 {
                     var createdAt = entry.CreatedAt != default ? entry.CreatedAt : DateTime.UtcNow;
@@ -449,13 +483,13 @@ public sealed class SyncEngine : IDisposable
         }
     }
 
-    private async Task<Models.ClipboardEntry?> UploadTextWithRetryAsync(SettingsStore s, string text, CancellationToken ct)
+    private async Task<Models.ClipboardEntry?> UploadTextWithRetryAsync(SettingsStore s, string text, string? html, CancellationToken ct)
     {
         for (var attempt = 0; ; attempt++)
         {
             try
             {
-                return await _svc.Api.PutTextAsync(s.ServerUrl, s.AuthToken, text, s.DeviceId, s.DeviceName, SystemInfo.Platform, SystemInfo.Version, isManual: false, ct);
+                return await _svc.Api.PutTextAsync(s.ServerUrl, s.AuthToken, text, s.DeviceId, s.DeviceName, SystemInfo.Platform, SystemInfo.Version, isManual: false, html: html, ct: ct);
             }
             catch (Exception ex) when (attempt < 3 && ex is not ApiException { StatusCode: System.Net.HttpStatusCode.Unauthorized })
             {
@@ -516,9 +550,10 @@ public sealed class SyncEngine : IDisposable
             }
         }
 
-        // 内容哈希:远端文本/图片字节,供本地重复内容去重置顶使用
+        // 内容哈希:远端文本/图片字节,供本地重复内容去重置顶使用。
+        // 富文本片段必须无条件参与哈希(与发送端算法一致),否则两端算出的哈希会不一致。
         var contentHash = entry.Type == "Text" && entry.Text is not null
-            ? ClipboardMonitor.HashText(entry.Text)
+            ? ClipboardMonitor.HashText(entry.Text, entry.Html)
             : imageBytes is not null
                 ? ClipboardMonitor.HashBytes(imageBytes)
                 : null;
@@ -538,6 +573,7 @@ public sealed class SyncEngine : IDisposable
                 ServerId = entry.Id,
                 Type = entry.Type,
                 Text = entry.Text,
+                Html = entry.Html,
                 ImagePath = imagePath,
                 ImageRef = entry.ImageRef,
                 DeviceId = entry.DeviceId,
@@ -557,7 +593,8 @@ public sealed class SyncEngine : IDisposable
                 using var _ = _monitor?.PauseCapture(TimeSpan.FromSeconds(3));
                 if (entry.Type == "Text" && entry.Text is not null)
                 {
-                    ImageCodec.SetClipboardText(entry.Text);
+                    // 富文本开关关闭时只写回纯文本
+                    ImageCodec.SetClipboardText(entry.Text, s.RichTextEnabled ? entry.Html : null);
                     if (contentHash is not null) _monitor?.RecordLastSeen(contentHash);
                 }
                 else if (imagePath is not null)
@@ -655,8 +692,14 @@ public sealed class SyncEngine : IDisposable
             using var _ = _monitor?.PauseCapture();
             if (item.Type == "Text" && item.Text is not null)
             {
-                ImageCodec.WriteClipboardText(item.Text);
-                var hash = item.ContentHash ?? ClipboardMonitor.HashText(item.Text);
+                // plainText 为真(Shift+粘贴 / 右键"粘贴为纯文本")或富文本开关关闭时,只写纯文本;
+                // 否则同时写 HTML 与纯文本,由目标程序按自身能力择取。
+                var html = plainText || !_svc.Settings.RichTextEnabled ? null : item.Html;
+                ImageCodec.WriteClipboardText(item.Text, html);
+                // 抑制回环用的哈希必须与实际写入剪贴板的内容一致:降级为纯文本时不能用条目原本的富文本哈希
+                var hash = html is null
+                    ? ClipboardMonitor.HashText(item.Text)
+                    : item.ContentHash ?? ClipboardMonitor.HashText(item.Text, html);
                 _monitor?.RecordLastSeen(hash);
             }
             else if (item.Type == "Image")
@@ -700,7 +743,9 @@ public sealed class SyncEngine : IDisposable
         {
             if (item.Type == "Text" && item.Text is not null)
             {
-                await _svc.Api.PutTextAsync(s.ServerUrl, s.AuthToken, item.Text, s.DeviceId, s.DeviceName, "Windows", Environment.OSVersion.VersionString);
+                // 富文本开关关闭时只推送纯文本,与本机写回剪贴板的行为保持一致
+                var html = s.RichTextEnabled ? item.Html : null;
+                await _svc.Api.PutTextAsync(s.ServerUrl, s.AuthToken, item.Text, s.DeviceId, s.DeviceName, "Windows", Environment.OSVersion.VersionString, html: html);
                 return true;
             }
             else if (item.Type == "Image")
@@ -762,7 +807,7 @@ public sealed class SyncEngine : IDisposable
 
     public void Dispose()
     {
-        _heartbeatTimer?.Stop();
+        _heartbeatTimer?.Dispose();
         _heartbeatTimer = null;
         _monitor?.Stop();
         _uploadGate.Dispose();

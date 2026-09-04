@@ -7,6 +7,7 @@ public sealed class HistoryItem
     public long? ServerId { get; set; }       // 服务端条目 Id,用于去重
     public string Type { get; set; } = "Text"; // Text | Image
     public string? Text { get; set; }
+    public string? Html { get; set; }         // 富文本 HTML 片段(仅 Text 条目;纯文本条目为 null)
     public string? ImagePath { get; set; }    // 本地缓存文件
     public string? ImageRef { get; set; }     // 远端引用
     public string? ContentHash { get; set; }    // 内容哈希(文本/图片字节),用于重复内容置顶去重
@@ -20,5 +21,6 @@ public sealed class HistoryItem
     public bool Starred { get; set; }
     public string? Remark { get; set; }        // 用户自定义备注
     public bool HasRemark => !string.IsNullOrWhiteSpace(Remark);
+    public bool HasHtml => !string.IsNullOrWhiteSpace(Html);
     public bool IsManual => Origin == 2 || SourceAppName == "即时互传" || SourceAppName == "手动推送";
 }
