@@ -8,6 +8,8 @@ public class ClipboardEntry
     public long Id { get; set; }
     [MaxLength(16)] public string Type { get; set; } = "Text";
     public string? Text { get; set; }
+    /// 富文本片段(HTML,可选):不含 CF_HTML 头,由客户端写回剪贴板时重新生成;老客户端忽略该字段
+    public string? Html { get; set; }
     public string? ImageRef { get; set; }
     /// 内容指纹(SHA256),用于去重:同内容不重复入库、不重复推送
     [MaxLength(64)] public string ContentHash { get; set; } = "";
@@ -40,6 +42,6 @@ public class ActivityLog
 }
 
 // ---------- 请求 DTO ----------
-public record UploadTextRequest(string? Type, string? Text, string? DeviceId, string? DeviceName, string? Platform, string? Version, bool IsManual = false);
+public record UploadTextRequest(string? Type, string? Text, string? Html, string? DeviceId, string? DeviceName, string? Platform, string? Version, bool IsManual = false);
 public record SendRequest(string? Text, string[]? DeviceIds, string? DeviceId, string? DeviceName, bool IsManual = true);
 public record RenameDeviceRequest(string? Name);

@@ -41,6 +41,21 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.EnsureCreatedAsync();
+    // EnsureCreated 不做迁移:新增实体属性不会给已存在的库加列,否则老库启动后查询即报 no such column。
+    // 这里补一段幂等的原生 SQL,与 Node 版 db.ts 的增量补列行为对齐(列名/类型必须同为 Html / TEXT NULL)。
+    var conn = db.Database.GetDbConnection();
+    await conn.OpenAsync();
+    bool hasHtml;
+    await using (var probe = conn.CreateCommand())
+    {
+        probe.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Entries') WHERE \"name\" = 'Html'";
+        hasHtml = Convert.ToInt64(await probe.ExecuteScalarAsync()) > 0;
+    }
+    if (!hasHtml)
+    {
+        await db.Database.ExecuteSqlRawAsync("ALTER TABLE \"Entries\" ADD COLUMN \"Html\" TEXT NULL");
+        app.Logger.LogInformation("数据库补列: Entries.Html");
+    }
 }
 
 // 静态托管 Web 前端产物(优先 wwwroot,其次 ../web/dist),非 API 路径回退 index.html(SPA)

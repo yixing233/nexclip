@@ -18,7 +18,7 @@ public class LegacyController(ClipboardService svc) : ControllerBase
     public async Task<IActionResult> Put([FromBody] LegacyUpload body)
     {
         if (string.IsNullOrEmpty(body.Text)) return BadRequest(new { error = "text 不能为空" });
-        var (_, _) = await svc.UploadTextAsync(body.Text, body.DeviceId ?? "legacy", body.DeviceName ?? "Legacy Client", null, null, IpUtil.Normalize(HttpContext.Connection.RemoteIpAddress?.ToString()));
+        var (_, _) = await svc.UploadTextAsync(body.Text, null, body.DeviceId ?? "legacy", body.DeviceName ?? "Legacy Client", null, null, IpUtil.Normalize(HttpContext.Connection.RemoteIpAddress?.ToString()));
         return Ok(new { ok = true });
     }
 

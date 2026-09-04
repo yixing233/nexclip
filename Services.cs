@@ -84,9 +84,11 @@ public class ClipboardService(
     public AppOptions Options => _opt;
 
     /// 文本上传:内容 hash 去重,返回 (entry, unchanged);broadcast=false 时不广播,由调用方决定通知范围
-    public async Task<(ClipboardEntry? entry, bool unchanged)> UploadTextAsync(string text, string deviceId, string deviceName, string? platform, string? version, string? ip, bool broadcast = true, bool isManual = false)
+    public async Task<(ClipboardEntry? entry, bool unchanged)> UploadTextAsync(string text, string? html, string deviceId, string deviceName, string? platform, string? version, string? ip, bool broadcast = true, bool isManual = false)
     {
-        var hash = Hash(text);
+        // 富文本片段参与 hash(分隔符 U+0001,与桌面端算法一致):html 为空时与加富文本之前逐字节一致,
+        // 存量条目 hash 不失效;非空时"同一段文字的纯文本版/富文本版"是两条独立记录,富文本不会被判成 unchanged 丢掉
+        var hash = Hash(string.IsNullOrEmpty(html) ? text : text + (char)1 + html);
         var current = await GetCurrentAsync();
         if (current is not null && current.ContentHash == hash && current.Type == "Text")
             return (current, true);
@@ -95,6 +97,7 @@ public class ClipboardService(
         {
             Type = "Text",
             Text = text,
+            Html = string.IsNullOrEmpty(html) ? null : html,
             ContentHash = hash,
             DeviceId = deviceId,
             DeviceName = deviceName,

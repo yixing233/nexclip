@@ -22,12 +22,14 @@ public class ClipboardController(ClipboardService svc) : ControllerBase
         var text = req.Text?.Trim();
         if (string.IsNullOrEmpty(text) || text.Length > 500_000)
             return BadRequest(new { error = "text 不能为空且不超过 500KB" });
+        // 富文本片段可选:超限时静默降级为纯文本(老客户端不带该字段)
+        var html = req.Html is { Length: > 0 and <= 262_144 } ? req.Html : null;
         var deviceId = string.IsNullOrEmpty(req.DeviceId) ? "web-" + Guid.NewGuid().ToString("N")[..8] : req.DeviceId;
         var deviceName = string.IsNullOrEmpty(req.DeviceName) ? deviceId : req.DeviceName;
         var ip = IpUtil.Normalize(HttpContext.Connection.RemoteIpAddress?.ToString());
-        var (entry, unchanged) = await svc.UploadTextAsync(text, deviceId, deviceName, req.Platform, req.Version, ip, isManual: req.IsManual);
+        var (entry, unchanged) = await svc.UploadTextAsync(text, html, deviceId, deviceName, req.Platform, req.Version, ip, isManual: req.IsManual);
         // 扁平条目 + unchanged 标记:web 端直接取条目字段,桌面端读 unchanged 判断是否新内容
-        return Ok(new { entry!.Id, entry.Type, entry.Text, entry.ImageRef, entry.DeviceId, entry.DeviceName, entry.IsManual, entry.CreatedAt, unchanged });
+        return Ok(new { entry!.Id, entry.Type, entry.Text, entry.Html, entry.ImageRef, entry.DeviceId, entry.DeviceName, entry.IsManual, entry.CreatedAt, unchanged });
     }
 
     /// 上传图片剪贴板(multipart/form-data: file + deviceId + deviceName + isManual)
@@ -91,7 +93,7 @@ public class ClipboardController(ClipboardService svc) : ControllerBase
         var deviceId = string.IsNullOrEmpty(req.DeviceId) ? "web-" + Guid.NewGuid().ToString("N")[..8] : req.DeviceId;
         var deviceName = string.IsNullOrEmpty(req.DeviceName) ? deviceId : req.DeviceName;
         var targets = req.DeviceIds?.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().ToList() ?? [];
-        var (entry, _) = await svc.UploadTextAsync(text, deviceId, deviceName, "Web", null,
+        var (entry, _) = await svc.UploadTextAsync(text, null, deviceId, deviceName, "Web", null,
             IpUtil.Normalize(HttpContext.Connection.RemoteIpAddress?.ToString()), broadcast: targets.Count == 0, isManual: true);
         if (entry is not null && targets.Count > 0)
             await svc.BroadcastAsync(entry, targets);
