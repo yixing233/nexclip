@@ -292,28 +292,23 @@ internal static class NativeMethods
     }
 
     /// <summary>
-    /// 当前前台窗口内的焦点控件句柄(输入框等);无前台/取不到返回 0。
-    /// GetGUIThreadInfo 只能读取与调用线程共享输入队列的线程,跨线程须先 AttachThreadInput。
+    /// 指定窗口所在线程的焦点控件句柄(输入框等);取不到返回 0。
+    /// GetGUIThreadInfo 本身支持跨线程/跨进程查询,**不需要** AttachThreadInput
+    /// (需要共享输入队列的是 GetFocus/GetCaretPos,不是本函数)。
+    /// 这里必须避开 AttachThreadInput:合并输入队列会连带搅乱目标线程的输入法上下文,
+    /// detach 之后输入法查不到插入符位置,中文候选栏会跳到屏幕左上角。
     /// </summary>
-    internal static IntPtr GetFocusedControl()
+    internal static IntPtr GetFocusedControlOf(IntPtr window)
     {
-        var fg = GetForegroundWindow();
-        if (fg == IntPtr.Zero) return IntPtr.Zero;
-        var targetTid = GetWindowThreadProcessId(fg, out _);
-        if (targetTid == 0) return IntPtr.Zero;
-        var curTid = GetCurrentThreadId();
-        var attached = targetTid != curTid && AttachThreadInput(curTid, targetTid, true);
-        try
-        {
-            var info = new GUITHREADINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<GUITHREADINFO>() };
-            if (GetGUIThreadInfo(targetTid, ref info)) return info.hwndFocus;
-            return IntPtr.Zero;
-        }
-        finally
-        {
-            if (attached) AttachThreadInput(curTid, targetTid, false);
-        }
+        if (window == IntPtr.Zero) return IntPtr.Zero;
+        var tid = GetWindowThreadProcessId(window, out _);
+        if (tid == 0) return IntPtr.Zero;
+        var info = new GUITHREADINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<GUITHREADINFO>() };
+        return GetGUIThreadInfo(tid, ref info) ? info.hwndFocus : IntPtr.Zero;
     }
+
+    /// <summary>当前前台窗口内的焦点控件句柄(输入框等);无前台/取不到返回 0。</summary>
+    internal static IntPtr GetFocusedControl() => GetFocusedControlOf(GetForegroundWindow());
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     internal static extern bool IsChild(IntPtr hWndParent, IntPtr hWnd);
@@ -383,26 +378,17 @@ internal static class NativeMethods
     /// </summary>
     internal static bool IsFocusedInWindow(IntPtr hwnd)
     {
-        var fg = GetForegroundWindow();
-        if (fg == IntPtr.Zero) return false;
-        var tid = GetWindowThreadProcessId(fg, out _);
-        var curTid = GetCurrentThreadId();
-        var attached = tid != curTid && AttachThreadInput(curTid, tid, true);
-        try
-        {
-            var info = new GUITHREADINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<GUITHREADINFO>() };
-            if (!GetGUIThreadInfo(tid, ref info)) return false;
-            var focus = info.hwndFocus;
-            if (focus == IntPtr.Zero) return false;
-            return focus == hwnd || IsChild(hwnd, focus) || IsChild(focus, hwnd);
-        }
-        finally
-        {
-            if (attached) AttachThreadInput(curTid, tid, false);
-        }
+        var focus = GetFocusedControl();
+        if (focus == IntPtr.Zero) return false;
+        return focus == hwnd || IsChild(hwnd, focus) || IsChild(focus, hwnd);
     }
 
-    /// <summary>把焦点精确给到指定控件(跨线程需临时附加输入队列);首次失败小延迟重试一次。</summary>
+    /// <summary>
+    /// 把焦点精确给到指定控件(跨线程需临时附加输入队列);首次失败小延迟重试一次。
+    /// **有副作用**:跨进程 SetFocus 只改 Win32 焦点,目标应用不会重走自己的获焦握手
+    /// (TSF 焦点文档不同步),之后输入法取不到插入符矩形,候选栏会退化到屏幕左上角。
+    /// 所以只在焦点确实没能自然恢复时兜底调用,能不调就不调。
+    /// </summary>
     internal static bool SetFocusTo(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return false;

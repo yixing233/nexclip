@@ -297,7 +297,8 @@ public sealed partial class ClipboardWindow : Window
                 AppWindow.Hide();
                 NativeMethods.ShowWindow(hwnd, 0 /* SW_HIDE */);
                 // 热键/托盘切换隐藏:把焦点还给呼出前的窗口与输入框,避免聚焦状态丢失
-                RestorePreviousFocus();
+                // (窗口已隐藏,不阻塞 UI 线程等自然恢复)
+                _ = RestorePreviousFocusAsync();
             }
             else
             {
@@ -511,8 +512,12 @@ public sealed partial class ClipboardWindow : Window
         }
     }
 
-    /// <summary>把前台与焦点还给呼出前的窗口/输入框(隐藏路径用,粘贴路径自带)。</summary>
-    private void RestorePreviousFocus()
+    /// <summary>
+    /// 把前台与焦点还给呼出前的窗口/输入框(热键/托盘收起时用,粘贴路径自带)。
+    /// 先等 Windows 按激活顺序自然恢复,焦点自己回来了就不再插手 ——
+    /// 强设焦点会让目标应用的输入法候选栏错位到屏幕左上角,见 <see cref="IsPasteFocusIntact"/>。
+    /// </summary>
+    private async Task RestorePreviousFocusAsync()
     {
         try
         {
@@ -522,6 +527,8 @@ public sealed partial class ClipboardWindow : Window
             {
                 NativeMethods.ActivateWindow(target);
             }
+            await WaitForForegroundAsync(target, 300);
+            if (IsPasteFocusIntact(target, _pasteFocus, _pasteAutomationFocus)) return;
             TryRestorePasteFocus(target, _pasteFocus, _pasteAutomationFocus);
         }
         catch (Exception ex)
@@ -573,9 +580,11 @@ public sealed partial class ClipboardWindow : Window
                 await WaitForForegroundAsync(target, 700);
             }
 
-            // 顶层窗口恢复不代表 Chromium/Electron 内部的 DOM 编辑框已恢复。
-            // 无论走自然恢复还是显式激活,都恢复呼出时捕获的真实 UIA/Win32 焦点。
-            var focusRestored = TryRestorePasteFocus(target, focus, automationFocus);
+            // 焦点已经自然回到呼出前的输入框时,绝对不要再强设一次:强设焦点会让目标应用的
+            // TSF 焦点文档与 Win32 焦点脱节,之后打字候选栏会跳到屏幕左上角
+            // (详见 IsPasteFocusIntact / NativeMethods.SetFocusTo 注释)。只在没回焦时兜底。
+            var focusIntact = IsPasteFocusIntact(target, focus, automationFocus);
+            var focusRestored = focusIntact || TryRestorePasteFocus(target, focus, automationFocus);
             await WaitForForegroundAsync(target, 300);
             await Task.Delay(100);
             var foregroundAtInject = NativeMethods.GetForegroundWindow();
@@ -594,7 +603,7 @@ public sealed partial class ClipboardWindow : Window
             var injected = useCtrlV
                 ? NativeMethods.SendInputCtrlV()
                 : NativeMethods.SendInputShiftInsert();
-            Log.Debug($"粘贴:SendInput {keyName} (strategy={strategy}, natural={restoredNaturally}, activated={activated}, focusRestored={focusRestored}, injected={injected})");
+            Log.Debug($"粘贴:SendInput {keyName} (strategy={strategy}, natural={restoredNaturally}, activated={activated}, focusIntact={focusIntact}, focusRestored={focusRestored}, injected={injected})");
         }
         catch (Exception ex)
         {
@@ -626,23 +635,47 @@ public sealed partial class ClipboardWindow : Window
         return false;
     }
 
+    /// <summary>
+    /// 判断呼出前的焦点是否已经自然回到原处。回来了就不该再强设一次焦点:
+    /// 跨进程 SetFocus 与 UIA SetFocus 都只改 Win32 焦点,不会让目标应用重走自己的获焦握手,
+    /// TSF 焦点文档因此与 Win32 焦点脱节,输入法查不到插入符矩形,候选栏退化到屏幕左上角。
+    /// 判断刻意保守:拿不准一律返回 false 退回强制回焦,不牺牲粘贴成功率。
+    /// </summary>
+    private static bool IsPasteFocusIntact(IntPtr target, IntPtr focus, AutomationElement? automationFocus)
+    {
+        if (!NativeMethods.IsSameRootWindow(NativeMethods.GetForegroundWindow(), target)) return false;
+
+        // Chromium/Electron:Win32 焦点停在渲染窗口上不代表 DOM 输入框已回焦,只能比对 UIA 焦点元素。
+        if (NativeMethods.IsChromiumWindow(target))
+        {
+            if (automationFocus is null) return false;
+            try
+            {
+                return Automation.Compare(AutomationElement.FocusedElement, automationFocus);
+            }
+            catch (Exception ex)
+            {
+                Log.Debug($"比对 UIA 焦点失败:{ex.Message}");
+                return false;
+            }
+        }
+
+        // 普通应用:焦点控件句柄必须与呼出时捕获的完全一致(同窗口内换了控件也按没回焦处理)。
+        return focus != IntPtr.Zero && NativeMethods.GetFocusedControlOf(target) == focus;
+    }
+
+    /// <summary>
+    /// 兜底回焦:仅在 <see cref="IsPasteFocusIntact"/> 判定焦点没能自然回来时调用。
+    /// UIA SetFocus 只对 Chromium/Electron 的自绘输入框有必要(恢复顶层 Win32 焦点无法恢复 DOM 焦点);
+    /// 普通 TSF 应用上它同样会打乱输入上下文,故降级为 Win32 回焦失败后的最后一招。
+    /// </summary>
     private static bool TryRestorePasteFocus(
         IntPtr target,
         IntPtr focus,
         AutomationElement? automationFocus)
     {
-        if (automationFocus is not null)
-        {
-            try
-            {
-                automationFocus.SetFocus();
-                return NativeMethods.IsSameRootWindow(NativeMethods.GetForegroundWindow(), target);
-            }
-            catch (Exception ex)
-            {
-                Log.Debug($"恢复 UIA 焦点失败:{ex.Message}");
-            }
-        }
+        var isChromium = NativeMethods.IsChromiumWindow(target);
+        if (isChromium && TrySetAutomationFocus(target, automationFocus)) return true;
 
         var focusTarget = focus;
         if (focusTarget == IntPtr.Zero || focusTarget == target)
@@ -650,7 +683,24 @@ public sealed partial class ClipboardWindow : Window
             var renderWidget = NativeMethods.FindRenderWidgetChild(target);
             if (renderWidget != IntPtr.Zero) focusTarget = renderWidget;
         }
-        return NativeMethods.SetFocusTo(focusTarget);
+        if (NativeMethods.SetFocusTo(focusTarget)) return true;
+
+        return !isChromium && TrySetAutomationFocus(target, automationFocus);
+    }
+
+    private static bool TrySetAutomationFocus(IntPtr target, AutomationElement? automationFocus)
+    {
+        if (automationFocus is null) return false;
+        try
+        {
+            automationFocus.SetFocus();
+            return NativeMethods.IsSameRootWindow(NativeMethods.GetForegroundWindow(), target);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"恢复 UIA 焦点失败:{ex.Message}");
+            return false;
+        }
     }
 
     /// <summary>
