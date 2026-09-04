@@ -2,8 +2,6 @@ package clip.yixing.sync
 
 import android.app.ActivityManager
 import android.os.Bundle
-import android.content.Intent
-import android.net.Uri
 import android.content.pm.PackageManager
 import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
@@ -72,6 +70,7 @@ import androidx.compose.ui.unit.sp
 import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import androidx.navigationevent.compose.rememberNavigationEventDispatcherOwner
 import clip.yixing.sync.service.ClipboardMonitorService
+import clip.yixing.sync.ui.AppUpdateDialog
 import clip.yixing.sync.ui.BottomBarIcons
 import clip.yixing.sync.ui.HomePage
 import clip.yixing.sync.ui.LucideIcons
@@ -88,6 +87,7 @@ import clip.yixing.sync.ui.SettingsPage
 import clip.yixing.sync.ui.scan.QrScanPage
 import clip.yixing.sync.ui.theme.NexClipTheme
 import clip.yixing.sync.util.SyncSettings
+import clip.yixing.sync.util.UpdateInfo
 import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -256,6 +256,9 @@ private fun MainScreen() {
     var displayedManualPushOpen by remember { mutableStateOf(false) }
     val manualPushAnimProgress = remember { Animatable(1f) }
 
+    // 启动检查发现新版本后，点击 snackbar「更新」直接在应用内下载安装
+    var updateDialogInfo by remember { mutableStateOf<UpdateInfo?>(null) }
+
     LaunchedEffect(Unit) {
         if (SyncSettings.autoCheckUpdate(appContext)) {
             delay(1500)
@@ -281,16 +284,10 @@ private fun MainScreen() {
                 val res = snackbarHostState.showAppSnack(
                     message = "发现新版本 v${info.latestVersion}",
                     type = SnackType.Info,
-                    actionLabel = "查看"
+                    actionLabel = "更新"
                 )
                 if (res == SnackbarResult.ActionPerformed) {
-                    val target = info.downloadUrl ?: info.releaseUrl
-                    runCatching {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(target)).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        appContext.startActivity(intent)
-                    }
+                    updateDialogInfo = info
                 }
             }
         }
@@ -499,6 +496,15 @@ private fun MainScreen() {
                 actionContentColor = Color.White,
                 dismissActionContentColor = scheme.onBackgroundVariant.copy(alpha = 0.8f),
             )
+        )
+    }
+
+    // 启动检查发现新版本 → snackbar 点「更新」后弹出应用内下载安装弹窗
+    updateDialogInfo?.let { info ->
+        AppUpdateDialog(
+            info = info,
+            snackbarHostState = snackbarHostState,
+            onDismiss = { updateDialogInfo = null }
         )
     }
 

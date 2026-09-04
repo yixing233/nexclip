@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <cache-path name="clip_images" path="clip_images/" />
+    <!-- 应用内更新下载目录:getExternalFilesDir(null)/updates -->
+    <external-files-path name="app_updates" path="updates/" />
+    <!-- 外部存储不可用时 downloadApk() 回退到 filesDir/updates -->
+    <files-path name="app_updates_internal" path="updates/" />
 </paths>

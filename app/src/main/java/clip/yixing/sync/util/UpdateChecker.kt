@@ -2,7 +2,9 @@ package clip.yixing.sync.util
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.provider.Settings
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -275,7 +277,13 @@ object UpdateChecker {
 
             // 3. 重命名为正式文件
             if (finalApk.exists()) finalApk.delete()
-            tempApk.renameTo(finalApk)
+            if (!tempApk.renameTo(finalApk)) {
+                tempApk.copyTo(finalApk, overwrite = true)
+                tempApk.delete()
+            }
+            if (!finalApk.exists() || finalApk.length() <= 0L) {
+                throw Exception("安装包写入失败，请检查存储空间后重试。")
+            }
             finalApk
         }
     }
@@ -314,9 +322,46 @@ object UpdateChecker {
     }
 
     /**
-     * 唤起系统安装器执行 APK 覆盖安装。
+     * 是否已获得「安装未知应用」授权。Android 8.0+ 未授权时系统安装器会直接拒绝安装请求。
      */
-    fun installApk(context: Context, apkFile: File) {
+    fun canRequestPackageInstalls(context: Context): Boolean =
+        runCatching { context.packageManager.canRequestPackageInstalls() }.getOrDefault(false)
+
+    /**
+     * 跳转到本应用的「安装未知应用」授权页；失败时回退到应用详情页。
+     */
+    fun openInstallPermissionSettings(context: Context): Boolean {
+        val intent = Intent(
+            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+            Uri.parse("package:${context.packageName}")
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return runCatching { context.startActivity(intent); true }.getOrElse {
+            runCatching {
+                context.startActivity(
+                    Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:${context.packageName}")
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+                true
+            }.getOrDefault(false)
+        }
+    }
+
+    /**
+     * 唤起系统安装器执行 APK 覆盖安装。
+     *
+     * 失败原因会包装成可读文案返回，常见于：未授予「安装未知应用」权限、
+     * 安装包被清理、FileProvider 未声明对应目录。
+     */
+    fun installApk(context: Context, apkFile: File): Result<Unit> = runCatching {
+        if (!apkFile.exists() || apkFile.length() <= 0L) {
+            throw IllegalStateException("安装包不存在或已损坏，请重新下载")
+        }
+        if (!canRequestPackageInstalls(context)) {
+            throw SecurityException("请先允许 NexClip「安装未知应用」")
+        }
+
         val uri = FileProvider.getUriForFile(
             context,
             "${context.packageName}.fileprovider",
@@ -327,6 +372,18 @@ object UpdateChecker {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
+        // 部分 ROM 的安装器不读取 Intent 上的临时授权，显式对目标包再授一次
+        context.packageManager
+            .queryIntentActivities(installIntent, PackageManager.MATCH_DEFAULT_ONLY)
+            .forEach { resolveInfo ->
+                runCatching {
+                    context.grantUriPermission(
+                        resolveInfo.activityInfo.packageName,
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                }
+            }
         context.startActivity(installIntent)
     }
 

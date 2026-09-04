@@ -65,6 +65,7 @@ fun AppUpdateDialog(
     var downloadBytesText by remember { mutableStateOf("") }
     var downloadedApkFile by remember { mutableStateOf<File?>(null) }
     var downloadError by remember { mutableStateOf<String?>(null) }
+    var needInstallPermission by remember { mutableStateOf(false) }
 
     val openUrl: (String) -> Unit = { targetUrl ->
         runCatching {
@@ -80,11 +81,36 @@ fun AppUpdateDialog(
         }
     }
 
+    // 唤起系统安装器；未授予「安装未知应用」时跳转授权页，回到应用后可再点「立即安装」重试
+    val launchInstaller: (File) -> Unit = { apk ->
+        if (!UpdateChecker.canRequestPackageInstalls(context)) {
+            needInstallPermission = true
+            UpdateChecker.openInstallPermissionSettings(context)
+            if (snackbarHostState != null) {
+                scope.launch {
+                    snackbarHostState.showAppSnack("请允许 NexClip「安装未知应用」后重试", SnackType.Info)
+                }
+            }
+        } else {
+            UpdateChecker.installApk(context, apk)
+                .onSuccess { needInstallPermission = false }
+                .onFailure { ex ->
+                    needInstallPermission = false
+                    if (snackbarHostState != null) {
+                        scope.launch {
+                            snackbarHostState.showAppSnack("唤起安装器失败: ${ex.message}", SnackType.Error)
+                        }
+                    }
+                }
+        }
+    }
+
     val startDownload: () -> Unit = {
         val url = info.downloadUrl
         if (!url.isNullOrBlank()) {
             isDownloading = true
             downloadError = null
+            needInstallPermission = false
             scope.launch {
                 val result = UpdateChecker.downloadApk(
                     context = context,
@@ -102,11 +128,7 @@ fun AppUpdateDialog(
                     downloadedApkFile = apk
                     downloadProgress = 100f
                     // 自动唤起系统安装器
-                    runCatching {
-                        UpdateChecker.installApk(context, apk)
-                    }.onFailure { ex ->
-                        snackbarHostState?.showAppSnack("唤起安装器失败: ${ex.message}", SnackType.Error)
-                    }
+                    launchInstaller(apk)
                 }.onFailure { ex ->
                     downloadError = ex.message
                     snackbarHostState?.showAppSnack("下载失败: ${ex.message}", SnackType.Error)
@@ -152,7 +174,7 @@ fun AppUpdateDialog(
         }
 
         // 下载进度显示
-        AnimatedVisibility(visible = isDownloading || downloadedApkFile != null) {
+        AnimatedVisibility(visible = isDownloading || downloadedApkFile != null || downloadError != null) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -184,9 +206,14 @@ fun AppUpdateDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (downloadedApkFile != null) "下载完成，点击立即安装" else (downloadBytesText.ifEmpty { "正在下载安装包..." }),
+                        text = when {
+                            downloadError != null -> "下载失败：$downloadError"
+                            needInstallPermission -> "请授予「安装未知应用」权限后点击立即安装"
+                            downloadedApkFile != null -> "下载完成，点击立即安装"
+                            else -> downloadBytesText.ifEmpty { "正在下载安装包..." }
+                        },
                         fontSize = 11.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant
+                        color = if (downloadError != null) MiuixTheme.colorScheme.error else MiuixTheme.colorScheme.onBackgroundVariant
                     )
                     if (downloadSpeed.isNotBlank()) {
                         Text(
@@ -200,7 +227,7 @@ fun AppUpdateDialog(
             }
         }
 
-        if (isDownloading || downloadedApkFile != null) {
+        if (isDownloading || downloadedApkFile != null || downloadError != null) {
             Spacer(Modifier.height(12.dp))
         }
 
@@ -224,9 +251,7 @@ fun AppUpdateDialog(
 
             if (downloadedApkFile != null) {
                 Button(
-                    onClick = {
-                        UpdateChecker.installApk(context, downloadedApkFile!!)
-                    },
+                    onClick = { launchInstaller(downloadedApkFile!!) },
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(
@@ -235,7 +260,7 @@ fun AppUpdateDialog(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(Modifier.width(4.dp))
-                    Text("立即安装")
+                    Text(if (needInstallPermission) "已授权，安装" else "立即安装")
                 }
             } else if (!isDownloading) {
                 Button(
@@ -248,7 +273,13 @@ fun AppUpdateDialog(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(Modifier.width(4.dp))
-                    Text(if (info.downloadUrl != null) "立即更新" else "前往发布页")
+                    Text(
+                        when {
+                            info.downloadUrl == null -> "前往发布页"
+                            downloadError != null -> "重试下载"
+                            else -> "立即更新"
+                        }
+                    )
                 }
             }
         }
