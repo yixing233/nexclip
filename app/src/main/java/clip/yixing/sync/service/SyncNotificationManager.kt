@@ -191,7 +191,7 @@ object SyncNotificationManager {
                 .setSummaryText(if (isServerConnected) "云端已连接" else "本地监听中")
             builder.setStyle(bigStyle)
 
-            addQuickActions(context, builder, latestClip.text, smartActions)
+            addQuickActions(context, builder, latestClip.text, isImage, latestClip.imageRef, smartActions)
         }
 
         return builder.build()
@@ -244,7 +244,7 @@ object SyncNotificationManager {
             .setCategory(NotificationCompat.CATEGORY_EVENT)
             .setVibrate(longArrayOf(0, 30))
 
-        addQuickActions(context, builder, clip.text, smartActions)
+        addQuickActions(context, builder, clip.text, isImage, clip.imageRef, smartActions)
 
         // 使用 FocusNotification.buildV3 构建原生 HyperOS 灵动胶囊 / 超级岛
         try {
@@ -324,6 +324,8 @@ object SyncNotificationManager {
                 val copyIntent = Intent(context, NotificationActionReceiver::class.java).apply {
                     action = NotificationActionReceiver.ACTION_COPY_LATEST
                     putExtra(NotificationActionReceiver.EXTRA_CLIP_TEXT, clip.text)
+                    putExtra(NotificationActionReceiver.EXTRA_IS_IMAGE, isImage)
+                    putExtra(NotificationActionReceiver.EXTRA_IMAGE_REF, clip.imageRef ?: if (isImage) clip.text else null)
                 }
                 val copyPi = PendingIntent.getBroadcast(
                     context,
@@ -480,7 +482,7 @@ object SyncNotificationManager {
                     .setShowWhen(true)
                     .setPriority(NotificationCompat.PRIORITY_HIGH)
 
-                addQuickActions(context, builder, clip.text, smartActions)
+                addQuickActions(context, builder, clip.text, isImage, clip.imageRef, smartActions)
                 postNotification(context, NOTIFICATION_ID_PUSH, builder.build())
             }
 
@@ -523,7 +525,7 @@ object SyncNotificationManager {
                     putString("android.shortCriticalText", tagText)
                 }
 
-                addQuickActions(context, builder, clip.text, smartActions)
+                addQuickActions(context, builder, clip.text, isImage, clip.imageRef, smartActions)
                 postNotification(context, NOTIFICATION_ID_PUSH, builder.build())
             }
 
@@ -584,6 +586,8 @@ object SyncNotificationManager {
         context: Context,
         builder: NotificationCompat.Builder,
         text: String,
+        isImage: Boolean = false,
+        imageRef: String? = null,
         smartActions: List<SmartAction> = emptyList()
     ) {
         // 1. 优先注入前 1~2 个智能识别动作
@@ -598,6 +602,8 @@ object SyncNotificationManager {
         val copyIntent = Intent(context, NotificationActionReceiver::class.java).apply {
             action = NotificationActionReceiver.ACTION_COPY_LATEST
             putExtra(NotificationActionReceiver.EXTRA_CLIP_TEXT, text)
+            putExtra(NotificationActionReceiver.EXTRA_IS_IMAGE, isImage)
+            putExtra(NotificationActionReceiver.EXTRA_IMAGE_REF, imageRef ?: if (isImage) text else null)
         }
         val copyPi = PendingIntent.getBroadcast(
             context,
