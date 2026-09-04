@@ -546,16 +546,32 @@ class ClipboardMonitorService : Service() {
                 }
             }
 
-            val resolvedApp = sourceApp ?: AppSourceHelper.resolveAppName(context, sourcePackage)
+            // 如果已经提供了 sourceApp 或者来自其他远程设备，则不通过本地包名反查覆盖
+            val isRemote = !sourceDevice.isNullOrBlank() && sourceDevice != "本机"
+            val resolvedApp = if (isRemote) {
+                sourceApp
+            } else {
+                sourceApp ?: AppSourceHelper.resolveAppName(context, sourcePackage)
+            }
+
+            // 如果是远程设备来源，严禁保留/继承本地包名，避免被当作本机 App 显示图标与来源
+            val finalSourceDevice = sourceDevice ?: (if (existingIndex != -1) captured.value[existingIndex].sourceDevice else null)
+            val isFinalRemote = !finalSourceDevice.isNullOrBlank() && finalSourceDevice != "本机"
+
+            val finalSourcePackage = if (isFinalRemote) {
+                null
+            } else {
+                sourcePackage ?: (if (existingIndex != -1) captured.value[existingIndex].sourcePackage else null)
+            }
 
             val list = if (existingIndex != -1) {
                 // 如果是软件外复制的现有条目 -> 将原有条目的时间更新为最新，并移到首位，保留收藏/标签等原有属性
                 val existing = captured.value[existingIndex]
                 val updated = existing.copy(
                     time = System.currentTimeMillis(),
-                    sourceDevice = sourceDevice ?: existing.sourceDevice,
-                    sourcePackage = sourcePackage ?: existing.sourcePackage,
-                    sourceApp = resolvedApp ?: existing.sourceApp,
+                    sourceDevice = finalSourceDevice,
+                    sourcePackage = finalSourcePackage,
+                    sourceApp = if (isFinalRemote) (sourceApp ?: existing.sourceApp?.takeIf { existing.sourceDevice != "本机" }) else (resolvedApp ?: existing.sourceApp),
                     isManual = isManual || existing.isManual
                 )
                 listOf(updated) + captured.value.filterIndexed { index, _ -> index != existingIndex }
@@ -566,9 +582,9 @@ class ClipboardMonitorService : Service() {
                         text = text,
                         time = System.currentTimeMillis(),
                         imageRef = imageRef,
-                        sourceDevice = sourceDevice,
-                        sourcePackage = sourcePackage,
-                        sourceApp = resolvedApp,
+                        sourceDevice = finalSourceDevice,
+                        sourcePackage = finalSourcePackage,
+                        sourceApp = if (isFinalRemote) sourceApp else resolvedApp,
                         isManual = isManual
                     )
                 ) + captured.value
