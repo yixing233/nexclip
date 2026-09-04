@@ -7,7 +7,7 @@ import { dbNow, toIso, sha256Hex, sha256Bytes, truncate, clamp, randomHex, rando
 import type { SignalRHub } from './signalr.js';
 
 export interface EntryDto {
-  id: number; type: string; text: string | null; imageRef: string | null;
+  id: number; type: string; text: string | null; html: string | null; imageRef: string | null;
   deviceId: string; deviceName: string | null; isManual: boolean; createdAt: string;
 }
 
@@ -111,7 +111,7 @@ export class SyncService {
   // ---------- 条目序列化 ----------
   private toDto(e: EntryRow): EntryDto {
     return {
-      id: e.Id, type: e.Type, text: e.Text, imageRef: e.ImageRef,
+      id: e.Id, type: e.Type, text: e.Text, html: e.Html ?? null, imageRef: e.ImageRef,
       deviceId: e.DeviceId, deviceName: e.DeviceName, isManual: Boolean(e.IsManual), createdAt: toIso(e.CreatedAt),
     };
   }
@@ -121,7 +121,11 @@ export class SyncService {
   }
 
   // ---------- 查询 ----------
-  getCurrent(): EntryRow | null {
+  getCurrent(userId: string | null = null): EntryRow | null {
+    if (userId) {
+      return this.db.prepare('SELECT e.* FROM "Entries" e JOIN "Devices" d ON d."Id" = e."DeviceId" WHERE d."UserId" = ? ORDER BY e."Id" DESC LIMIT 1')
+        .get(userId) as unknown as EntryRow | null;
+    }
     return this.db.prepare('SELECT * FROM "Entries" ORDER BY "Id" DESC LIMIT 1').get() as unknown as EntryRow | null;
   }
 
@@ -159,45 +163,60 @@ export class SyncService {
     return { items: rows.map(r => this.toDto(r)), total };
   }
 
-  listDevices(userId: string | null = null): Array<Record<string, unknown>> {
+  /** 设备是否在线:优先看实时连接,回退到 LastSeenAt 阈值 */
+  isDeviceOnline(deviceId: string): boolean {
     const threshold = new Date(Date.now() - this.cfg.onlineThresholdSeconds * 1000).toISOString().replace('T', ' ').replace('Z', '');
-    const liveDeviceIds = this.hub.onlineDeviceIds();
+    const isLive = this.hub.onlineDeviceIds().has(deviceId);
+    if (isLive) return true;
+    const d = this.getDevice(deviceId);
+    return Boolean(d && d.LastSeenAt >= threshold);
+  }
+
+  /** 设备行 → 前端 DTO(在线状态以实时连接为准) */
+  formatDevice(d: DeviceRow): Record<string, unknown> {
+    const threshold = new Date(Date.now() - this.cfg.onlineThresholdSeconds * 1000).toISOString().replace('T', ' ').replace('Z', '');
+    const isLive = this.hub.onlineDeviceIds().has(d.Id);
+    return {
+      id: d.Id, name: d.Name, platform: d.Platform, ip: d.Ip, version: d.Version,
+      online: isLive || d.LastSeenAt >= threshold,
+      userId: d.UserId ?? null,
+      bound: d.UserId != null,
+      paired: d.Token != null,
+      lastSeenAt: isLive ? toIso(dbNow()) : toIso(d.LastSeenAt),
+    };
+  }
+
+  listDevices(userId: string | null = null): Array<Record<string, unknown>> {
     const rows = (userId
       ? this.db.prepare('SELECT * FROM "Devices" WHERE "RevokedAt" IS NULL AND "UserId" = ? ORDER BY "LastSeenAt" DESC').all(userId)
       : this.db.prepare('SELECT * FROM "Devices" WHERE "RevokedAt" IS NULL AND "UserId" IS NOT NULL ORDER BY "LastSeenAt" DESC').all()) as unknown as DeviceRow[];
-    return rows.map(d => {
-      const isLive = liveDeviceIds.has(d.Id);
-      return {
-        id: d.Id, name: d.Name, platform: d.Platform, ip: d.Ip, version: d.Version,
-        online: isLive || d.LastSeenAt >= threshold,
-        userId: d.UserId ?? null,
-        bound: d.UserId != null,
-        paired: d.Token != null,
-        lastSeenAt: isLive ? toIso(dbNow()) : toIso(d.LastSeenAt),
-      };
-    });
+    return rows.map(d => this.formatDevice(d));
   }
 
   // ---------- 文本上传(含去重) ----------
   uploadText(
-    text: string, deviceId: string, deviceName: string,
+    text: string, html: string | null, deviceId: string, deviceName: string,
     platform: string | null, version: string | null, ip: string | null,
     broadcast: boolean,
     isManual: boolean = false,
   ): { entry: EntryDto; unchanged: boolean } {
-    const hash = sha256Hex(text);
-    const current = this.getCurrent();
+    const dev = this.getDevice(deviceId);
+    const userId = dev?.UserId ?? null;
+    // 富文本片段参与哈希(分隔符 U+0001,与桌面端算法一致):html 为空时与加富文本之前逐字节一致,
+    // 存量条目哈希不失效;非空时"同一段文字的纯文本版/富文本版"是两条独立记录,富文本不会被判成 unchanged 丢掉
+    const hash = sha256Hex(html ? text + String.fromCharCode(1) + html : text);
+    const current = this.getCurrent(userId);
     if (current && current.ContentHash === hash && current.Type === 'Text') {
       return { entry: this.toDto(current), unchanged: true };
     }
     const now = dbNow();
-    this.db.prepare(`INSERT INTO "Entries" ("Type","Text","ImageRef","ContentHash","DeviceId","DeviceName","IsManual","CreatedAt") VALUES ('Text', ?, NULL, ?, ?, ?, ?, ?)`)
-      .run(text, hash, deviceId, deviceName, isManual ? 1 : 0, now);
+    this.db.prepare(`INSERT INTO "Entries" ("Type","Text","Html","ImageRef","ContentHash","DeviceId","DeviceName","IsManual","CreatedAt") VALUES ('Text', ?, ?, NULL, ?, ?, ?, ?, ?)`)
+      .run(text, html, hash, deviceId, deviceName, isManual ? 1 : 0, now);
     const entry = this.getById(this.lastInsertId())!;
     this.touchDevice(deviceId, deviceName, platform, version, ip);
     this.addActivity(isManual ? 'transfer' : 'push', deviceName, truncate(text, 120), now, deviceId);
     this.trimHistory();
-    if (broadcast) this.hub.broadcastUpdated(this.toDto(entry));
+    if (broadcast) this.hub.broadcastUpdated(this.toDto(entry), userId);
     return { entry: this.toDto(entry), unchanged: false };
   }
 
@@ -208,8 +227,10 @@ export class SyncService {
 
   // ---------- 图片上传 ----------
   uploadImage(fileName: string, data: Buffer, deviceId: string, deviceName: string, ip: string | null, platform: string | null = null, version: string | null = null, isManual: boolean = false): EntryDto {
+    const dev = this.getDevice(deviceId);
+    const userId = dev?.UserId ?? null;
     const hash = sha256Bytes(data);
-    const current = this.getCurrent();
+    const current = this.getCurrent(userId);
     if (current && current.Type === 'Image' && current.ContentHash === hash) {
       this.touchDevice(deviceId, deviceName, platform, version, ip);
       return this.toDto(current);
@@ -229,7 +250,7 @@ export class SyncService {
     this.touchDevice(deviceId, deviceName, platform, version, ip);
     this.addActivity(isManual ? 'transfer' : 'push', deviceName, truncate(fileName, 120), now, deviceId);
     this.trimHistory();
-    this.hub.broadcastUpdated(this.toDto(entry));
+    this.hub.broadcastUpdated(this.toDto(entry), userId);
     return this.toDto(entry);
   }
 
@@ -243,7 +264,17 @@ export class SyncService {
     this.trimHistory();
   }
 
-  clearHistory(): void {
+  clearHistory(userId: string | null = null): void {
+    if (userId) {
+      // 按用户清空:只删该用户名下设备产生的条目
+      const rows = this.db.prepare('SELECT e."ImageRef" FROM "Entries" e JOIN "Devices" d ON d."Id" = e."DeviceId" WHERE d."UserId" = ? AND e."ImageRef" IS NOT NULL')
+        .all(userId) as unknown as { ImageRef: string }[];
+      for (const r of rows) this.tryDeleteImage(r.ImageRef);
+      this.db.prepare('DELETE FROM "Entries" WHERE "Id" IN (SELECT e."Id" FROM "Entries" e JOIN "Devices" d ON d."Id" = e."DeviceId" WHERE d."UserId" = ?)')
+        .run(userId);
+      this.hub.broadcastCleared(userId);
+      return;
+    }
     const rows = this.db.prepare('SELECT "ImageRef" FROM "Entries" WHERE "ImageRef" IS NOT NULL').all() as unknown as { ImageRef: string }[];
     for (const r of rows) this.tryDeleteImage(r.ImageRef);
     this.db.prepare('DELETE FROM "Entries"').run();
@@ -325,8 +356,7 @@ export class SyncService {
         .run(issued.hash, now, deviceName || existing.Name, platform ?? existing.Platform, ip, version, now, deviceId);
       return { status: 'migrated', userId: existing.UserId, deviceToken: issued.token };
     }
-    const activeCount = Number((this.db.prepare('SELECT COUNT(*) AS c FROM "Devices" WHERE "RevokedAt" IS NULL AND "UserId" IS NOT NULL').get() as { c: number }).c);
-    if (activeCount > 0) throw new PairError(409, '服务器已有设备组,请使用配对码加入');
+    // 首台设备(或从未绑定用户的旧设备)直接初始化为独立用户组
     const userId = this.createUser(now);
     const issued = this.issueDeviceToken();
     if (existing) {
@@ -405,8 +435,11 @@ export class SyncService {
     const existing = this.getDevice(deviceId);
     if (!existing) {
       if (trustedUserId) {
-        const user = this.getUser(trustedUserId);
-        if (!user) throw new PairError(401, '网页会话对应的用户不存在,请重新配对登录');
+        let user = this.getUser(trustedUserId);
+        if (!user) {
+          user = { Id: trustedUserId, CreatedAt: now };
+          this.db.prepare('INSERT INTO "Users" ("Id", "CreatedAt") VALUES (?, ?)').run(trustedUserId, now);
+        }
         let code: string;
         do { code = randomNumericCode(6); } while (this.db.prepare('SELECT 1 FROM "PairingRequests" WHERE "Code" = ?').get(code));
         const expiresAt = new Date(Date.now() + this.cfg.pairingCodeTtlSeconds * 1000).toISOString().replace('T', ' ').replace('Z', '');
@@ -415,8 +448,7 @@ export class SyncService {
         this.addAudit('pair_code', '网页会话生成配对码(用户 ' + trustedUserId + ')', ip);
         return { code, expiresAt: toIso(expiresAt), userId: trustedUserId };
       }
-      const activeCount = Number((this.db.prepare('SELECT COUNT(*) AS c FROM "Devices" WHERE "RevokedAt" IS NULL AND "UserId" IS NOT NULL').get() as { c: number }).c);
-      if (activeCount > 0) throw new PairError(404, '设备未登记,请使用现有设备生成的配对码加入');
+      // 新设备初始化为首台设备并为其创建独立用户与配对码
       const first = this.initializeDevice(deviceId, deviceName || '未知设备', plat, null, ip, '');
       const result = this.generatePairingCode(deviceId, deviceName, ip, first.deviceToken ?? '', trustedUserId, plat);
       return first.deviceToken ? { ...result, deviceToken: first.deviceToken } : result;
@@ -497,7 +529,7 @@ export class SyncService {
         .run(deviceId, deviceName || '未知设备', plat, ip, version, now, issued.hash, now, userId);
     }
     this.addAudit('pair_direct', '设备 ' + (deviceName || deviceId) + ' 通过 6 位数字码/扫码直连加入用户 ' + userId, ip);
-    this.hub.broadcastDevicesChanged();
+    this.hub.broadcastDevicesChanged(userId);
     return { status: 'approved', userId, deviceToken: issued.token };
   }
 
@@ -608,17 +640,17 @@ export class SyncService {
     for (const id of ids) stmt.run(now, id);
   }
 
-  renameDevice(id: string, name: string): boolean {
+  renameDevice(id: string, name: string, userId?: string): boolean {
     const d = this.db.prepare('SELECT * FROM "Devices" WHERE "Id" = ?').get(id) as unknown as DeviceRow | null;
     if (!d) return false;
     if (name.trim()) {
       this.db.prepare('UPDATE "Devices" SET "Name" = ? WHERE "Id" = ?').run(name.trim(), id);
     }
-    this.hub.broadcastDevicesChanged();
+    this.hub.broadcastDevicesChanged(userId || d.UserId || undefined);
     return true;
   }
 
-  removeDevice(id: string): boolean {
+  removeDevice(id: string, userId?: string): boolean {
     const d = this.db.prepare('SELECT * FROM "Devices" WHERE "Id" = ?').get(id) as unknown as DeviceRow | null;
     if (!d) return false;
     const now = dbNow();
@@ -626,7 +658,7 @@ export class SyncService {
     this.db.prepare('UPDATE "PairingRequests" SET "Status" = \'rejected\', "ConfirmedAt" = ? WHERE ("GeneratorId" = ? OR "TargetDeviceId" = ?) AND "Status" IN (\'open\',\'pending\')').run(now, id, id);
     this.addActivity('delete', d.Name, '移除了设备', dbNow(), id);
     this.hub.disconnectDevice(id);
-    this.hub.broadcastDevicesChanged();
+    this.hub.broadcastDevicesChanged(userId || d.UserId || undefined);
     return true;
   }
 

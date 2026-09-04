@@ -155,7 +155,10 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     if (!requireDeviceOrSession()) return true;
     const maxAgeRaw = url.searchParams.get('maxAgeSeconds');
     const maxAgeSeconds = maxAgeRaw ? Number(maxAgeRaw) : null;
-    const cur = svc.getCurrent();
+    const userId = ctx.actor?.role === 'user'
+      ? (ctx.actor.userId ?? null)
+      : (deviceActor?.UserId ?? null);
+    const cur = svc.getCurrent(userId);
     if (!cur) { sendNoContent(res); return true; }
     if (maxAgeSeconds && maxAgeSeconds > 0) {
       const ageSec = (Date.now() - new Date(cur.CreatedAt).getTime()) / 1000;
@@ -170,7 +173,8 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
 
   if (p === '/api/clipboard' && method === 'PUT') {
     if (!requireDeviceOrSession()) return true;
-    const body = await readBody(req, 1024 * 1024);
+    // 上限 2MB:text 上限 500K 字符,加上可选的 256KB 富文本片段后 1MB 不够用
+    const body = await readBody(req, 2 * 1024 * 1024);
     let json: Record<string, unknown>;
     try { json = JSON.parse(body.toString('utf8')); } catch { sendJson(res, 400, { error: '无效的 JSON' }); return true; }
     const text = typeof json.text === 'string' ? json.text.trim() : '';
@@ -178,6 +182,9 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
       sendJson(res, 400, { error: 'text 不能为空且不超过 500KB' });
       return true;
     }
+    // 富文本片段可选:超限或非字符串时静默降级为纯文本(老客户端不带该字段)
+    const rawHtml = typeof json.html === 'string' ? json.html : '';
+    const html = rawHtml && rawHtml.length <= 262_144 ? rawHtml : null;
     const requestedId = typeof json.deviceId === 'string' && json.deviceId ? json.deviceId : 'web-' + randomHex(4);
     const deviceId = deviceActor?.Id ?? ctx.actor?.deviceId ?? requestedId;
     if (deviceActor && requestedId !== deviceActor.Id) { sendApiError(res, 403, '上传设备身份与凭证不匹配'); return true; }
@@ -185,7 +192,7 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     const platform = typeof json.platform === 'string' ? json.platform : null;
     const version = typeof json.version === 'string' ? json.version : null;
     const isManual = Boolean(json.isManual);
-    const { entry, unchanged } = svc.uploadText(text, deviceId, deviceName, platform, version, remoteIp(req), true, isManual);
+    const { entry, unchanged } = svc.uploadText(text, html, deviceId, deviceName, platform, version, remoteIp(req), true, isManual);
     sendJson(res, 200, { ...entry, unchanged });
     return true;
   }
@@ -232,7 +239,8 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
   }
 
   if (p === '/api/clipboard/history' && method === 'DELETE') {
-    svc.clearHistory();
+    const userId = ctx.actor?.role === 'user' ? (ctx.actor.userId ?? null) : (deviceActor?.UserId ?? null);
+    svc.clearHistory(userId);
     sendNoContent(res);
     return true;
   }
@@ -251,7 +259,7 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     const rawTargets = Array.isArray(json.deviceIds) ? json.deviceIds.filter((x): x is string => typeof x === 'string' && !!x.trim()) : [];
     const targets = [...new Set(rawTargets)];
     // 未指定目标 → 广播全员(旧行为);指定 → 只写库 + 定向通知
-    const { entry } = svc.uploadText(text, deviceId, deviceName, deviceActor?.Platform ?? 'Web', null, remoteIp(req), targets.length === 0, true);
+    const { entry } = svc.uploadText(text, null, deviceId, deviceName, deviceActor?.Platform ?? 'Web', null, remoteIp(req), targets.length === 0, true);
     if (targets.length > 0) {
       svc.broadcastTo(entry, new Set(targets));
     }
@@ -305,31 +313,59 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
   // ============ /api/devices ============
   if (p === '/api/devices' && method === 'GET') {
     const requestedDevId = extractDeviceId(req) || url.searchParams.get('deviceId')?.trim();
-    let userId: string | null = null;
-    if (ctx.actor?.role === 'user') {
-      userId = ctx.actor.userId ?? null;
-    } else if (deviceActor?.UserId) {
-      userId = deviceActor.UserId;
-    } else if (requestedDevId) {
-      const dev = svc.getDevice(requestedDevId);
-      userId = dev?.UserId ?? null;
+    if (ctx.actor?.role === 'admin') {
+      sendJson(res, 200, svc.listDevices(null));
+      return true;
     }
-    sendJson(res, 200, svc.listDevices(ctx.actor?.role === 'admin' ? null : userId));
+    const userId = ctx.actor?.role === 'user'
+      ? (ctx.actor.userId ?? null)
+      : (deviceActor?.UserId ?? null);
+
+    if (userId) {
+      sendJson(res, 200, svc.listDevices(userId));
+      return true;
+    }
+
+    // 未配对或未绑定用户的设备：仅返回自身设备信息（若有），不暴露其他任何用户的设备
+    const selfDevice = (deviceActor || (requestedDevId ? svc.getDevice(requestedDevId) : null));
+    if (selfDevice && !selfDevice.RevokedAt) {
+      sendJson(res, 200, [svc.formatDevice(selfDevice)]);
+    } else {
+      sendJson(res, 200, []);
+    }
     return true;
   }
   const mDev = /^\/api\/devices\/(.+)$/.exec(p);
   if (mDev) {
     const id = decodeURIComponent(mDev[1]);
+    const targetDev = svc.getDevice(id);
+    if (!targetDev || targetDev.RevokedAt) {
+      res.statusCode = 404;
+      res.end();
+      return true;
+    }
+
+    // 鉴权：Admin 或 属于同一用户的设备/会话
+    const currentUserId = ctx.actor?.role === 'user' ? ctx.actor.userId : (deviceActor?.UserId ?? null);
+    const isAdmin = ctx.actor?.role === 'admin';
+    const isOwner = currentUserId && targetDev.UserId === currentUserId;
+    const isSelfUnpaired = !currentUserId && deviceActor?.Id === id;
+
+    if (!isAdmin && !isOwner && !isSelfUnpaired) {
+      sendApiError(res, 403, '无权操作该设备');
+      return true;
+    }
+
     if (method === 'PUT') {
       const body = await readBody(req, 64 * 1024);
       let name = '';
       try { name = String((JSON.parse(body.toString('utf8')) as { name?: unknown }).name ?? ''); } catch { /* 忽略 */ }
-      if (!svc.renameDevice(id, name)) { res.statusCode = 404; res.end(); return true; }
+      if (!svc.renameDevice(id, name, targetDev.UserId ?? undefined)) { res.statusCode = 404; res.end(); return true; }
       sendNoContent(res);
       return true;
     }
     if (method === 'DELETE') {
-      if (!svc.removeDevice(id)) { res.statusCode = 404; res.end(); return true; }
+      if (!svc.removeDevice(id, targetDev.UserId ?? undefined)) { res.statusCode = 404; res.end(); return true; }
       sendNoContent(res);
       return true;
     }
@@ -582,7 +618,7 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     const deviceId = typeof json.deviceId === 'string' && json.deviceId ? json.deviceId : deviceActor!.Id;
     if (deviceId !== deviceActor!.Id) { sendApiError(res, 403, '上传设备身份与凭证不匹配'); return true; }
     const deviceName = typeof json.deviceName === 'string' && json.deviceName ? json.deviceName : 'Legacy Client';
-    svc.uploadText(text, deviceId, deviceName, null, null, remoteIp(req), true);
+    svc.uploadText(text, null, deviceId, deviceName, null, null, remoteIp(req), true);
     sendJson(res, 200, { ok: true });
     return true;
   }
@@ -590,9 +626,9 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
   return false;
 }
 
-function toEntryDto(svc: SyncService, e: { Id: number; Type: string; Text: string | null; ImageRef: string | null; DeviceId: string; DeviceName: string | null; CreatedAt: string }) {
+function toEntryDto(svc: SyncService, e: { Id: number; Type: string; Text: string | null; Html?: string | null; ImageRef: string | null; DeviceId: string; DeviceName: string | null; CreatedAt: string }) {
   return {
-    id: e.Id, type: e.Type, text: e.Text, imageRef: e.ImageRef,
+    id: e.Id, type: e.Type, text: e.Text, html: e.Html ?? null, imageRef: e.ImageRef,
     deviceId: e.DeviceId, deviceName: e.DeviceName, createdAt: toIsoStr(e.CreatedAt),
   };
 }

@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import type { AppConfig } from './config.js';
 
 export interface EntryRow {
-  Id: number; Type: string; Text: string | null; ImageRef: string | null;
+  Id: number; Type: string; Text: string | null; Html: string | null; ImageRef: string | null;
   ContentHash: string; DeviceId: string; DeviceName: string | null; IsManual?: number | null; CreatedAt: string;
 }
 export interface DeviceRow {
@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS "Entries" (
   "Id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
   "Type" TEXT NOT NULL,
   "Text" TEXT NULL,
+  "Html" TEXT NULL,
   "ImageRef" TEXT NULL,
   "ContentHash" TEXT NOT NULL,
   "DeviceId" TEXT NOT NULL,
@@ -93,9 +94,10 @@ CREATE TABLE IF NOT EXISTS "Settings" (
   "Value" TEXT NOT NULL
 );
 `);
-  // Entries 增量加列: IsManual 标记
+  // Entries 增量加列: IsManual 标记 / Html 富文本片段
   const entryCols = new Set((db.prepare('PRAGMA table_info("Entries")').all() as { name: string }[]).map(c => c.name));
   if (!entryCols.has('IsManual')) db.exec('ALTER TABLE "Entries" ADD COLUMN "IsManual" INTEGER NULL DEFAULT 0');
+  if (!entryCols.has('Html')) db.exec('ALTER TABLE "Entries" ADD COLUMN "Html" TEXT NULL');
 
   // Devices 增量加列(老库兼容):设备专属 Token 哈希 + 配对时间
   const devCols = new Set((db.prepare('PRAGMA table_info("Devices")').all() as { name: string }[]).map(c => c.name));
