@@ -7,4 +7,20 @@
     <RootNamespace>NexClip.Tray</RootNamespace>
     <AssemblyName>NexClip.Tray</AssemblyName>
   </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NexClip.Tray.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Svg" Version="3.4.8" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\Assets\lucide\clipboard.svg" LogicalName="NexClip.Tray.Assets.lucide.clipboard.svg" />
+    <EmbeddedResource Include="..\Assets\lucide\refresh-cw.svg" LogicalName="NexClip.Tray.Assets.lucide.refresh-cw.svg" />
+    <EmbeddedResource Include="..\Assets\lucide\settings.svg" LogicalName="NexClip.Tray.Assets.lucide.settings.svg" />
+    <EmbeddedResource Include="..\Assets\lucide\rotate-cw.svg" LogicalName="NexClip.Tray.Assets.lucide.rotate-cw.svg" />
+    <EmbeddedResource Include="..\Assets\lucide\x.svg" LogicalName="NexClip.Tray.Assets.lucide.x.svg" />
+  </ItemGroup>
 </Project>

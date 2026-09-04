@@ -108,7 +108,22 @@ public partial class ChatMessageItem : ObservableObject
         try
         {
             var bmp = new BitmapImage();
-            bmp.DecodePixelHeight = 720;
+            // 与 TransferChatPage.xaml 中气泡图片的显示上限（MaxHeight 180 / MaxWidth 240）对齐，
+            // 避免按 720px 解码浪费大量位图内存。
+            // 按长边约束避免超宽/超高图片被反向放大：BitmapImage 只设一个维度时会按原始比例
+            // 推算另一维度，若一律限高 180，超宽长条图会被推算出极大的宽度，解码面积反而暴涨。
+            bmp.DecodePixelType = DecodePixelType.Logical;
+            var size = ImageCodec.TryReadPngSize(path);
+            if (size is { } s && s.Width > s.Height)
+            {
+                // 横图按气泡宽度上限限宽
+                bmp.DecodePixelWidth = 240;
+            }
+            else
+            {
+                // 竖图/方图，以及非 PNG 或读取头部失败时的兜底：按气泡高度上限限高
+                bmp.DecodePixelHeight = 180;
+            }
             bmp.UriSource = new Uri("file:///" + path.Replace('\\', '/'));
             return bmp;
         }
@@ -149,9 +164,18 @@ public partial class TransferChatViewModel : ObservableObject
     public IRelayCommand RefreshDevicesCommand { get; }
     public IRelayCommand ClearSelectedImageCommand { get; }
 
+    /// <summary>聊天流在运行期最多保留的消息条数，超出后淘汰最旧的消息以释放缩略图内存</summary>
+    private const int MaxRetainedMessages = 200;
+
     private readonly List<ChatMessageItem> _allMessages = new();
     private bool _isUpdatingDeviceSelection;
     private SyncEngine? _attachedEngine;
+
+    /// <summary>历史消息是否已完整加载过一次（页面每次激活都会调用加载方法，需要短路避免重复解码缩略图）</summary>
+    private bool _historyLoaded;
+
+    /// <summary>上次完整加载时历史库中最新一条的 Id（Query 按 created_at 倒序，首条即最新），用于判断历史是否变更</summary>
+    private long _historyMaxId;
 
     public TransferChatViewModel(AppServices services)
     {
@@ -211,7 +235,8 @@ public partial class TransferChatViewModel : ObservableObject
 
     public async Task InitializeAsync()
     {
-        await LoadHistoryMessagesAsync();
+        // 历史消息统一由页面激活（TransferChatPage.OnActivated / ClipboardMainPage 切换到互传页）触发加载，
+        // 此处不再重复调用 LoadHistoryMessagesAsync，避免同一批消息与图片缩略图被解码两遍
         await RefreshDevicesAsync();
     }
 
@@ -219,6 +244,16 @@ public partial class TransferChatViewModel : ObservableObject
     {
         try
         {
+            // 页面每次激活（TransferChatPage.OnActivated / ClipboardMainPage 切到互传页）都会调用本方法，
+            // 若历史未发生变更就直接复用现有 ChatMessageItem，避免 100 条消息与其缩略图被反复重建、反复解码。
+            // 新消息到达时走 OnEntryUpdated -> AppendMessage 路径，不受此短路影响。
+            if (_historyLoaded)
+            {
+                var latest = _services.History.Query(limit: 1);
+                var latestId = latest.Count > 0 ? latest[0].Id : 0L;
+                if (latestId == _historyMaxId) return;
+            }
+
             var historyItems = _services.History.Query(limit: 100);
             var selfDeviceId = _services.Settings.DeviceId;
             _allMessages.Clear();
@@ -232,6 +267,10 @@ public partial class TransferChatViewModel : ObservableObject
             }
 
             ApplyFilter();
+
+            // 记录本次加载对应的历史水位线（Query 按 created_at 倒序，首条即最新条目）
+            _historyMaxId = historyItems.Count > 0 ? historyItems[0].Id : 0L;
+            _historyLoaded = true;
         }
         catch (Exception ex)
         {
@@ -286,6 +325,30 @@ public partial class TransferChatViewModel : ObservableObject
         }
         _allMessages.Add(msg);
         Messages.Add(msg);
+        // 同步推进历史水位线，避免下次页面激活时因水位线落后而整表重建
+        if (msg.Id > _historyMaxId) _historyMaxId = msg.Id;
+        TrimRetainedMessages();
+    }
+
+    /// <summary>
+    /// 限制聊天流的运行期长度：超过 MaxRetainedMessages 时从头部淘汰最旧的消息，
+    /// 并把被淘汰项的缩略图置 null，让对应 BitmapImage 尽快被回收
+    /// </summary>
+    private void TrimRetainedMessages()
+    {
+        var trimmed = false;
+        while (_allMessages.Count > MaxRetainedMessages)
+        {
+            var oldest = _allMessages[0];
+            _allMessages.RemoveAt(0);
+            // 被筛选条件过滤掉的消息可能不在 Messages 中，Remove 未命中时安全返回 false
+            Messages.Remove(oldest);
+            oldest.Thumbnail = null;
+            trimmed = true;
+        }
+
+        // 头部淘汰后新的首条消息可能带着 ShowDateHeader=false，重算一遍避免聊天流顶部丢失日期分隔符
+        if (trimmed) UpdateDateHeaders(Messages);
     }
 
     public void ClearMessages()
@@ -297,6 +360,9 @@ public partial class TransferChatViewModel : ObservableObject
         }
         _allMessages.Clear();
         Messages.Clear();
+        // 历史已被清空，重置水位线让下次激活重新完整加载
+        _historyLoaded = false;
+        _historyMaxId = 0;
     }
 
     private void OnEntryUpdated(ClipboardEntry entry, string? localImagePath, bool fromRemote)
@@ -334,7 +400,22 @@ public partial class TransferChatViewModel : ObservableObject
         try
         {
             var bmp = new BitmapImage();
-            bmp.DecodePixelHeight = 720;
+            // 与 TransferChatPage.xaml 中气泡图片的显示上限（MaxHeight 180 / MaxWidth 240）对齐，
+            // 避免按 720px 解码浪费大量位图内存。
+            // 按长边约束避免超宽/超高图片被反向放大：BitmapImage 只设一个维度时会按原始比例
+            // 推算另一维度，若一律限高 180，超宽长条图会被推算出极大的宽度，解码面积反而暴涨。
+            bmp.DecodePixelType = DecodePixelType.Logical;
+            var size = ImageCodec.TryReadPngSize(path);
+            if (size is { } s && s.Width > s.Height)
+            {
+                // 横图按气泡宽度上限限宽
+                bmp.DecodePixelWidth = 240;
+            }
+            else
+            {
+                // 竖图/方图，以及非 PNG 或读取头部失败时的兜底：按气泡高度上限限高
+                bmp.DecodePixelHeight = 180;
+            }
             bmp.UriSource = new Uri("file:///" + path.Replace('\\', '/'));
             return bmp;
         }

@@ -73,6 +73,8 @@ public sealed class PushClient : IAsyncDisposable
             .WithUrl(endpoint)
             .WithAutomaticReconnect(new DeviceAuthRetryPolicy(ReconnectDelays));
         var hub = builder.Build();
+        hub.KeepAliveInterval = TimeSpan.FromSeconds(10);
+        hub.ServerTimeout = TimeSpan.FromSeconds(30);
         _hub = hub;
 
         hub.On<ClipboardEntry>("ClipboardUpdated", entry => EntryReceived?.Invoke(entry));
@@ -89,6 +91,11 @@ public sealed class PushClient : IAsyncDisposable
             // 鉴权失败会被重试策略直接终止，不会进入 Reconnecting，因此在 Closed 补充上报。
             if (ex is not null && IsDeviceAuthFailure(ex)) ErrorOccurred?.Invoke(ex);
             StateChanged?.Invoke("disconnected");
+            if (ex is not null && !IsDeviceAuthFailure(ex))
+            {
+                // 如果是异常断开连接且非凭证错误，启动后台持续重试循环
+                StartRetryLoop(hub);
+            }
             return Task.CompletedTask;
         };
 
@@ -114,9 +121,16 @@ public sealed class PushClient : IAsyncDisposable
     {
         lock (_gate)
         {
-            _retryCts?.Cancel();
+            // 先取出旧实例再替换，最后取消并释放旧实例，避免新建 token 被提前释放
+            var old = _retryCts;
             _retryCts = new CancellationTokenSource();
             var ct = _retryCts.Token;
+            try
+            {
+                old?.Cancel();
+                old?.Dispose();
+            }
+            catch (ObjectDisposedException) { /* 已被释放，忽略 */ }
             _retryTask = Task.Run(async () =>
             {
                 var delays = new[] { TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60) };
@@ -149,9 +163,16 @@ public sealed class PushClient : IAsyncDisposable
     {
         lock (_gate)
         {
-            _retryCts?.Cancel();
+            // 只停止不重建：先摘掉字段引用，再取消并释放，防止 ObjectDisposedException 逃逸
+            var old = _retryCts;
             _retryCts = null;
             _retryTask = null;
+            try
+            {
+                old?.Cancel();
+                old?.Dispose();
+            }
+            catch (ObjectDisposedException) { /* 已被释放，忽略 */ }
         }
     }
 
@@ -186,7 +207,7 @@ public sealed class PushClient : IAsyncDisposable
         return false;
     }
 
-    /// <summary>设备凭证失效属于永久错误，直接停止 SignalR 自动重连。</summary>
+    /// <summary>设备凭证失效属于永久错误直接停止重连；网络波动时保持无限重试（指数退避后固定 60s 间隔）。</summary>
     private sealed class DeviceAuthRetryPolicy(IReadOnlyList<TimeSpan> delays) : IRetryPolicy
     {
         public TimeSpan? NextRetryDelay(RetryContext retryContext)
@@ -198,7 +219,7 @@ public sealed class PushClient : IAsyncDisposable
 
             return retryContext.PreviousRetryCount < delays.Count
                 ? delays[(int)retryContext.PreviousRetryCount]
-                : null;
+                : TimeSpan.FromSeconds(60);
         }
     }
 

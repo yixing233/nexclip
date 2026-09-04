@@ -50,6 +50,8 @@ public sealed partial class ClipboardMainPage : Page
                 UpdateTopmostIcon(win.IsTopmost);
                 // 呼出后聚焦列表:方向键候选 + 回车粘贴立即可用
                 win.Shown += FocusEntryList;
+                // 每次呼出时刷新置顶提示:用户在设置里改过置顶热键后提示随之更新
+                win.Shown += () => ToolTipService.SetToolTip(TopmostButton, BuildTopmostTooltip(win.IsTopmost));
             }
         };
         ActualThemeChanged += (_, _) => RefreshThemeIcons();
@@ -69,6 +71,36 @@ public sealed partial class ClipboardMainPage : Page
         TopmostIconPinOff.Source = Lucide.PinOffActive;
         SettingsButtonImage.Source = Lucide.Settings;
         ClearSearchImage.Source = Lucide.X;
+        ClearHistoryButtonImage.Source = Lucide.Trash;
+    }
+
+    /// <summary>清空剪贴板历史记录(始终保留收藏的条目)。</summary>
+    private async void ClearHistoryButton_Click(object sender, RoutedEventArgs e)
+    {
+        var starredCount = App.Services.History.CountStarred();
+        var panel = new StackPanel { Spacing = 6 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = starredCount > 0
+                ? $"确定要清空历史记录吗？\n（已收藏的 {starredCount} 条记录将自动保留，此操作不可恢复）"
+                : "确定要清空所有未收藏的历史记录吗？\n（此操作不可恢复）",
+            TextWrapping = TextWrapping.Wrap
+        });
+
+        var dialog = new ContentDialog
+        {
+            Title = "清空历史",
+            Content = panel,
+            PrimaryButtonText = "清空",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = XamlRoot,
+        };
+
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+        {
+            await _history.ClearAsync();
+        }
     }
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e) => App.OpenSettings();
@@ -91,7 +123,17 @@ public sealed partial class ClipboardMainPage : Page
         AnimateBackgroundColor(topmost ? TopmostBlue : Microsoft.UI.Colors.Transparent);
         SetButtonBrushColor(TopmostButton, "ButtonBackgroundPointerOver", topmost ? TopmostHoverBlue : Microsoft.UI.Colors.Transparent);
         SetButtonBrushColor(TopmostButton, "ButtonBackgroundPressed", topmost ? TopmostPressedBlue : Microsoft.UI.Colors.Transparent);
-        ToolTipService.SetToolTip(TopmostButton, topmost ? "取消置顶" : "置顶窗口");
+        ToolTipService.SetToolTip(TopmostButton, BuildTopmostTooltip(topmost));
+    }
+
+    /// <summary>置顶按钮提示文案：附带当前生效的置顶热键（未设置或被占用时只显示动作名）。</summary>
+    private static string BuildTopmostTooltip(bool topmost)
+    {
+        var action = topmost ? "取消置顶" : "置顶窗口";
+        var hotkey = App.Services.Settings.HotkeyTopmost;
+        return App.HotkeyTopmost is { IsRegistered: true } && !string.IsNullOrWhiteSpace(hotkey)
+            ? $"{action} ({hotkey})"
+            : action;
     }
 
     private static void SetButtonBrushColor(Button button, string key, Windows.UI.Color color)
@@ -248,13 +290,21 @@ public sealed partial class ClipboardMainPage : Page
         SearchBox.SelectAll();
     }
 
-    /// <summary>呼出窗口后聚焦列表并选中最新条目(回车即粘贴)。</summary>
+    /// <summary>呼出窗口后聚焦列表并选中条目(回车即粘贴)。若开启保持位置则不强制滚回首项。</summary>
     private void FocusEntryList()
     {
+        var rememberPos = App.Services?.Settings?.RememberScrollPosition ?? false;
         if (EntryList.Items.Count > 0)
         {
-            EntryList.SelectedIndex = 0;
-            EntryList.ScrollIntoView(EntryList.SelectedItem);
+            if (!rememberPos)
+            {
+                EntryList.SelectedIndex = 0;
+                EntryList.ScrollIntoView(EntryList.SelectedItem);
+            }
+            else if (EntryList.SelectedIndex < 0)
+            {
+                EntryList.SelectedIndex = 0;
+            }
         }
         EntryList.Focus(FocusState.Programmatic);
     }
@@ -822,7 +872,11 @@ public sealed partial class ClipboardMainPage : Page
         {
             try
             {
-                var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri("file:///" + vm.Item.ImagePath.Replace('\\', '/')));
+                // 解码尺寸必须先于 UriSource 设置才会生效；查看器 1600 逻辑像素宽已足够，避免超大原图整幅解码。
+                var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+                bmp.DecodePixelType = Microsoft.UI.Xaml.Media.Imaging.DecodePixelType.Logical;
+                bmp.DecodePixelWidth = 1600;
+                bmp.UriSource = new Uri("file:///" + vm.Item.ImagePath.Replace('\\', '/'));
                 ViewerImage.Source = bmp;
             }
             catch
@@ -851,7 +905,11 @@ public sealed partial class ClipboardMainPage : Page
         {
             try
             {
-                var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri("file:///" + imagePath.Replace('\\', '/')));
+                // 解码尺寸必须先于 UriSource 设置才会生效；查看器 1600 逻辑像素宽已足够，避免超大原图整幅解码。
+                var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+                bmp.DecodePixelType = Microsoft.UI.Xaml.Media.Imaging.DecodePixelType.Logical;
+                bmp.DecodePixelWidth = 1600;
+                bmp.UriSource = new Uri("file:///" + imagePath.Replace('\\', '/'));
                 ViewerImage.Source = bmp;
             }
             catch
@@ -1121,11 +1179,12 @@ public sealed partial class ClipboardMainPage : Page
         if (vm.IsImage) return;
         var box = new TextBox
         {
-            Text = vm.Item.Text ?? "",
             AcceptsReturn = true,
             TextWrapping = TextWrapping.Wrap,
-            MinHeight = 160,
-            MaxHeight = 260,
+            MinHeight = 180,
+            MaxHeight = 360,
+            MinWidth = 380,
+            Text = vm.Item.Text ?? "",
         };
         ScrollViewer.SetVerticalScrollBarVisibility(box, ScrollBarVisibility.Auto);
         var dialog = new ContentDialog

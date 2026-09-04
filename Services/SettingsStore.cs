@@ -23,6 +23,7 @@ public sealed class SettingsStore
     public string Hotkey { get; set; } = "Alt+V";            // 剪贴板窗口呼出
     public string HotkeySettings { get; set; } = "Alt+X";       // 设置窗口打开
     public string HotkeyOpenUrl { get; set; } = "Ctrl+Alt+O";   // 打开复制的链接
+    public string HotkeyTopmost { get; set; } = "Ctrl+Alt+T";   // 剪贴板窗口置顶开关
     public string ThemeMode { get; set; } = "system";   // light | dark | system
     /// <summary>窗口背景材质:Mica(云母) | MicaAlt(云母增强) | Acrylic(亚克力)。</summary>
     public string BackdropMode { get; set; } = "Mica";
@@ -36,6 +37,10 @@ public sealed class SettingsStore
     /// <summary>更新下载来源: github=GitHub Releases (默认) | direct=服务器直连加速。</summary>
     public string UpdateSource { get; set; } = "github";
     public bool MonitorEnabled { get; set; } = true;
+    /// <summary>自动监听时忽略远程控制/远程桌面应用写入的剪贴板内容。</summary>
+    public bool AppFilterEnabled { get; set; } = true;
+    /// <summary>用户自定义的过滤进程名或可执行文件名。</summary>
+    public List<string> CustomFilteredProcesses { get; set; } = new();
     public bool AutoPaste { get; set; } = true;
     public bool NotifyEnabled { get; set; } = true;
     /// <summary>复制内容时显示右下角直达卡片(总开关)。</summary>
@@ -51,6 +56,10 @@ public sealed class SettingsStore
     /// <summary>智能识别:通用网页链接直达。</summary>
     public bool SmartUrlEnabled { get; set; } = true;
     public int MaxHistory { get; set; } = 200;
+    /// <summary>重新打开剪贴板时保持关闭前的位置(默认关闭,回到顶部)。</summary>
+    public bool RememberScrollPosition { get; set; } = false;
+    /// <summary>富文本(HTML)支持:捕获并写回带格式内容(默认开启;关闭后行为等同纯文本)。</summary>
+    public bool RichTextEnabled { get; set; } = true;
     /// <summary>剪贴板窗口出现位置:center=屏幕中心 | cursor=跟随鼠标(默认)。</summary>
     public string WindowPositionMode { get; set; } = "cursor";
     /// <summary>历史保留天数上限(0=不限,启动与设置变更时清理)。</summary>
@@ -148,6 +157,7 @@ public sealed class SettingsStore
             Hotkey = dto.Hotkey ?? Hotkey;
             HotkeySettings = dto.HotkeySettings ?? HotkeySettings;
             HotkeyOpenUrl = dto.HotkeyOpenUrl ?? HotkeyOpenUrl;
+            HotkeyTopmost = dto.HotkeyTopmost ?? HotkeyTopmost;
             ThemeMode = dto.ThemeMode ?? ThemeMode;
             BackdropMode = dto.BackdropMode ?? BackdropMode;
             BackdropTintOpacity = dto.BackdropTintOpacity ?? BackdropTintOpacity;
@@ -157,6 +167,12 @@ public sealed class SettingsStore
             AutoCheckUpdate = dto.AutoCheckUpdate ?? AutoCheckUpdate;
             UpdateSource = dto.UpdateSource ?? UpdateSource;
             MonitorEnabled = dto.MonitorEnabled ?? MonitorEnabled;
+            AppFilterEnabled = dto.AppFilterEnabled ?? AppFilterEnabled;
+            CustomFilteredProcesses = (dto.CustomFilteredProcesses ?? new List<string>())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
             AutoPaste = dto.AutoPaste ?? AutoPaste;
             NotifyEnabled = dto.NotifyEnabled ?? NotifyEnabled;
             CopyDirectEnabled = dto.CopyDirectEnabled ?? CopyDirectEnabled;
@@ -166,6 +182,8 @@ public sealed class SettingsStore
             SmartNetDiskEnabled = dto.SmartNetDiskEnabled ?? SmartNetDiskEnabled;
             SmartUrlEnabled = dto.SmartUrlEnabled ?? SmartUrlEnabled;
             MaxHistory = dto.MaxHistory ?? MaxHistory;
+            RememberScrollPosition = dto.RememberScrollPosition ?? RememberScrollPosition;
+            RichTextEnabled = dto.RichTextEnabled ?? RichTextEnabled;
             WindowPositionMode = dto.WindowPositionMode ?? WindowPositionMode;
             RetentionDays = dto.RetentionDays ?? RetentionDays;
             if ((dto.PasteKeyVersion ?? 0) < CurrentPasteKeyVersion)
@@ -205,6 +223,7 @@ public sealed class SettingsStore
                 Hotkey = Hotkey,
                 HotkeySettings = HotkeySettings,
                 HotkeyOpenUrl = HotkeyOpenUrl,
+                HotkeyTopmost = HotkeyTopmost,
                 ThemeMode = ThemeMode,
                 BackdropMode = BackdropMode,
                 BackdropTintOpacity = BackdropTintOpacity,
@@ -214,6 +233,8 @@ public sealed class SettingsStore
                 AutoCheckUpdate = AutoCheckUpdate,
                 UpdateSource = UpdateSource,
                 MonitorEnabled = MonitorEnabled,
+                AppFilterEnabled = AppFilterEnabled,
+                CustomFilteredProcesses = CustomFilteredProcesses,
                 AutoPaste = AutoPaste,
                 NotifyEnabled = NotifyEnabled,
                 CopyDirectEnabled = CopyDirectEnabled,
@@ -223,6 +244,8 @@ public sealed class SettingsStore
                 SmartNetDiskEnabled = SmartNetDiskEnabled,
                 SmartUrlEnabled = SmartUrlEnabled,
                 MaxHistory = MaxHistory,
+                RememberScrollPosition = RememberScrollPosition,
+                RichTextEnabled = RichTextEnabled,
                 WindowPositionMode = WindowPositionMode,
                 RetentionDays = RetentionDays,
                 PasteKeyVersion = CurrentPasteKeyVersion,
@@ -317,6 +340,7 @@ public sealed class SettingsStore
         public string? Hotkey { get; set; }
         public string? HotkeySettings { get; set; }
         public string? HotkeyOpenUrl { get; set; }
+        public string? HotkeyTopmost { get; set; }
         public string? ThemeMode { get; set; }
         public string? BackdropMode { get; set; }
         public double? BackdropTintOpacity { get; set; }
@@ -326,6 +350,8 @@ public sealed class SettingsStore
         public bool? AutoCheckUpdate { get; set; }
         public string? UpdateSource { get; set; }
         public bool? MonitorEnabled { get; set; }
+        public bool? AppFilterEnabled { get; set; }
+        public List<string>? CustomFilteredProcesses { get; set; }
         public bool? AutoPaste { get; set; }
         public bool? NotifyEnabled { get; set; }
         public bool? CopyDirectEnabled { get; set; }
@@ -335,6 +361,8 @@ public sealed class SettingsStore
         public bool? SmartNetDiskEnabled { get; set; }
         public bool? SmartUrlEnabled { get; set; }
         public int? MaxHistory { get; set; }
+        public bool? RememberScrollPosition { get; set; }
+        public bool? RichTextEnabled { get; set; }
         public string? WindowPositionMode { get; set; }
         public int? RetentionDays { get; set; }
         public int? PasteKeyVersion { get; set; }

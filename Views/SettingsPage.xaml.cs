@@ -16,6 +16,7 @@ using Windows.Storage.Pickers;
 using Windows.Storage.Streams;
 using Windows.System;
 using Windows.UI.Core;
+using Windows.Foundation;
 
 namespace NexClip.Desktop.Views;
 
@@ -27,6 +28,7 @@ public sealed partial class SettingsPage : Page
     public SettingsViewModel ViewModel => _vm;
 
     private readonly SettingsViewModel _vm;
+    private ContentDialog? _appFilterDialog;
 
     /// <summary>悬浮通知自动关闭计时器(显示后 4 秒消失)。</summary>
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _toastTimer;
@@ -330,6 +332,230 @@ public sealed partial class SettingsPage : Page
         }
     }
 
+    private async void ManageAppFilters_Click(object sender, RoutedEventArgs e)
+    {
+        if (_appFilterDialog is not null) return;
+        try
+        {
+            var processPicker = new ComboBox
+            {
+                ItemsSource = _vm.RunningProcesses,
+                DisplayMemberPath = nameof(ClipboardAppFilter.RunningProcessOption.Label),
+                PlaceholderText = "选择当前运行的应用",
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                MinWidth = 360,
+                IsEnabled = false,
+            };
+            var processStatus = new TextBlock
+            {
+                Text = "正在获取当前运行的应用...",
+                FontSize = 12,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                Margin = new Thickness(0, 4, 0, 0),
+            };
+            var addButton = new Button
+            {
+                Content = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 6,
+                    Children = { new Image { Source = Lucide.Plus, Width = 14, Height = 14 }, new TextBlock { Text = "添加" } },
+                },
+                IsEnabled = false,
+            };
+            ToolTipService.SetToolTip(addButton, "添加到自定义过滤进程");
+            addButton.Click += (_, _) =>
+            {
+                _vm.SelectedRunningProcess = processPicker.SelectedItem as ClipboardAppFilter.RunningProcessOption;
+                _vm.AddSelectedFilterProcess();
+            };
+
+            var refreshButton = new Button
+            {
+                Content = new Image { Source = Lucide.RefreshCw, Width = 14, Height = 14 },
+            };
+            ToolTipService.SetToolTip(refreshButton, "刷新当前运行进程");
+            refreshButton.Click += async (_, _) => await _vm.RefreshRunningProcessesAsync();
+
+            var pickerGrid = new Grid { ColumnSpacing = 8 };
+            pickerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            pickerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            pickerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            Grid.SetColumn(processPicker, 0);
+            Grid.SetColumn(addButton, 1);
+            Grid.SetColumn(refreshButton, 2);
+            pickerGrid.Children.Add(processPicker);
+            pickerGrid.Children.Add(addButton);
+            pickerGrid.Children.Add(refreshButton);
+
+            Border CreateTag(string text, bool removable, Action? remove)
+            {
+                var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+                content.Children.Add(new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center, FontSize = 12 });
+                if (removable && remove is not null)
+                {
+                    var close = new Button
+                    {
+                        Content = new Image { Source = Lucide.X, Width = 12, Height = 12 },
+                        Padding = new Thickness(2),
+                        Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+                        BorderThickness = new Thickness(0),
+                        MinWidth = 0,
+                        MinHeight = 0,
+                    };
+                    ToolTipService.SetToolTip(close, "移除过滤进程");
+                    close.Click += (_, _) => remove();
+                    content.Children.Add(close);
+                }
+                return new Border
+                {
+                    Child = content,
+                    Height = 32,
+                    MinWidth = 0,
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    Padding = new Thickness(8, 4, 6, 4),
+                    Margin = new Thickness(0, 0, 6, 6),
+                    CornerRadius = new CornerRadius(12),
+                    Background = (Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
+                    BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                    BorderThickness = new Thickness(1),
+                };
+            }
+
+            var builtInTags = new AppFilterFlowPanel { HorizontalAlignment = HorizontalAlignment.Stretch };
+            foreach (var app in ClipboardAppFilter.BuiltInRemoteControlApps)
+                builtInTags.Children.Add(CreateTag(app, false, null));
+            var builtInScroll = new ScrollViewer { Content = builtInTags, Height = 118, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+
+            var customTags = new AppFilterFlowPanel { HorizontalAlignment = HorizontalAlignment.Stretch };
+            void RenderCustomTags()
+            {
+                customTags.Children.Clear();
+                foreach (var process in _vm.CustomFilteredProcesses.ToArray())
+                {
+                    var captured = process;
+                    customTags.Children.Add(CreateTag(captured, true, () =>
+                    {
+                        _vm.RemoveCustomFilterProcess(captured);
+                        RenderCustomTags();
+                    }));
+                }
+            }
+            RenderCustomTags();
+            addButton.Click += (_, _) => RenderCustomTags();
+
+            var panel = new StackPanel { Spacing = 12, MinWidth = 500 };
+            panel.Children.Add(new TextBlock { Text = "内置远程控制软件", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+            panel.Children.Add(builtInScroll);
+            panel.Children.Add(new TextBlock { Text = "添加自定义过滤进程", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Margin = new Thickness(0, 8, 0, 0) });
+            panel.Children.Add(pickerGrid);
+            panel.Children.Add(processStatus);
+            panel.Children.Add(new TextBlock { Text = "自定义过滤进程", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Margin = new Thickness(0, 8, 0, 0) });
+            panel.Children.Add(new ScrollViewer { Content = customTags, MaxHeight = 120, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+
+            var dialog = new ContentDialog
+            {
+                Title = "管理应用过滤",
+                Content = panel,
+                CloseButtonText = "完成",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = XamlRoot,
+            };
+            _appFilterDialog = dialog;
+            var dialogTask = dialog.ShowAsync().AsTask();
+            try
+            {
+                await _vm.RefreshRunningProcessesAsync();
+                processPicker.IsEnabled = true;
+                addButton.IsEnabled = true;
+                processStatus.Text = _vm.RunningProcesses.Count == 0
+                    ? "未检测到可用应用"
+                    : $"已加载 {_vm.RunningProcesses.Count} 个正在运行的应用";
+            }
+            catch (Exception ex)
+            {
+                Log.Error("读取当前运行进程失败", ex);
+                processStatus.Text = "读取当前运行的应用失败，请稍后重试。";
+                processStatus.Foreground = (Brush)Application.Current.Resources["SystemFillColorCriticalBrush"];
+            }
+            await dialogTask;
+        }
+        catch (Exception ex)
+        {
+            Log.Error("打开应用过滤管理失败", ex);
+            _vm.ShowMessage("读取当前运行进程失败：" + ex.Message, InfoBarSeverity.Error);
+        }
+        finally
+        {
+            _appFilterDialog = null;
+        }
+    }
+
+    /// <summary>按子项实际宽度换行，避免 WrapGrid 的统一单元格截断应用名称。</summary>
+    private sealed class AppFilterFlowPanel : Panel
+    {
+        private const double ItemSpacing = 6;
+        private const double LineSpacing = 6;
+
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            var width = double.IsInfinity(availableSize.Width) ? double.PositiveInfinity : Math.Max(0, availableSize.Width);
+            var lineWidth = 0d;
+            var lineHeight = 0d;
+            var totalHeight = 0d;
+            var measuredWidth = 0d;
+
+            foreach (var child in Children)
+            {
+                child.Measure(new Size(width, double.PositiveInfinity));
+                var desired = child.DesiredSize;
+                if (lineWidth > 0 && lineWidth + ItemSpacing + desired.Width > width)
+                {
+                    measuredWidth = Math.Max(measuredWidth, lineWidth);
+                    totalHeight += lineHeight + (totalHeight > 0 ? LineSpacing : 0);
+                    lineWidth = 0;
+                    lineHeight = 0;
+                }
+
+                lineWidth += (lineWidth > 0 ? ItemSpacing : 0) + desired.Width;
+                lineHeight = Math.Max(lineHeight, desired.Height);
+            }
+
+            if (lineHeight > 0)
+            {
+                measuredWidth = Math.Max(measuredWidth, lineWidth);
+                totalHeight += lineHeight + (totalHeight > 0 ? LineSpacing : 0);
+            }
+
+            return new Size(double.IsInfinity(width) ? measuredWidth : Math.Min(width, measuredWidth), totalHeight);
+        }
+
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            var x = 0d;
+            var y = 0d;
+            var lineHeight = 0d;
+
+            foreach (var child in Children)
+            {
+                var desired = child.DesiredSize;
+                if (x > 0 && x + ItemSpacing + desired.Width > finalSize.Width)
+                {
+                    x = 0;
+                    y += lineHeight + LineSpacing;
+                    lineHeight = 0;
+                }
+
+                if (x > 0) x += ItemSpacing;
+                child.Arrange(new Rect(x, y, desired.Width, desired.Height));
+                x += desired.Width;
+                lineHeight = Math.Max(lineHeight, desired.Height);
+            }
+
+            return finalSize;
+        }
+    }
+
     private void OpenRelease_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -503,23 +729,18 @@ public sealed partial class SettingsPage : Page
         }
     }
 
-    /// <summary>清空历史前二次确认(含图片缓存,不可恢复,支持保留收藏项)。</summary>
+    /// <summary>清空历史前二次确认(含图片缓存,不可恢复,始终保留收藏项)。</summary>
     private async void ClearHistoryButton_Click(object sender, RoutedEventArgs e)
     {
         var starredCount = App.Services.History.CountStarred();
-        var checkBox = new CheckBox
-        {
-            Content = $"保留已收藏记录{(starredCount > 0 ? $" ({starredCount} 条)" : "")}",
-            IsChecked = true,
-            Margin = new Thickness(0, 10, 0, 0),
-        };
         var panel = new StackPanel { Spacing = 6 };
         panel.Children.Add(new TextBlock
         {
-            Text = "确定要清空本地历史与图片缓存吗？此操作不可恢复。",
+            Text = starredCount > 0
+                ? $"确定要清空本地历史与图片缓存吗？\n（已收藏的 {starredCount} 条记录将自动保留，此操作不可恢复）"
+                : "确定要清空本地历史与图片缓存吗？\n（此操作不可恢复）",
             TextWrapping = TextWrapping.Wrap
         });
-        panel.Children.Add(checkBox);
 
         var dialog = new ContentDialog
         {
@@ -532,8 +753,7 @@ public sealed partial class SettingsPage : Page
         };
         if (await dialog.ShowAsync() == ContentDialogResult.Primary)
         {
-            var keepStarred = checkBox.IsChecked == true;
-            _vm.ClearHistory(keepStarred);
+            _vm.ClearHistory(keepStarred: true);
         }
     }
 
@@ -561,6 +781,14 @@ public sealed partial class SettingsPage : Page
         var combo = CaptureCombo(e);
         if (combo is null) return;
         _vm.HotkeyOpenUrl = combo;   // 输入框文字由 OneWay 绑定自动更新
+    }
+
+    /// <summary>置顶热键捕获。</summary>
+    private void HotKeyTopmostBox_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        var combo = CaptureCombo(e);
+        if (combo is null) return;
+        _vm.HotkeyTopmost = combo;   // 输入框文字由 OneWay 绑定自动更新
     }
 
     private void HotKeyBox_GotFocus(object sender, RoutedEventArgs e)

@@ -8,6 +8,7 @@ public partial class App : Application
 {
     private const string MutexName = "NexClip_SingleInstance";
     private const string ShowEventName = "NexClip_Show";
+    private const string RestartWaitArg = "--restart-wait";
 
     public static AppServices Services { get; private set; } = null!;
     public static ClipboardWindow? ClipboardWindow { get; private set; }
@@ -15,7 +16,17 @@ public partial class App : Application
     public static HotKeyService? Hotkey { get; private set; }            // 剪贴板呼出(Alt+V)
     public static HotKeyService? HotkeySettings { get; private set; }       // 设置打开(Alt+X)
     public static HotKeyService? HotkeyOpenUrl { get; private set; }        // 打开复制的链接(Ctrl+Alt+O)
+    public static HotKeyService? HotkeyTopmost { get; private set; }        // 剪贴板窗口置顶开关(Ctrl+Alt+T)
     public static LinkToastWindow? LinkToast { get; private set; }          // 右下角链接卡片
+
+    /// <summary>浮窗关闭后清空静态引用，避免已关闭窗口被长期持有而无法回收。</summary>
+    public static void ReleaseLinkToast(LinkToastWindow toast)
+    {
+        if (ReferenceEquals(LinkToast, toast))
+        {
+            LinkToast = null;
+        }
+    }
 
     /// <summary>显示复制直达智能动作卡片(UI 线程调用)。</summary>
     public static void ShowSmartActionToast(SmartAction action)
@@ -23,7 +34,9 @@ public partial class App : Application
         try
         {
             Log.Debug($"显示复制直达卡片: {action.Title}");
-            LinkToast?.Close();
+            var previous = LinkToast;
+            LinkToast = null;
+            previous?.Close();
             LinkToast = new LinkToastWindow(action);
         }
         catch (Exception ex)
@@ -44,7 +57,9 @@ public partial class App : Application
             try
             {
                 Log.Debug($"显示链接卡片:{url}");
-                LinkToast?.Close();
+                var previous = LinkToast;
+                LinkToast = null;
+                previous?.Close();
                 LinkToast = new LinkToastWindow(url);
             }
             catch (Exception ex)
@@ -126,21 +141,42 @@ public partial class App : Application
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         // 单实例:已有实例则唤醒其剪贴板窗口后退出本进程
+        var cmdArgs = Environment.GetCommandLineArgs();
+        var isRestartLaunch = cmdArgs.Contains(RestartWaitArg);
+        if (isRestartLaunch)
+        {
+            WaitForPreviousInstanceExit(cmdArgs);
+        }
+
         _instanceMutex = new Mutex(true, MutexName, out var createdNew);
+        if (!createdNew && isRestartLaunch)
+        {
+            // 托盘重启场景:旧实例正在退出,给它最多 5 秒释放互斥体,而不是立刻自杀
+            createdNew = TryAcquireMutexWithTimeout(TimeSpan.FromSeconds(5));
+        }
         if (!createdNew)
         {
-            // 开机自启动撞上已运行实例时不弹窗,静默退出
-            if (!Environment.GetCommandLineArgs().Contains("--autostart"))
+            if (isRestartLaunch)
             {
-                try
-                {
-                    using var evt = EventWaitHandle.OpenExisting(ShowEventName);
-                    evt.Set();
-                }
-                catch { /* 旧实例可能尚未就绪 */ }
+                // 托盘重启场景下本进程就是"应该活下来的那一个"：等待超时说明旧实例僵死，
+                // 此时若跟随第二实例逻辑自杀，会造成旧进程已退出、新进程也退出，托盘彻底消失且无法自恢复。
+                Log.Warn("重启等待超时，旧实例可能已僵死，本进程强制接管为主实例");
             }
-            Environment.Exit(0);
-            return;
+            else
+            {
+                // 开机自启动撞上已运行实例时不弹窗,静默退出
+                if (!cmdArgs.Contains("--autostart"))
+                {
+                    try
+                    {
+                        using var evt = EventWaitHandle.OpenExisting(ShowEventName);
+                        evt.Set();
+                    }
+                    catch { /* 旧实例可能尚未就绪 */ }
+                }
+                Environment.Exit(0);
+                return;
+            }
         }
         var dispatcher = DispatcherQueue.GetForCurrentThread();
         _showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
@@ -190,6 +226,7 @@ public partial class App : Application
             () => dispatcher?.TryEnqueue(RestartApp),
             () => dispatcher?.TryEnqueue(ExitApp));
         Services.Tray.Initialize();
+        Services.Tray.UpdateHotkeys(Services.Settings.Hotkey, Services.Settings.HotkeySettings);
         WireTrayState(Services);
 
         Hotkey = new HotKeyService(() => dispatcher?.TryEnqueue(ToggleClipboardWindow));
@@ -207,6 +244,11 @@ public partial class App : Application
         if (!HotkeyOpenUrl.Apply(Services.Settings.HotkeyOpenUrl))
         {
             Log.Warn($"打开链接热键注册失败(可能被占用):{Services.Settings.HotkeyOpenUrl}");
+        }
+        HotkeyTopmost = new HotKeyService(() => dispatcher?.TryEnqueue(ToggleClipboardTopmost));
+        if (!HotkeyTopmost.Apply(Services.Settings.HotkeyTopmost))
+        {
+            Log.Warn($"置顶热键注册失败(可能被占用):{Services.Settings.HotkeyTopmost}");
         }
         // SettingsViewModel 构造时热键服务尚未创建,此处注册完成后补刷新一次状态,
         // 避免把实际已注册的热键误显示为“被其他程序占用”。
@@ -292,6 +334,29 @@ public partial class App : Application
     /// <summary>切换剪贴板窗口显示/隐藏(托盘左键 / 全局热键)。</summary>
     private static void ToggleClipboardWindow() => ClipboardWindow?.ToggleVisibility();
 
+    /// <summary>
+    /// 切换剪贴板窗口置顶(全局热键 / 顶栏置顶按钮)。
+    /// 窗口隐藏时按热键开启置顶会同时呼出窗口:隐藏窗口的置顶状态对用户不可见,单独切换没有意义。
+    /// </summary>
+    private static void ToggleClipboardTopmost()
+    {
+        if (ClipboardWindow is not { } window) return;
+        // 先取可见性:窗口已显示时不能再调 ShowWindow(),否则会按光标重新定位,
+        // 用户正在看的窗口会突然跳位置。
+        var wasVisible = window.AppWindow.IsVisible;
+        window.ToggleTopmost();
+        if (window.IsTopmost && !wasVisible)
+        {
+            window.ShowWindow();
+        }
+        else if (!window.IsTopmost)
+        {
+            // 取消置顶时窗口可能正处于"可见但不在前台"(置顶期间失焦不会隐藏),
+            // 此时补一次隐藏判定,否则不会再有新的失焦事件把它收起来。
+            window.RequestHideIfBackground();
+        }
+    }
+
     /// <summary>窗口句柄是否仍然有效(Win32 视角,避开 WinUI 对象已销毁但引用残留的问题)。</summary>
     private static bool IsWindowAlive(Window window)
     {
@@ -371,9 +436,12 @@ public partial class App : Application
             var exePath = Environment.ProcessPath;
             if (!string.IsNullOrEmpty(exePath))
             {
+                // 传入本进程 PID：新实例会先等待旧实例完全退出并释放单实例互斥体，
+                // 否则新实例会因为互斥体仍被占用而立刻自杀，表现为“重启后进程消失”或旧进程残留。
                 var startInfo = new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = exePath,
+                    Arguments = $"{RestartWaitArg} {Environment.ProcessId}",
                     UseShellExecute = true,
                     WorkingDirectory = AppContext.BaseDirectory
                 };
@@ -444,6 +512,48 @@ public partial class App : Application
         });
     }
 
+    /// <summary>托盘重启:等待旧实例进程完全退出(最多 10 秒),避免新旧进程并存。</summary>
+    private static void WaitForPreviousInstanceExit(string[] cmdArgs)
+    {
+        try
+        {
+            var index = Array.IndexOf(cmdArgs, RestartWaitArg);
+            if (index < 0 || index + 1 >= cmdArgs.Length) return;
+            if (!int.TryParse(cmdArgs[index + 1], out var previousPid)) return;
+            if (previousPid == Environment.ProcessId) return;
+
+            using var previous = System.Diagnostics.Process.GetProcessById(previousPid);
+            previous.WaitForExit(3_000);
+        }
+        catch (ArgumentException)
+        {
+            // 旧进程已退出,直接继续启动
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"等待旧实例退出失败: {ex.Message}");
+        }
+    }
+
+    /// <summary>在超时窗口内轮询获取单实例互斥体,成功则本进程接管为唯一实例。</summary>
+    private static bool TryAcquireMutexWithTimeout(TimeSpan timeout)
+    {
+        try
+        {
+            return _instanceMutex?.WaitOne(timeout) == true;
+        }
+        catch (AbandonedMutexException)
+        {
+            // 旧实例未正常释放即退出,互斥体已被放弃,本进程仍可安全接管
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"等待单实例互斥体失败: {ex.Message}");
+            return false;
+        }
+    }
+
     /// <summary>退出应用(托盘菜单)。</summary>
     public static void ExitApp()
     {
@@ -451,10 +561,22 @@ public partial class App : Application
         Hotkey?.Dispose();
         HotkeySettings?.Dispose();
         HotkeyOpenUrl?.Dispose();
+        HotkeyTopmost?.Dispose();
         Services.Engine?.Dispose();
         Services.Tray?.Dispose();
+        var toast = LinkToast;
+        LinkToast = null;
+        toast?.Close();
         ClipboardWindow?.Close();
         SettingsWindow?.Close();
+        // 显式释放单实例互斥体：托盘“重启 NexClip”时新实例需要立刻拿到它
+        try
+        {
+            _instanceMutex?.ReleaseMutex();
+        }
+        catch { /* 未持有或已释放 */ }
+        _instanceMutex?.Dispose();
+        _instanceMutex = null;
         Environment.Exit(0);
     }
 

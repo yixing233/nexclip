@@ -10,7 +10,8 @@ namespace NexClip.Desktop;
 
 /// <summary>
 /// 复制直达智能浮窗：展示智能识别结果（色彩预览、文件路径、GitHub 仓库、网盘提取码、网址等），
-/// 提供键盘流（Enter 默认执行、Esc 忽略）与鼠标直达操作。5 秒自动关闭，无边框轻量浮窗。
+/// 提供全局热键直达与鼠标直达操作。5 秒自动关闭，无边框轻量浮窗。
+/// 显示时不抢占前台焦点，因此不会把正在浏览的剪贴板窗口顶掉。
 /// </summary>
 public sealed partial class LinkToastWindow : Window
 {
@@ -19,6 +20,7 @@ public sealed partial class LinkToastWindow : Window
     private readonly SmartAction _action;
     private DispatcherQueueTimer? _autoClose;
     private int _remainingSeconds = 5;
+    private bool _closed;
 
     public SmartAction Action => _action;
 
@@ -58,8 +60,10 @@ public sealed partial class LinkToastWindow : Window
         ClockIcon.Source = Lucide.Clock;
         TypeIcon.Source = action.Icon;
         TitleText.Text = action.Title;
+        // 键盘直达提示：仅当全局热键确实注册成功时才宣传，否则只提示鼠标点击
         var hotkey = App.Services.Settings.HotkeyOpenUrl;
-        OpenHotkeyText.Text = string.IsNullOrWhiteSpace(hotkey) ? "Enter 直达" : $"{hotkey} 直达";
+        var hotkeyReady = App.HotkeyOpenUrl is { IsRegistered: true } && !string.IsNullOrWhiteSpace(hotkey);
+        OpenHotkeyText.Text = hotkeyReady ? $"{hotkey} 直达" : "点击直达";
         CountdownBadgeText.Text = $"{_remainingSeconds}s";
 
         // 2. 中部内容区
@@ -85,8 +89,9 @@ public sealed partial class LinkToastWindow : Window
             ExtractionCodePill.Visibility = Visibility.Collapsed;
         }
 
-        // 3. 主要操作按钮 (Enter 默认执行，亮蓝实底采用高对比度白色图标)
-        PrimaryButtonLabel.Text = $"{action.PrimaryButtonText} (Enter)";
+        // 3. 主要操作按钮 (亮蓝实底采用高对比度白色图标)
+        // 键盘直达提示统一放在右上角胶囊：底栏是不换行水平布局，标签再拼热键会挤掉次要按钮
+        PrimaryButtonLabel.Text = action.PrimaryButtonText;
         PrimaryButtonImage.Source = Lucide.GetWhiteVariant(action.PrimaryButtonIcon ?? action.Icon);
 
         // 4. 次要操作按钮
@@ -118,10 +123,15 @@ public sealed partial class LinkToastWindow : Window
         }
         ApplyToolWindowStyle();
         Activated += (_, _) => ApplyToolWindowStyle();
-        PositionBottomRight();
+        // 显示前就按内容真实高度定位：避让分支依赖真实高度，
+        // 若先用最小高度定位一次，下一帧重算会让浮窗跳位置。
+        ResizeToContent();
 
-        // 显示浮窗 (不抢占焦点)
-        AppWindow.Show();
+        // 显示浮窗：以"不激活"方式呈现，避免抢走当前前台窗口的焦点。
+        // AppWindow.Show() 的无参重载等价于 Show(true)，会激活窗口；
+        // 那会让正在前台的剪贴板窗口收到 Deactivated 而被失焦自动隐藏，
+        // 表现为"复制后直达浮窗把剪贴板窗口直接挤掉"。
+        ShowWithoutActivation();
 
         // 首轮布局完成后按内容实际高度调整窗口尺寸并重新精准锚定
         DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, ResizeToContent);
@@ -130,18 +140,59 @@ public sealed partial class LinkToastWindow : Window
         _autoClose = DispatcherQueue.CreateTimer();
         _autoClose.Interval = TimeSpan.FromSeconds(1);
         _autoClose.IsRepeating = true;
-        _autoClose.Tick += (_, _) =>
+        _autoClose.Tick += OnAutoCloseTick;
+        _autoClose.Start();
+
+        // 窗口关闭时必须停止并解绑倒计时定时器：否则已关闭窗口会被定时器持续引用而无法回收，
+        // 且 Tick 内访问已销毁的 XAML 元素会反复抛异常，造成内存与 CPU 持续占用。
+        Closed += OnWindowClosed;
+    }
+
+    /// <summary>倒计时 Tick：窗口已关闭时立即自停，避免访问已销毁元素。</summary>
+    private void OnAutoCloseTick(DispatcherQueueTimer sender, object args)
+    {
+        if (_closed)
+        {
+            sender.Stop();
+            return;
+        }
+
+        try
         {
             _remainingSeconds--;
             if (_remainingSeconds <= 0)
             {
-                _autoClose.Stop();
+                sender.Stop();
                 Close();
                 return;
             }
             CountdownBadgeText.Text = $"{_remainingSeconds}s";
-        };
-        _autoClose.Start();
+        }
+        catch
+        {
+            // 窗口已销毁或元素不可访问时停止计时，防止异常反复抛出
+            sender.Stop();
+        }
+    }
+
+    /// <summary>释放浮窗持有的定时器与静态引用，确保关闭后可被 GC 回收。</summary>
+    private void OnWindowClosed(object sender, WindowEventArgs args)
+    {
+        _closed = true;
+        Closed -= OnWindowClosed;
+
+        if (_autoClose is { } timer)
+        {
+            timer.Tick -= OnAutoCloseTick;
+            timer.Stop();
+            _autoClose = null;
+        }
+
+        App.ReleaseLinkToast(this);
+
+        // 焦点若曾被本浮窗接走且没还回剪贴板窗口，此处让它重新走一遍失焦隐藏判定，
+        // 避免剪贴板窗口以"可见但在后台"的状态长期滞留（同时也会恢复隐藏后的内存回收）。
+        App.ClipboardWindow?.RequestHideIfBackground();
     }
 
     /// <summary>不占任务栏 / 不出现在 Alt-Tab (工具窗样式)。</summary>
@@ -157,35 +208,105 @@ public sealed partial class LinkToastWindow : Window
         }
     }
 
-    /// <summary>定位到屏幕右下角 (避开任务栏)。</summary>
-    private void PositionBottomRight()
+    /// <summary>以"不激活"方式显示浮窗并保持置顶：当前前台窗口(如剪贴板窗口)的焦点不受影响。</summary>
+    private void ShowWithoutActivation()
     {
-        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        var scale = NativeMethods.GetDpiForWindow(hwnd) / 96.0;
-        var w = (int)Math.Ceiling(CardWidthDips * scale);
-        var h = (int)Math.Ceiling(CardMinHeightDips * scale);
-        AppWindow.Resize(new SizeInt32(w, h));
+        try
+        {
+            AppWindow.Show(false);
+        }
+        catch
+        {
+            // 运行时不支持带参重载时退回默认显示：宁可短暂抢焦点，也不能让浮窗不显示
+            AppWindow.Show();
+        }
 
-        var work = GetWorkArea();
-        var margin = (int)Math.Round(16 * scale);
-        AppWindow.Move(new PointInt32(work.Right - w - margin, work.Bottom - h - margin));
+        try
+        {
+            // 置顶但不激活：SWP_NOACTIVATE 保证 Z 序提升的同时前台焦点留在原窗口
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            NativeMethods.SetWindowPos(
+                hwnd,
+                NativeMethods.HwndTopmost,
+                0, 0, 0, 0,
+                NativeMethods.SwpNoSize | NativeMethods.SwpNoMove | NativeMethods.SwpNoActivate | NativeMethods.SwpShowWindow);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("浮窗置顶显示失败", ex);
+        }
     }
 
     /// <summary>按固定宽度测量卡片内容的真实所需高度并自适应窗口尺寸。</summary>
     private void ResizeToContent()
     {
-        RootGrid.Measure(new Windows.Foundation.Size(CardWidthDips, double.PositiveInfinity));
+        var desiredDips = CardMinHeightDips;
+        try
+        {
+            // 构造期首次调用时布局树尚未加载，Measure 可能失败或返回 0，此时按最小高度处理
+            RootGrid.Measure(new Windows.Foundation.Size(CardWidthDips, double.PositiveInfinity));
+            desiredDips = Math.Max(RootGrid.DesiredSize.Height + 12, CardMinHeightDips);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"测量浮窗内容高度失败，按最小高度显示: {ex.Message}");
+        }
+
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         var scale = NativeMethods.GetDpiForWindow(hwnd) / 96.0;
-        var desiredDips = Math.Max(RootGrid.DesiredSize.Height + 12, CardMinHeightDips);
         var w = (int)Math.Ceiling(CardWidthDips * scale);
         var h = (int)Math.Ceiling(desiredDips * scale);
         AppWindow.Resize(new SizeInt32(w, h));
+        MoveToAnchor(w, h, scale);
+    }
 
+    /// <summary>
+    /// 锚定浮窗位置：默认贴屏幕右下角；若与正在显示的剪贴板窗口重叠，
+    /// 则依次尝试"移到其上方 → 移到其左侧"，避免遮挡用户正在浏览的列表。
+    /// 两侧都放不下时保持右下角原位：贴右上角会压住剪贴板窗口的搜索框与顶栏按钮，比压住列表底角更糟。
+    /// </summary>
+    private void MoveToAnchor(int w, int h, double scale)
+    {
         var work = GetWorkArea();
         var margin = (int)Math.Round(16 * scale);
-        AppWindow.Move(new PointInt32(work.Right - w - margin, work.Bottom - h - margin));
+        var x = work.Right - w - margin;
+        var y = work.Bottom - h - margin;
+
+        if (GetVisibleClipboardWindowRect() is { } main && Intersects(x, y, w, h, main))
+        {
+            var above = main.Top - h - margin;
+            var left = main.Left - w - margin;
+            if (above >= work.Top)
+            {
+                y = above;
+            }
+            else if (left >= work.Left)
+            {
+                x = left;
+            }
+        }
+
+        AppWindow.Move(new PointInt32(x, y));
     }
+
+    /// <summary>当前可见的剪贴板窗口屏幕矩形；窗口未创建或已隐藏时返回 null。</summary>
+    private static NativeMethods.RECT? GetVisibleClipboardWindowRect()
+    {
+        try
+        {
+            if (App.ClipboardWindow is not { } window) return null;
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
+            if (hwnd == IntPtr.Zero || !NativeMethods.IsWindowVisible(hwnd)) return null;
+            return NativeMethods.GetWindowRect(hwnd, out var rect) ? rect : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool Intersects(int x, int y, int w, int h, NativeMethods.RECT other)
+        => x < other.Right && x + w > other.Left && y < other.Bottom && y + h > other.Top;
 
     private NativeMethods.RECT GetWorkArea()
     {
@@ -210,6 +331,8 @@ public sealed partial class LinkToastWindow : Window
 
     public void ExecutePrimaryAction()
     {
+        if (_closed) return;
+        _closed = true;
         try
         {
             _action.PrimaryAction();
@@ -218,11 +341,17 @@ public sealed partial class LinkToastWindow : Window
         {
             Log.Error("执行主直达动作失败", ex);
         }
-        Close();
+        finally
+        {
+            // 动作抛异常时也必须关闭：否则浮窗永久留在屏幕上，且热键因 _closed 变哑
+            Close();
+        }
     }
 
     public void ExecuteSecondaryAction()
     {
+        if (_closed) return;
+        _closed = true;
         try
         {
             _action.SecondaryAction?.Invoke();
@@ -231,7 +360,10 @@ public sealed partial class LinkToastWindow : Window
         {
             Log.Error("执行次要直达动作失败", ex);
         }
-        Close();
+        finally
+        {
+            Close();
+        }
     }
 
     private void PrimaryAction_Click(object sender, RoutedEventArgs e) => ExecutePrimaryAction();
@@ -242,12 +374,14 @@ public sealed partial class LinkToastWindow : Window
 
     private void RootGrid_PointerEntered(object sender, PointerRoutedEventArgs e)
     {
+        if (_closed) return;
         _autoClose?.Stop();
         CountdownBadgeText.Text = "已暂停";
     }
 
     private void RootGrid_PointerExited(object sender, PointerRoutedEventArgs e)
     {
+        if (_closed) return;
         if (_remainingSeconds > 0)
         {
             CountdownBadgeText.Text = $"{_remainingSeconds}s";

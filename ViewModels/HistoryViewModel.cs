@@ -29,6 +29,10 @@ public partial class HistoryViewModel : ObservableObject
     private bool isLoadingMore;
 
     public const int PageSize = 50;
+
+    /// <summary>下拉加载在运行期最多保留的条目数，达到上限后不再继续追加，避免列表与缩略图无上限堆积</summary>
+    private const int MaxLoadedItems = 300;
+
     private int _currentOffset;
 
     public ObservableCollection<HistoryItemViewModel> Items { get; } = new();
@@ -73,9 +77,17 @@ public partial class HistoryViewModel : ObservableObject
     partial void OnSearchTextChanged(string value)
     {
         NotifyStateChanged();
-        _searchCts?.Cancel();
+        // 先取出旧实例再替换，最后取消并释放旧实例：
+        // 避免新建的 token 被误释放，同时保证旧 CancellationTokenSource 的内部资源被及时回收
+        var old = _searchCts;
         _searchCts = new CancellationTokenSource();
         var token = _searchCts.Token;
+        try
+        {
+            old?.Cancel();
+            old?.Dispose();
+        }
+        catch (ObjectDisposedException) { /* 已被释放，忽略 */ }
         _ = DebounceRefreshAsync(token);
     }
 
@@ -195,6 +207,14 @@ public partial class HistoryViewModel : ObservableObject
     public async Task LoadMoreAsync()
     {
         if (_engine is null || IsLoadingMore || !HasMore || IsBusy) return;
+
+        // 已达运行期保留上限：停止继续加载，防止 Items 与其缩略图无上限增长
+        if (Items.Count >= MaxLoadedItems)
+        {
+            HasMore = false;
+            return;
+        }
+
         IsLoadingMore = true;
         try
         {
@@ -292,9 +312,9 @@ public partial class HistoryViewModel : ObservableObject
     }
 
     [RelayCommand]
-    public void ClearAsync()
+    public async Task ClearAsync()
     {
-        _engine?.History.Clear();
-        Items.Clear();
+        _engine?.History.Clear(keepStarred: true);
+        await RefreshAsync();
     }
 }

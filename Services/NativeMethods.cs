@@ -34,6 +34,11 @@ internal static class NativeMethods
     internal static readonly IntPtr HwndNotTopmost = new(-2);
     internal static readonly IntPtr HwndTop = IntPtr.Zero;   // HWND_TOP:移到 Z 序顶部(不激活)
 
+    internal const uint SwpNoSize = 0x0001;
+    internal const uint SwpNoMove = 0x0002;
+    internal const uint SwpNoActivate = 0x0010;   // 关键:改变 Z 序但不抢焦点
+    internal const uint SwpShowWindow = 0x0040;
+
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     internal static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
@@ -64,6 +69,34 @@ internal static class NativeMethods
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     internal static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    /// <summary>剪贴板序列号:内容未变化时该值不变,可用于零成本短路轮询。</summary>
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    internal static extern uint GetClipboardSequenceNumber();
+
+    /// <summary>
+    /// 将进程工作集中的可分页内存换出:窗口隐藏到托盘后调用,
+    /// 可把已释放但仍驻留物理内存的页归还系统,显著降低任务管理器显示的内存占用。
+    /// </summary>
+    [System.Runtime.InteropServices.DllImport("psapi.dll")]
+    internal static extern bool EmptyWorkingSet(IntPtr hProcess);
+
+    /// <summary>回收当前进程驻留内存(压缩式 GC + 归还工作集)。请在后台线程调用,勿阻塞 UI 线程。</summary>
+    internal static void TrimProcessWorkingSet()
+    {
+        try
+        {
+            System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            using var current = System.Diagnostics.Process.GetCurrentProcess();
+            EmptyWorkingSet(current.Handle);
+        }
+        catch
+        {
+            // 回收失败不影响功能
+        }
+    }
 
     /// <summary>
     /// 激活目标窗口:附加当前前台线程后请求 SetForegroundWindow。

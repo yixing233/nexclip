@@ -47,6 +47,11 @@ public sealed class TrayIconService : IDisposable
         _trayManager.SetTheme(isDark);
     }
 
+    public void UpdateHotkeys(string? clipboardHotkey, string? settingsHotkey)
+    {
+        _trayManager.UpdateHotkeys(clipboardHotkey, settingsHotkey);
+    }
+
     private void ScheduleReAttach(double seconds)
     {
         try

@@ -77,6 +77,13 @@
                     </Button>
                 </Grid>
                 <StackPanel x:Name="TopButtons" Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                    <Button x:Name="ClearHistoryButton" Click="ClearHistoryButton_Click" Width="32" Height="32" Padding="0" Background="Transparent" BorderThickness="0" CornerRadius="4" ToolTipService.ToolTip="清空记录">
+                        <Button.Resources>
+                            <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
+                            <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="Transparent" />
+                        </Button.Resources>
+                        <Image x:Name="ClearHistoryButtonImage" Source="{x:Bind services:Lucide.Trash}" Width="16" Height="16" />
+                    </Button>
                     <Button x:Name="TopmostButton" Click="TopmostButton_Click" Width="32" Height="32" Padding="0" Background="Transparent" BorderThickness="0" CornerRadius="4" ToolTipService.ToolTip="置顶窗口">
                         <Button.Resources>
                             <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
@@ -290,7 +297,7 @@
                                             FontSize="12"
                                             Foreground="#2563EB"
                                             TextTrimming="CharacterEllipsis"
-                                            MaxWidth="72"
+                                            MaxWidth="96"
                                             Visibility="{x:Bind HasSourceApp, Mode=OneWay, Converter={StaticResource InverseBoolToVis}}" />
                                     </StackPanel>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center"
@@ -348,6 +355,7 @@
                                         <Image
                                             Source="{x:Bind Thumbnail, Mode=OneTime}"
                                             MaxHeight="140"
+                                            MaxWidth="360"
                                             HorizontalAlignment="Left"
                                             Tapped="ImageThumbnail_Tapped"
                                             DoubleTapped="ImageThumbnail_DoubleTapped"

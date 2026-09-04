@@ -642,6 +642,74 @@
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="过滤远程控制应用" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                    <ToggleSwitch
+                                        Grid.Column="1"
+                                        Width="48"
+                                        MinWidth="0"
+                                        OnContent=""
+                                        OffContent=""
+                                        IsOn="{Binding AppFilterEnabled, Mode=TwoWay}"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.Name="过滤远程控制应用" />
+                                </Grid>
+                                <Button
+                                    HorizontalAlignment="Right"
+                                    Click="ManageAppFilters_Click"
+                                    ToolTipService.ToolTip="管理自定义过滤进程">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Image Source="{x:Bind services:Lucide.ListFilter}" Width="16" Height="16" />
+                                        <TextBlock Text="管理自定义过滤进程" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="保持上次浏览位置" VerticalAlignment="Center" />
+                                        <TextBlock Text="重新打开剪贴板窗口时保持关闭前的位置，而非每次滚回顶部" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <ToggleSwitch
+                                        Grid.Column="1"
+                                        Width="48"
+                                        MinWidth="0"
+                                        OnContent=""
+                                        OffContent=""
+                                        IsOn="{Binding RememberScrollPosition, Mode=TwoWay}"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.Name="保持上次浏览位置" />
+                                </Grid>
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="富文本支持" VerticalAlignment="Center" />
+                                        <TextBlock Text="保留 Word、浏览器等来源的字体与格式；粘贴时按 Shift 仍可只粘纯文本" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <ToggleSwitch
+                                        Grid.Column="1"
+                                        Width="48"
+                                        MinWidth="0"
+                                        OnContent=""
+                                        OffContent=""
+                                        IsOn="{Binding RichTextEnabled, Mode=TwoWay}"
+                                        HorizontalAlignment="Right"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.Name="富文本支持" />
+                                </Grid>
+                                <Grid ColumnSpacing="16">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
                                         <TextBlock Text="新内容通知" VerticalAlignment="Center" />
                                         <TextBlock Text="接收到多端设备同步的新剪贴板时在右下角弹出浮窗提示" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                     </StackPanel>
@@ -953,6 +1021,40 @@
                                         <Button Content="重置" Command="{Binding ResetHotkeyOpenUrlCommand}" ToolTipService.ToolTip="恢复默认 Ctrl+Alt+O" />
                                     </StackPanel>
                                 </Grid>
+                                <!-- 长久态错误(热键被占用):常驻显示,不自动消失 -->
+                                <TextBlock
+                                    Text="{Binding HotkeyOpenUrlStatusText}"
+                                    FontSize="12"
+                                    Foreground="#DC2626"
+                                    Visibility="{Binding HasHotkeyOpenUrlIssue, Converter={StaticResource BoolToVis}}" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                        <TextBlock Text="置顶热键" Style="{ThemeResource BodyStrongTextBlockStyle}" />
+                                        <TextBlock Text="切换剪贴板窗口始终在最前" FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                        <TextBox x:Name="HotKeyTopmostBox" Width="140" IsReadOnly="True"
+                                            PlaceholderText="点击后按组合键"
+                                            Text="{Binding HotkeyTopmost, Mode=OneWay}"
+                                            GotFocus="HotKeyBox_GotFocus"
+                                            LostFocus="HotKeyBox_LostFocus"
+                                            PreviewKeyDown="HotKeyTopmostBox_PreviewKeyDown" HorizontalAlignment="Right" />
+                                        <Button Command="{Binding ClearHotkeyTopmostCommand}" Padding="6" Background="Transparent" BorderThickness="0" CornerRadius="4" ToolTipService.ToolTip="清空热键">
+                                            <Image Source="{x:Bind services:Lucide.Trash}" Width="14" Height="14" />
+                                        </Button>
+                                        <Button Content="重置" Command="{Binding ResetHotkeyTopmostCommand}" ToolTipService.ToolTip="恢复默认 Ctrl+Alt+T" />
+                                    </StackPanel>
+                                </Grid>
+                                <!-- 长久态错误(热键被占用):常驻显示,不自动消失 -->
+                                <TextBlock
+                                    Text="{Binding HotkeyTopmostStatusText}"
+                                    FontSize="12"
+                                    Foreground="#DC2626"
+                                    Visibility="{Binding HasHotkeyTopmostIssue, Converter={StaticResource BoolToVis}}" />
                             </StackPanel>
                         </Border>
 

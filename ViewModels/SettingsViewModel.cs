@@ -66,6 +66,18 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private bool hasHotkeySettingsIssue;
 
+    [ObservableProperty]
+    private string hotkeyOpenUrlStatusText = "";
+
+    [ObservableProperty]
+    private bool hasHotkeyOpenUrlIssue;
+
+    [ObservableProperty]
+    private string hotkeyTopmostStatusText = "";
+
+    [ObservableProperty]
+    private bool hasHotkeyTopmostIssue;
+
     // 快捷键反馈也进入统一消息宿主;长久态占用错误仍保留在对应设置项下方。
     public void ShowHotkeyMessage(string text, InfoBarSeverity severity = InfoBarSeverity.Informational) =>
         ShowMessage(text, severity);
@@ -113,7 +125,22 @@ public partial class SettingsViewModel : ObservableObject
     private bool monitorEnabled;
 
     [ObservableProperty]
+    private bool appFilterEnabled;
+
+    public ObservableCollection<string> CustomFilteredProcesses { get; } = new();
+    public ObservableCollection<ClipboardAppFilter.RunningProcessOption> RunningProcesses { get; } = new();
+
+    [ObservableProperty]
+    private ClipboardAppFilter.RunningProcessOption? selectedRunningProcess;
+
+    [ObservableProperty]
     private bool autoPaste;
+
+    [ObservableProperty]
+    private bool rememberScrollPosition;
+
+    [ObservableProperty]
+    private bool richTextEnabled = true;
 
     [ObservableProperty]
     private bool notifyEnabled;
@@ -144,6 +171,9 @@ public partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private string hotkeyOpenUrl = "Ctrl+Alt+O";   // 打开复制的链接
+
+    [ObservableProperty]
+    private string hotkeyTopmost = "Ctrl+Alt+T";   // 剪贴板窗口置顶开关
 
     // ---- 设备列表 ----
     public ObservableCollection<DeviceInfo> Devices { get; } = new();
@@ -303,7 +333,12 @@ public partial class SettingsViewModel : ObservableObject
         AutoCheckUpdate = s.AutoCheckUpdate;
         UpdateSourceIndex = string.Equals(s.UpdateSource, "direct", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
         MonitorEnabled = s.MonitorEnabled;
+        AppFilterEnabled = s.AppFilterEnabled;
+        foreach (var process in s.CustomFilteredProcesses.Distinct(StringComparer.OrdinalIgnoreCase))
+            CustomFilteredProcesses.Add(process);
         AutoPaste = s.AutoPaste;
+        RememberScrollPosition = s.RememberScrollPosition;
+        RichTextEnabled = s.RichTextEnabled;
         NotifyEnabled = s.NotifyEnabled;
         CopyDirectEnabled = s.CopyDirectEnabled;
         SmartColorEnabled = s.SmartColorEnabled;
@@ -314,6 +349,7 @@ public partial class SettingsViewModel : ObservableObject
         Hotkey = s.Hotkey;
         HotkeySettings = s.HotkeySettings;
         HotkeyOpenUrl = s.HotkeyOpenUrl;
+        HotkeyTopmost = s.HotkeyTopmost;
         var idx = Array.IndexOf(MaxHistoryOptions, s.MaxHistory);
         MaxHistoryIndex = idx >= 0 ? idx : 2;
         ThemeModeIndex = s.ThemeMode switch { "light" => 0, "dark" => 1, _ => 2 };
@@ -339,25 +375,34 @@ public partial class SettingsViewModel : ObservableObject
             HasHotkeyIssue = false;
             HotkeySettingsStatusText = "";
             HasHotkeySettingsIssue = false;
+            HotkeyOpenUrlStatusText = "";
+            HasHotkeyOpenUrlIssue = false;
+            HotkeyTopmostStatusText = "";
+            HasHotkeyTopmostIssue = false;
             return;
         }
 
-        HotkeyStatusText = App.Hotkey.IsRegistered
+        HotkeyStatusText = App.Hotkey.IsRegistered || string.IsNullOrWhiteSpace(Hotkey)
             ? ""
             : $"“{Hotkey}”已被其他程序占用或格式非法,当前无法使用";
         HasHotkeyIssue = !string.IsNullOrEmpty(HotkeyStatusText);
 
-        HotkeySettingsStatusText = App.HotkeySettings is { IsRegistered: true }
+        HotkeySettingsStatusText = App.HotkeySettings is { IsRegistered: true } || string.IsNullOrWhiteSpace(HotkeySettings)
             ? ""
             : $"“{HotkeySettings}”已被其他程序占用或格式非法,当前无法使用";
         HasHotkeySettingsIssue = !string.IsNullOrEmpty(HotkeySettingsStatusText);
 
-        var openUrlOk = App.HotkeyOpenUrl is null || App.HotkeyOpenUrl.IsRegistered;
-        if (!openUrlOk && string.IsNullOrEmpty(HotkeySettingsStatusText))
-        {
-            HotkeySettingsStatusText = $"“{HotkeyOpenUrl}”已被其他程序占用或格式非法,当前无法使用";
-            HasHotkeySettingsIssue = true;
-        }
+        // 每个热键的占用提示显示在自己那一行下方,避免张冠李戴;
+        // 已清空的热键属于用户主动停用,不算异常,不提示。
+        HotkeyOpenUrlStatusText = App.HotkeyOpenUrl is null or { IsRegistered: true } || string.IsNullOrWhiteSpace(HotkeyOpenUrl)
+            ? ""
+            : $"“{HotkeyOpenUrl}”已被其他程序占用或格式非法,当前无法使用";
+        HasHotkeyOpenUrlIssue = !string.IsNullOrEmpty(HotkeyOpenUrlStatusText);
+
+        HotkeyTopmostStatusText = App.HotkeyTopmost is null or { IsRegistered: true } || string.IsNullOrWhiteSpace(HotkeyTopmost)
+            ? ""
+            : $"“{HotkeyTopmost}”已被其他程序占用或格式非法,当前无法使用";
+        HasHotkeyTopmostIssue = !string.IsNullOrEmpty(HotkeyTopmostStatusText);
     }
 
     private bool IsRegisteredHotkeyTextEmpty() => string.IsNullOrEmpty(HotkeySettingsStatusText);
@@ -499,6 +544,26 @@ public partial class SettingsViewModel : ObservableObject
     {
         HotkeyOpenUrl = "";
         ShowHotkeyMessage("已清除打开链接热键");
+    }
+
+    /// <summary>重置置顶热键为默认 Ctrl+Alt+T。</summary>
+    [RelayCommand]
+    public void ResetHotkeyTopmost()
+    {
+        if (HotkeyTopmost == "Ctrl+Alt+T")
+        {
+            ShowHotkeyMessage("置顶热键已是默认值 Ctrl+Alt+T");
+            return;
+        }
+        HotkeyTopmost = "Ctrl+Alt+T";
+    }
+
+    /// <summary>清空置顶热键。</summary>
+    [RelayCommand]
+    public void ClearHotkeyTopmost()
+    {
+        HotkeyTopmost = "";
+        ShowHotkeyMessage("已清除置顶热键");
     }
 
     [RelayCommand]
@@ -965,7 +1030,40 @@ public partial class SettingsViewModel : ObservableObject
     partial void OnAutoCheckUpdateChanged(bool value) { if (!_initialized) return; _svc.Settings.AutoCheckUpdate = value; _svc.Settings.Save(); }
     partial void OnUpdateSourceIndexChanged(int value) { if (!_initialized) return; _svc.Settings.UpdateSource = value == 1 ? "direct" : "github"; _svc.Settings.Save(); }
     partial void OnMonitorEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.MonitorEnabled = value; _svc.Settings.Save(); }
+    partial void OnAppFilterEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.AppFilterEnabled = value; _svc.Settings.Save(); }
+
+    public async Task RefreshRunningProcessesAsync()
+    {
+        var processes = await Task.Run(ClipboardAppFilter.GetRunningProcesses);
+        RunningProcesses.Clear();
+        foreach (var process in processes) RunningProcesses.Add(process);
+    }
+
+    public void AddSelectedFilterProcess()
+    {
+        var process = SelectedRunningProcess;
+        if (process is null) return;
+        if (!CustomFilteredProcesses.Contains(process.ProcessName, StringComparer.OrdinalIgnoreCase))
+            CustomFilteredProcesses.Add(process.ProcessName);
+        SaveCustomFilteredProcesses();
+    }
+
+    public void RemoveCustomFilterProcess(string? processName)
+    {
+        if (string.IsNullOrWhiteSpace(processName)) return;
+        var existing = CustomFilteredProcesses.FirstOrDefault(x => string.Equals(x, processName, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null) CustomFilteredProcesses.Remove(existing);
+        SaveCustomFilteredProcesses();
+    }
+
+    private void SaveCustomFilteredProcesses()
+    {
+        _svc.Settings.CustomFilteredProcesses = CustomFilteredProcesses.ToList();
+        _svc.Settings.Save();
+    }
     partial void OnAutoPasteChanged(bool value) { if (!_initialized) return; _svc.Settings.AutoPaste = value; _svc.Settings.Save(); }
+    partial void OnRememberScrollPositionChanged(bool value) { if (!_initialized) return; _svc.Settings.RememberScrollPosition = value; _svc.Settings.Save(); }
+    partial void OnRichTextEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.RichTextEnabled = value; _svc.Settings.Save(); }
     partial void OnNotifyEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.NotifyEnabled = value; _svc.Settings.Save(); }
     partial void OnCopyDirectEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.CopyDirectEnabled = value; _svc.Settings.Save(); }
     partial void OnSmartColorEnabledChanged(bool value) { if (!_initialized) return; _svc.Settings.SmartColorEnabled = value; _svc.Settings.Save(); }
@@ -980,6 +1078,7 @@ public partial class SettingsViewModel : ObservableObject
         _svc.Settings.Save();
         var ok = App.Hotkey?.Apply(value) ?? false;
         RefreshHotkeyStatus();
+        _svc.Tray?.UpdateHotkeys(value, HotkeySettings);
         ShowHotkeyMessage(ok ? "剪贴板热键已应用: " + value : "热键格式非法或已被占用: " + value, ok ? InfoBarSeverity.Success : InfoBarSeverity.Error);
     }
 
@@ -990,6 +1089,7 @@ public partial class SettingsViewModel : ObservableObject
         _svc.Settings.Save();
         var ok = App.HotkeySettings?.Apply(value) ?? false;
         RefreshHotkeyStatus();
+        _svc.Tray?.UpdateHotkeys(Hotkey, value);
         ShowHotkeyMessage(ok ? "设置热键已应用: " + value : "热键格式非法或已被占用: " + value, ok ? InfoBarSeverity.Success : InfoBarSeverity.Error);
     }
     partial void OnHotkeyOpenUrlChanged(string value)
@@ -998,7 +1098,19 @@ public partial class SettingsViewModel : ObservableObject
         _svc.Settings.HotkeyOpenUrl = value;
         _svc.Settings.Save();
         var ok = App.HotkeyOpenUrl?.Apply(value) ?? false;
+        RefreshHotkeyStatus();
+        if (string.IsNullOrWhiteSpace(value)) return;   // 清空即停用,由清空命令给出反馈
         ShowHotkeyMessage(ok ? "打开链接热键已应用: " + value : "打开链接热键格式非法或已被占用: " + value, ok ? InfoBarSeverity.Success : InfoBarSeverity.Error);
+    }
+    partial void OnHotkeyTopmostChanged(string value)
+    {
+        if (!_initialized) return;
+        _svc.Settings.HotkeyTopmost = value;
+        _svc.Settings.Save();
+        var ok = App.HotkeyTopmost?.Apply(value) ?? false;
+        RefreshHotkeyStatus();
+        if (string.IsNullOrWhiteSpace(value)) return;   // 清空即停用,由清空命令给出反馈
+        ShowHotkeyMessage(ok ? "置顶热键已应用: " + value : "置顶热键格式非法或已被占用: " + value, ok ? InfoBarSeverity.Success : InfoBarSeverity.Error);
     }
     partial void OnThemeModeIndexChanged(int value)
     {

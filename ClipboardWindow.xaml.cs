@@ -19,6 +19,8 @@ public sealed partial class ClipboardWindow : Window
     private const double MinHeightDips = 400;
 
     private DispatcherQueueTimer? _hideTimer;
+    /// <summary>隐藏到托盘后的内存回收延迟定时器(避免快速切换时频繁回收)。</summary>
+    private DispatcherQueueTimer? _trimTimer;
     // 点击窗口外部后会延迟隐藏;快捷键在这段时间内再次触发时应直接取消隐藏并呼出窗口,
     // 避免第一次快捷键只完成“待隐藏”状态切换,用户需要再按一次才能看到窗口。
     private bool _hidePending;
@@ -88,6 +90,10 @@ public sealed partial class ClipboardWindow : Window
                 if (DateTime.UtcNow < _showGuardUntil) return;
                 // 置顶时点击外部仅失去焦点,不自动隐藏;用户可继续浏览/操作条目。
                 if (IsTopmost) return;
+                // 注意:此处不能就地判断"焦点是否被自家浮窗接走"。
+                // WM_ACTIVATE(WA_INACTIVE) 处理期间 GetForegroundWindow() 未必已切到新前台,
+                // 一旦误判就直接跳过启动定时器,而 Deactivated 不会再来第二次,
+                // 窗口会永久停在"可见但失焦"。判定统一延后到 _hideTimer 的 Tick 内做。
                 _hidePending = true;
                 EnsureHideTimer();
                 _hideTimer!.Start();
@@ -102,6 +108,37 @@ public sealed partial class ClipboardWindow : Window
             {
                 e.Cancel = true;
                 AppWindow.Hide();
+            }
+        };
+
+        // 窗口隐藏到托盘后延迟回收驻留内存:UI 不可见时无需保留缩略图解码缓存与 LOH 碎片。
+        // 延迟 90 秒是为了避开"呼出-粘贴-隐藏"的高频节奏,只在用户真正离开后才回收,
+        // 否则每次隐藏都清空工作集会把代价转嫁到下一次呼出的硬缺页上。
+        _trimTimer = DispatcherQueue.CreateTimer();
+        _trimTimer.Interval = TimeSpan.FromSeconds(90);
+        _trimTimer.IsRepeating = false;
+        _trimTimer.Tick += (_, _) =>
+        {
+            try
+            {
+                _trimTimer?.Stop();
+                if (App.IsExiting || AppWindow.IsVisible) return;
+                // 压缩式 GC 与 EmptyWorkingSet 都不需要 UI 线程,放到后台线程避免界面卡顿与消息泵重入
+                _ = Task.Run(NativeMethods.TrimProcessWorkingSet);
+            }
+            catch
+            {
+                // 窗口已销毁等异常场景直接忽略,不影响功能
+            }
+        };
+
+        AppWindow.Changed += (sender, e) =>
+        {
+            if (!e.DidVisibilityChange || App.IsExiting || _trimTimer is null) return;
+            _trimTimer.Stop();
+            if (!sender.IsVisible)
+            {
+                _trimTimer.Start();
             }
         };
 
@@ -159,14 +196,56 @@ public sealed partial class ClipboardWindow : Window
         {
             _hidePending = false;
             _hideTimer?.Stop();
-            if (!App.IsExiting)
-            {
-                PersistWindowSize();
-                AppWindow.Hide();
-                var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-                NativeMethods.ShowWindow(hwnd, 0 /* SW_HIDE */);
-            }
+            if (App.IsExiting) return;
+            // 焦点被复制直达浮窗接走时取消隐藏:浮窗是复制的即时反馈,
+            // 不应把用户正在浏览的剪贴板窗口顶掉。50ms 后前台句柄已稳定,此处判定可靠。
+            if (IsFocusTakenByLinkToast()) return;
+            PersistWindowSize();
+            AppWindow.Hide();
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            NativeMethods.ShowWindow(hwnd, 0 /* SW_HIDE */);
         };
+    }
+
+    /// <summary>
+    /// 焦点是否正被复制直达浮窗持有。只认这一个浮窗:
+    /// 托盘菜单、设置窗口、文件选择器等仍按原有语义收起剪贴板窗口。
+    /// </summary>
+    private static bool IsFocusTakenByLinkToast()
+    {
+        try
+        {
+            if (App.LinkToast is not { } toast) return false;
+            var foreground = NativeMethods.GetForegroundWindow();
+            if (foreground == IntPtr.Zero) return false;
+            return WinRT.Interop.WindowNative.GetWindowHandle(toast) == foreground;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 复制直达浮窗关闭后回调:窗口若仍可见却已不是前台(焦点被浮窗接走后没还回来),
+    /// 重新走一遍失焦隐藏判定,避免窗口以"可见但在后台"的状态长期滞留。
+    /// </summary>
+    public void RequestHideIfBackground()
+    {
+        try
+        {
+            if (App.IsExiting || IsTopmost) return;
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            if (!NativeMethods.IsWindowVisible(hwnd)) return;
+            if (NativeMethods.GetForegroundWindow() == hwnd) return;
+            _hidePending = true;
+            EnsureHideTimer();
+            _hideTimer!.Start();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("浮窗关闭后重判剪贴板窗口隐藏失败", ex);
+        }
     }
 
     /// <summary>当前是否置顶(始终在最前)。</summary>

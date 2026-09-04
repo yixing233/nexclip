@@ -3,6 +3,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using Svg;
 
 namespace NexClip.Tray;
 
@@ -19,13 +20,13 @@ public sealed class TrayManager : IDisposable
     private readonly Action<string>? _log;
     private readonly NotifyIcon _notifyIcon;
     private readonly Dictionary<TrayState, Icon> _icons = new();
-    private readonly ContextMenuStrip _menu;
+    private readonly FluentContextMenuStrip _menu;
 
-    private readonly ToolStripMenuItem _itemOpen;
-    private readonly ToolStripMenuItem _itemUpdate;
-    private readonly ToolStripMenuItem _itemSettings;
-    private readonly ToolStripMenuItem _itemRestart;
-    private readonly ToolStripMenuItem _itemExit;
+    private readonly FluentMenuItem _itemOpen;
+    private readonly FluentMenuItem _itemUpdate;
+    private readonly FluentMenuItem _itemSettings;
+    private readonly FluentMenuItem _itemRestart;
+    private readonly FluentMenuItem _itemExit;
     private readonly ToolStripSeparator _separator;
 
     private bool _isDarkTheme;
@@ -65,14 +66,16 @@ public sealed class TrayManager : IDisposable
         _icons[TrayState.Downloading] = MakeIcon(baseDirectory, "↓", "#2563EB");
         _icons[TrayState.Error] = MakeIcon(baseDirectory, "!", "#EF4444");
 
-        _menu = new ContextMenuStrip
+        var menuFont = CreateMenuFont(9.25f, FontStyle.Regular);
+
+        _menu = new FluentContextMenuStrip
         {
             ShowImageMargin = true,
             ShowCheckMargin = false,
-            ImageScalingSize = new Size(18, 18),
+            ImageScalingSize = new Size(16, 16),
             AutoSize = true,
-            DropShadowEnabled = true,
-            Padding = new Padding(3, 4, 3, 4)
+            DropShadowEnabled = false, // 禁用系统旧版方角灰边阴影，由 DWM 沉浸式圆角/边框接管
+            Font = menuFont
         };
 
         _menu.Opened += (_, _) =>
@@ -80,45 +83,34 @@ public sealed class TrayManager : IDisposable
             ApplyDwmMenuEffects(_menu.Handle, _isDarkTheme);
         };
 
-        var defaultFont = new Font("Segoe UI", 9.5f, FontStyle.Regular, GraphicsUnit.Point);
-        var boldFont = new Font("Segoe UI", 9.5f, FontStyle.Bold, GraphicsUnit.Point);
-        var itemPadding = new Padding(4, 5, 14, 5);
-
-        _itemOpen = new ToolStripMenuItem("打开剪贴板", null, (_, _) => _onShow())
+        _itemOpen = new FluentMenuItem("打开剪贴板", null, (_, _) => _onShow())
         {
-            Font = boldFont,
-            ShortcutKeyDisplayString = "Alt+V",
-            Padding = itemPadding
+            Font = menuFont
         };
 
-        _itemUpdate = new ToolStripMenuItem("检查更新...", null, (_, _) => _onCheckUpdate())
+        _itemUpdate = new FluentMenuItem("检查更新...", null, (_, _) => _onCheckUpdate())
         {
-            Font = defaultFont,
-            Padding = itemPadding
+            Font = menuFont
         };
 
-        _itemSettings = new ToolStripMenuItem("设置", null, (_, _) => _onSettings())
+        _itemSettings = new FluentMenuItem("设置", null, (_, _) => _onSettings())
         {
-            Font = defaultFont,
-            ShortcutKeyDisplayString = "Alt+X",
-            Padding = itemPadding
+            Font = menuFont
         };
 
         _separator = new ToolStripSeparator
         {
-            Margin = new Padding(0, 3, 0, 3)
+            Margin = new Padding(0, 4, 0, 4)
         };
 
-        _itemRestart = new ToolStripMenuItem("重启 NexClip", null, (_, _) => _onRestart())
+        _itemRestart = new FluentMenuItem("重启 NexClip", null, (_, _) => _onRestart())
         {
-            Font = defaultFont,
-            Padding = itemPadding
+            Font = menuFont
         };
 
-        _itemExit = new ToolStripMenuItem("退出", null, (_, _) => _onExit())
+        _itemExit = new FluentMenuItem("退出", null, (_, _) => _onExit(), isDanger: true)
         {
-            Font = defaultFont,
-            Padding = itemPadding
+            Font = menuFont
         };
 
         _menu.Items.Add(_itemOpen);
@@ -128,7 +120,7 @@ public sealed class TrayManager : IDisposable
         _menu.Items.Add(_itemRestart);
         _menu.Items.Add(_itemExit);
 
-        SetTheme(false); // 默认初始化浅色，后续由 TrayIconService 同步实际主题
+        SetTheme(false); // 默认浅色，后续由 TrayIconService 同步实际系统主题
 
         _notifyIcon = new NotifyIcon
         {
@@ -159,6 +151,40 @@ public sealed class TrayManager : IDisposable
         _notifyIcon.DoubleClick += (_, _) => _onShow();
     }
 
+    private static Font CreateMenuFont(float size, FontStyle style)
+    {
+        string[] preferredFonts = ["Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI"];
+        foreach (var fontName in preferredFonts)
+        {
+            try
+            {
+                using var testFont = new Font(fontName, size, style, GraphicsUnit.Point);
+                if (testFont.Name.Equals(fontName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new Font(fontName, size, style, GraphicsUnit.Point);
+                }
+            }
+            catch
+            {
+            }
+        }
+        return new Font(SystemFonts.MessageBoxFont?.FontFamily ?? FontFamily.GenericSansSerif, size, style, GraphicsUnit.Point);
+    }
+
+    /// <summary>动态更新托盘菜单显示的快捷键字符串。</summary>
+    public void UpdateHotkeys(string? clipboardHotkey, string? settingsHotkey)
+    {
+        try
+        {
+            _itemOpen.ShortcutKeyDisplayString = string.IsNullOrWhiteSpace(clipboardHotkey) ? "" : clipboardHotkey.Trim();
+            _itemSettings.ShortcutKeyDisplayString = string.IsNullOrWhiteSpace(settingsHotkey) ? "" : settingsHotkey.Trim();
+            _menu.Invalidate();
+        }
+        catch
+        {
+        }
+    }
+
     private static void ApplyDwmMenuEffects(IntPtr handle, bool isDark)
     {
         try
@@ -181,9 +207,9 @@ public sealed class TrayManager : IDisposable
         try
         {
             _menu.Renderer = new FluentToolStripRenderer(isDark);
-            var foreColor = isDark ? Color.FromArgb(243, 244, 246) : Color.FromArgb(17, 24, 39);
-            var exitColor = isDark ? Color.FromArgb(248, 113, 113) : Color.FromArgb(239, 68, 68);
-            var iconColor = isDark ? Color.FromArgb(203, 213, 225) : Color.FromArgb(55, 65, 81);
+            var foreColor = isDark ? Color.FromArgb(244, 244, 245) : Color.FromArgb(24, 24, 27);
+            var exitColor = isDark ? Color.FromArgb(248, 113, 113) : Color.FromArgb(220, 38, 38);
+            var iconColor = isDark ? Color.FromArgb(212, 212, 216) : Color.FromArgb(63, 63, 70);
 
             _itemOpen.ForeColor = foreColor;
             _itemUpdate.ForeColor = foreColor;
@@ -191,7 +217,7 @@ public sealed class TrayManager : IDisposable
             _itemRestart.ForeColor = foreColor;
             _itemExit.ForeColor = exitColor;
 
-            // 动态生成高质量 18x18 官方正版 Lucide 矢量图标
+            // 动态生成饱满高清晰度 16x16 官方正版 Lucide 矢量图标
             _itemOpen.Image?.Dispose();
             _itemOpen.Image = DrawLucideIcon(TrayIconType.Clipboard, iconColor);
 
@@ -207,7 +233,7 @@ public sealed class TrayManager : IDisposable
             _itemExit.Image?.Dispose();
             _itemExit.Image = DrawLucideIcon(TrayIconType.Exit, exitColor);
 
-            _menu.BackColor = isDark ? Color.FromArgb(32, 32, 32) : Color.FromArgb(255, 255, 255);
+            _menu.BackColor = isDark ? Color.FromArgb(32, 32, 35) : Color.FromArgb(252, 252, 253);
             _menu.Invalidate();
         }
         catch (Exception ex)
@@ -219,135 +245,32 @@ public sealed class TrayManager : IDisposable
     private enum TrayIconType { Clipboard, Refresh, Settings, Restart, Exit }
 
     /// <summary>
-    /// 100% 严谨按照 Lucide 官方 24x24 矢量规范转换为 GDI+ 路径渲染。
+    /// 从项目内置的 Lucide 官方 SVG 资源渲染菜单图标。
     /// </summary>
-    private static Bitmap DrawLucideIcon(TrayIconType type, Color color, int size = 18)
+    private static Bitmap DrawLucideIcon(TrayIconType type, Color color, int size = 16)
     {
-        var bmp = new Bitmap(size, size);
-        using var g = Graphics.FromImage(bmp);
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-        g.Clear(Color.Transparent);
-
-        float s = size / 24.0f;
-        using var pen = new Pen(color, 2.0f * s)
+        if (size <= 0)
         {
-            StartCap = LineCap.Round,
-            EndCap = LineCap.Round,
-            LineJoin = LineJoin.Round
-        };
-
-        float P(float v) => v * s;
-
-        switch (type)
-        {
-            case TrayIconType.Clipboard:
-                // Lucide clipboard:
-                // <rect width="8" height="4" x="8" y="2" rx="1" ry="1" />
-                // <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
-                using (var clip = new GraphicsPath())
-                {
-                    clip.AddArc(P(8), P(2), P(2), P(2), 180, 90);
-                    clip.AddArc(P(14), P(2), P(2), P(2), 270, 90);
-                    clip.AddArc(P(14), P(4), P(2), P(2), 0, 90);
-                    clip.AddArc(P(8), P(4), P(2), P(2), 90, 90);
-                    clip.CloseFigure();
-                    g.DrawPath(pen, clip);
-                }
-                using (var body = new GraphicsPath())
-                {
-                    body.AddLine(P(16), P(4), P(18), P(4));
-                    body.AddArc(P(16), P(4), P(4), P(4), 270, 90);
-                    body.AddLine(P(20), P(6), P(20), P(20));
-                    body.AddArc(P(16), P(18), P(4), P(4), 0, 90);
-                    body.AddLine(P(18), P(22), P(6), P(22));
-                    body.AddArc(P(4), P(18), P(4), P(4), 90, 90);
-                    body.AddLine(P(4), P(20), P(4), P(6));
-                    body.AddArc(P(4), P(4), P(4), P(4), 180, 90);
-                    body.AddLine(P(6), P(4), P(8), P(4));
-                    g.DrawPath(pen, body);
-                }
-                break;
-
-            case TrayIconType.Refresh:
-                // Lucide refresh-cw:
-                // <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-                // <path d="M21 3v5h-5" />
-                // <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-                // <path d="M8 16H3v5" />
-                using (var arc1 = new GraphicsPath())
-                {
-                    arc1.AddArc(P(3), P(3), P(18), P(18), 185, 120);
-                    g.DrawPath(pen, arc1);
-                }
-                g.DrawLine(pen, P(21), P(3), P(21), P(8));
-                g.DrawLine(pen, P(21), P(8), P(16), P(8));
-
-                using (var arc2 = new GraphicsPath())
-                {
-                    arc2.AddArc(P(3), P(3), P(18), P(18), 5, 120);
-                    g.DrawPath(pen, arc2);
-                }
-                g.DrawLine(pen, P(3), P(21), P(3), P(16));
-                g.DrawLine(pen, P(3), P(16), P(8), P(16));
-                break;
-
-            case TrayIconType.Settings:
-                // Lucide settings 官方精密 8 瓣齿轮:
-                // 中心圆: cx=12, cy=12, r=3 (直径 6)
-                g.DrawEllipse(pen, P(9), P(9), P(6), P(6));
-                using (var gear = new GraphicsPath())
-                {
-                    gear.AddLine(P(10.5f), P(2.2f), P(13.5f), P(2.2f));
-                    gear.AddLine(P(13.5f), P(2.2f), P(14.6f), P(5.3f));
-                    gear.AddLine(P(14.6f), P(5.3f), P(17.5f), P(4.1f));
-                    gear.AddLine(P(17.5f), P(4.1f), P(19.9f), P(6.5f));
-                    gear.AddLine(P(19.9f), P(6.5f), P(18.7f), P(9.4f));
-                    gear.AddLine(P(18.7f), P(9.4f), P(21.8f), P(10.5f));
-                    gear.AddLine(P(21.8f), P(10.5f), P(21.8f), P(13.5f));
-                    gear.AddLine(P(21.8f), P(13.5f), P(18.7f), P(14.6f));
-                    gear.AddLine(P(18.7f), P(14.6f), P(19.9f), P(17.5f));
-                    gear.AddLine(P(19.9f), P(17.5f), P(17.5f), P(19.9f));
-                    gear.AddLine(P(17.5f), P(19.9f), P(14.6f), P(18.7f));
-                    gear.AddLine(P(14.6f), P(18.7f), P(13.5f), P(21.8f));
-                    gear.AddLine(P(13.5f), P(21.8f), P(10.5f), P(21.8f));
-                    gear.AddLine(P(10.5f), P(21.8f), P(9.4f), P(18.7f));
-                    gear.AddLine(P(9.4f), P(18.7f), P(6.5f), P(19.9f));
-                    gear.AddLine(P(6.5f), P(19.9f), P(4.1f), P(17.5f));
-                    gear.AddLine(P(4.1f), P(17.5f), P(5.3f), P(14.6f));
-                    gear.AddLine(P(5.3f), P(14.6f), P(2.2f), P(13.5f));
-                    gear.AddLine(P(2.2f), P(13.5f), P(2.2f), P(10.5f));
-                    gear.AddLine(P(2.2f), P(10.5f), P(5.3f), P(9.4f));
-                    gear.AddLine(P(5.3f), P(9.4f), P(4.1f), P(6.5f));
-                    gear.AddLine(P(4.1f), P(6.5f), P(6.5f), P(4.1f));
-                    gear.AddLine(P(6.5f), P(4.1f), P(9.4f), P(5.3f));
-                    gear.CloseFigure();
-                    g.DrawPath(pen, gear);
-                }
-                break;
-
-            case TrayIconType.Restart:
-                // Lucide rotate-cw:
-                // <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
-                // <path d="M21 3v5h-5"/>
-                using (var arc = new GraphicsPath())
-                {
-                    arc.AddArc(P(3), P(3), P(18), P(18), 45, 270);
-                    g.DrawPath(pen, arc);
-                }
-                g.DrawLine(pen, P(21), P(3), P(21), P(8));
-                g.DrawLine(pen, P(21), P(8), P(16), P(8));
-                break;
-
-            case TrayIconType.Exit:
-                // Lucide x:
-                // <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
-                g.DrawLine(pen, P(6), P(6), P(18), P(18));
-                g.DrawLine(pen, P(18), P(6), P(6), P(18));
-                break;
+            throw new ArgumentOutOfRangeException(nameof(size));
         }
 
-        return bmp;
+        string assetName = type switch
+        {
+            TrayIconType.Clipboard => "clipboard.svg",
+            TrayIconType.Refresh => "refresh-cw.svg",
+            TrayIconType.Settings => "settings.svg",
+            TrayIconType.Restart => "rotate-cw.svg",
+            TrayIconType.Exit => "x.svg",
+            _ => throw new ArgumentOutOfRangeException(nameof(type))
+        };
+
+        string resourceName = $"NexClip.Tray.Assets.lucide.{assetName}";
+        using var stream = typeof(TrayManager).Assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException($"Missing embedded Lucide asset: {assetName}");
+        using var reader = new StreamReader(stream);
+        var document = SvgDocument.FromSvg<SvgDocument>(reader.ReadToEnd());
+        document.Color = new SvgColourServer(color);
+        return document.Draw(size, size);
     }
 
     public void SetState(TrayState state)
@@ -509,6 +432,128 @@ public sealed class TrayManager : IDisposable
     }
 }
 
+/// <summary>去除系统默认方角背景与残留方角阴影的 Fluent 现代上下文菜单容器。</summary>
+internal sealed class FluentContextMenuStrip : ContextMenuStrip
+{
+    private const int CS_DROPSHADOW = 0x00020000;
+    private bool _stretchingItems;
+
+    protected override Padding DefaultPadding => FluentMenuLayout.OuterPadding;
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            var cp = base.CreateParams;
+            // 剥离系统原生方角阴影 class style，杜绝底层方角黑影/灰角
+            cp.ClassStyle &= ~CS_DROPSHADOW;
+            return cp;
+        }
+    }
+
+    protected override void OnLayout(LayoutEventArgs e)
+    {
+        base.OnLayout(e);
+        StretchItemsToClientWidth();
+    }
+
+    protected override void OnOpened(EventArgs e)
+    {
+        base.OnOpened(e);
+        StretchItemsToClientWidth();
+        Invalidate(true);
+    }
+
+    private void StretchItemsToClientWidth()
+    {
+        if (_stretchingItems || ClientSize.Width <= 0)
+        {
+            return;
+        }
+
+        _stretchingItems = true;
+        try
+        {
+            foreach (ToolStripItem item in Items)
+            {
+                int width = Math.Max(1, ClientSize.Width - item.Bounds.Left - item.Margin.Right);
+                item.AutoSize = false;
+                item.Width = width;
+            }
+        }
+        finally
+        {
+            _stretchingItems = false;
+        }
+    }
+}
+
+internal static class FluentMenuLayout
+{
+    internal const int ItemHeight = 34;
+    internal const int MinimumItemWidth = 220;
+    internal const int IconSize = 16;
+    internal const int TextLeft = 40;
+    internal const int ContentRight = 16;
+    internal const int ShortcutGap = 16;
+
+    internal static Padding OuterPadding => new(4, 6, 4, 6);
+
+    internal static Rectangle GetItemBackgroundBounds(Size itemSize) =>
+        Rectangle.FromLTRB(4, 2, Math.Max(4, itemSize.Width - 4), Math.Max(2, itemSize.Height - 2));
+
+    internal static Rectangle GetIconBounds(Size itemSize) =>
+        new(12, Math.Max(0, (itemSize.Height - IconSize) / 2), IconSize, IconSize);
+
+    internal static Rectangle GetShortcutBounds(Size itemSize, int shortcutWidth)
+    {
+        int right = Math.Max(0, itemSize.Width - ContentRight);
+        int left = Math.Max(TextLeft, right - Math.Max(0, shortcutWidth));
+        return Rectangle.FromLTRB(left, 0, right, Math.Max(0, itemSize.Height));
+    }
+
+    internal static Rectangle GetTextBounds(Size itemSize, int shortcutWidth)
+    {
+        int right = shortcutWidth > 0
+            ? GetShortcutBounds(itemSize, shortcutWidth).Left - ShortcutGap
+            : itemSize.Width - ContentRight;
+        return Rectangle.FromLTRB(TextLeft, 0, Math.Max(TextLeft, right), Math.Max(0, itemSize.Height));
+    }
+}
+
+/// <summary>支持精确测量宽度、消除截断并承载 Windows 11 Fluent 规范的菜单项控件。</summary>
+internal sealed class FluentMenuItem : ToolStripMenuItem
+{
+    public bool IsDanger { get; }
+
+    public FluentMenuItem(string text, Image? image, EventHandler? onClick, bool isDanger = false)
+        : base(text, image, onClick)
+    {
+        IsDanger = isDanger;
+        AutoSize = true;
+    }
+
+    public override Size GetPreferredSize(Size constrainingSize)
+    {
+        var font = Font ?? Control.DefaultFont;
+        const TextFormatFlags measureFlags = TextFormatFlags.SingleLine |
+                                             TextFormatFlags.NoPrefix |
+                                             TextFormatFlags.NoPadding;
+        var textSize = TextRenderer.MeasureText(Text, font, Size.Empty, measureFlags);
+        var shortcutSize = string.IsNullOrWhiteSpace(ShortcutKeyDisplayString)
+            ? Size.Empty
+            : TextRenderer.MeasureText(ShortcutKeyDisplayString, font, Size.Empty, measureFlags);
+
+        int width = FluentMenuLayout.TextLeft + textSize.Width + FluentMenuLayout.ContentRight;
+        if (!shortcutSize.IsEmpty)
+        {
+            width += FluentMenuLayout.ShortcutGap + shortcutSize.Width;
+        }
+
+        return new Size(Math.Max(width, FluentMenuLayout.MinimumItemWidth), FluentMenuLayout.ItemHeight);
+    }
+}
+
 /// <summary>Fluent 风格现代化 ContextMenuStrip 渲染器(全系统协同排版，支持深浅色与圆角高亮)。</summary>
 internal sealed class FluentToolStripRenderer : ToolStripProfessionalRenderer
 {
@@ -522,51 +567,129 @@ internal sealed class FluentToolStripRenderer : ToolStripProfessionalRenderer
     protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
     {
         if (!e.Item.Selected) return;
+        var bounds = FluentMenuLayout.GetItemBackgroundBounds(e.Item.Size);
+        if (bounds.Width <= 0 || bounds.Height <= 0) return;
+
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        var bounds = new Rectangle(3, 1, e.Item.Width - 6, e.Item.Height - 2);
-        using var path = CreateRoundedRectangle(bounds, 4);
-        using var brush = new SolidBrush(_isDark ? Color.FromArgb(50, 50, 50) : Color.FromArgb(235, 235, 235));
+        using var path = CreateRoundedRectangle(bounds, 5);
+
+        var isDanger = e.Item is FluentMenuItem { IsDanger: true } || e.Item.Text == "退出";
+        Color backColor;
+        if (isDanger)
+        {
+            backColor = _isDark ? Color.FromArgb(58, 28, 28) : Color.FromArgb(254, 242, 242);
+        }
+        else
+        {
+            backColor = _isDark ? Color.FromArgb(48, 48, 54) : Color.FromArgb(238, 240, 243);
+        }
+
+        using var brush = new SolidBrush(backColor);
         g.FillPath(brush, path);
+    }
+
+    protected override void OnRenderItemImage(ToolStripItemImageRenderEventArgs e)
+    {
+        if (e.Image is null || e.Item.Width <= 0 || e.Item.Height <= 0) return;
+        var g = e.Graphics;
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+        g.DrawImage(e.Image, FluentMenuLayout.GetIconBounds(e.Item.Size));
     }
 
     protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
     {
-        var g = e.Graphics;
-        g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
-        // 原生标准渲染，保证与系统测量完美协同，不截断不重叠
-        base.OnRenderItemText(e);
+        if (e.Item is not ToolStripMenuItem mi)
+        {
+            base.OnRenderItemText(e);
+            return;
+        }
+
+        var font = mi.Font ?? e.TextFont ?? SystemFonts.MessageBoxFont ?? Control.DefaultFont;
+
+        var isDanger = mi is FluentMenuItem { IsDanger: true } || mi.Text == "退出";
+        var textColor = isDanger
+            ? (_isDark ? Color.FromArgb(248, 113, 113) : Color.FromArgb(220, 38, 38))
+            : (_isDark ? Color.FromArgb(244, 244, 245) : Color.FromArgb(24, 24, 27));
+        var shortcutColor = _isDark ? Color.FromArgb(161, 161, 170) : Color.FromArgb(113, 113, 122);
+
+        var shortcutText = mi.ShortcutKeyDisplayString;
+        int shortcutWidth = 0;
+        if (!string.IsNullOrWhiteSpace(shortcutText))
+        {
+            shortcutWidth = TextRenderer.MeasureText(
+                shortcutText,
+                font,
+                Size.Empty,
+                TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding).Width;
+        }
+
+        var textRect = FluentMenuLayout.GetTextBounds(mi.Size, shortcutWidth);
+        if (textRect.Width > 0 && textRect.Height > 0 && !string.IsNullOrEmpty(mi.Text))
+        {
+            const TextFormatFlags textFlags = TextFormatFlags.Left |
+                                             TextFormatFlags.VerticalCenter |
+                                             TextFormatFlags.EndEllipsis |
+                                             TextFormatFlags.SingleLine |
+                                             TextFormatFlags.NoPrefix |
+                                             TextFormatFlags.NoPadding;
+            TextRenderer.DrawText(e.Graphics, mi.Text, font, textRect, textColor, textFlags);
+        }
+
+        if (!string.IsNullOrWhiteSpace(shortcutText) && mi.Width > 0 && mi.Height > 0)
+        {
+            var shortcutRect = FluentMenuLayout.GetShortcutBounds(mi.Size, shortcutWidth);
+            const TextFormatFlags shortcutFlags = TextFormatFlags.Right |
+                                                 TextFormatFlags.VerticalCenter |
+                                                 TextFormatFlags.SingleLine |
+                                                 TextFormatFlags.NoPrefix |
+                                                 TextFormatFlags.NoPadding;
+            TextRenderer.DrawText(e.Graphics, shortcutText, font, shortcutRect, shortcutColor, shortcutFlags);
+        }
     }
 
     protected override void OnRenderImageMargin(ToolStripRenderEventArgs e)
     {
         // 消除原生左侧凸起槽和阴影竖线，保持与菜单背景一致
         var g = e.Graphics;
-        var bg = _isDark ? Color.FromArgb(32, 32, 32) : Color.FromArgb(255, 255, 255);
+        var bg = _isDark ? Color.FromArgb(32, 32, 35) : Color.FromArgb(252, 252, 253);
         using var brush = new SolidBrush(bg);
         g.FillRectangle(brush, e.AffectedBounds);
     }
 
     protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
     {
+        if (e.ToolStrip.Width <= 1 || e.ToolStrip.Height <= 1) return;
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        using var pen = new Pen(_isDark ? Color.FromArgb(55, 55, 55) : Color.FromArgb(220, 220, 220));
+        using var pen = new Pen(_isDark ? Color.FromArgb(63, 63, 70) : Color.FromArgb(228, 228, 231));
         g.DrawRectangle(pen, 0, 0, e.ToolStrip.Width - 1, e.ToolStrip.Height - 1);
     }
 
     protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
     {
+        if (e.Item.Width <= 24 || e.Item.Height <= 0) return;
         var g = e.Graphics;
         var y = e.Item.Height / 2;
-        using var pen = new Pen(_isDark ? Color.FromArgb(48, 48, 48) : Color.FromArgb(230, 230, 230));
+        using var pen = new Pen(_isDark ? Color.FromArgb(46, 46, 51) : Color.FromArgb(232, 234, 237));
         g.DrawLine(pen, 8, y, e.Item.Width - 8, y);
     }
 
     private static GraphicsPath CreateRoundedRectangle(Rectangle rect, int radius)
     {
         var path = new GraphicsPath();
-        int d = radius * 2;
+        if (rect.Width <= 0 || rect.Height <= 0) return path;
+
+        int d = Math.Min(radius * 2, Math.Min(rect.Width, rect.Height));
+        if (d <= 0)
+        {
+            path.AddRectangle(rect);
+            return path;
+        }
+
         path.AddArc(rect.X, rect.Y, d, d, 180, 90);
         path.AddArc(rect.Right - d, rect.Y, d, d, 270, 90);
         path.AddArc(rect.Right - d, rect.Bottom - d, d, d, 0, 90);
@@ -586,19 +709,17 @@ internal sealed class FluentThemeColorTable : ProfessionalColorTable
         _isDark = isDark;
     }
 
-    public override Color ToolStripDropDownBackground => _isDark ? Color.FromArgb(32, 32, 32) : Color.FromArgb(255, 255, 255);
-    public override Color MenuBorder => _isDark ? Color.FromArgb(55, 55, 55) : Color.FromArgb(220, 220, 220);
+    public override Color ToolStripDropDownBackground => _isDark ? Color.FromArgb(32, 32, 35) : Color.FromArgb(252, 252, 253);
+    public override Color MenuBorder => _isDark ? Color.FromArgb(63, 63, 70) : Color.FromArgb(228, 228, 231);
     public override Color MenuItemBorder => Color.Transparent;
-    public override Color MenuItemSelected => _isDark ? Color.FromArgb(50, 50, 50) : Color.FromArgb(235, 235, 235);
-    public override Color MenuItemSelectedGradientBegin => _isDark ? Color.FromArgb(50, 50, 50) : Color.FromArgb(235, 235, 235);
-    public override Color MenuItemSelectedGradientEnd => _isDark ? Color.FromArgb(50, 50, 50) : Color.FromArgb(235, 235, 235);
-    public override Color MenuItemPressedGradientBegin => _isDark ? Color.FromArgb(60, 60, 60) : Color.FromArgb(220, 220, 220);
-    public override Color MenuItemPressedGradientEnd => _isDark ? Color.FromArgb(60, 60, 60) : Color.FromArgb(220, 220, 220);
-    public override Color ImageMarginGradientBegin => _isDark ? Color.FromArgb(32, 32, 32) : Color.FromArgb(255, 255, 255);
-    public override Color ImageMarginGradientMiddle => _isDark ? Color.FromArgb(32, 32, 32) : Color.FromArgb(255, 255, 255);
-    public override Color ImageMarginGradientEnd => _isDark ? Color.FromArgb(32, 32, 32) : Color.FromArgb(255, 255, 255);
-    public override Color SeparatorDark => _isDark ? Color.FromArgb(48, 48, 48) : Color.FromArgb(230, 230, 230);
+    public override Color MenuItemSelected => _isDark ? Color.FromArgb(48, 48, 54) : Color.FromArgb(241, 243, 246);
+    public override Color MenuItemSelectedGradientBegin => _isDark ? Color.FromArgb(48, 48, 54) : Color.FromArgb(241, 243, 246);
+    public override Color MenuItemSelectedGradientEnd => _isDark ? Color.FromArgb(48, 48, 54) : Color.FromArgb(241, 243, 246);
+    public override Color MenuItemPressedGradientBegin => _isDark ? Color.FromArgb(60, 60, 68) : Color.FromArgb(230, 232, 236);
+    public override Color MenuItemPressedGradientEnd => _isDark ? Color.FromArgb(60, 60, 68) : Color.FromArgb(230, 232, 236);
+    public override Color ImageMarginGradientBegin => _isDark ? Color.FromArgb(32, 32, 35) : Color.FromArgb(252, 252, 253);
+    public override Color ImageMarginGradientMiddle => _isDark ? Color.FromArgb(32, 32, 35) : Color.FromArgb(252, 252, 253);
+    public override Color ImageMarginGradientEnd => _isDark ? Color.FromArgb(32, 32, 35) : Color.FromArgb(252, 252, 253);
+    public override Color SeparatorDark => _isDark ? Color.FromArgb(46, 46, 51) : Color.FromArgb(228, 228, 231);
     public override Color SeparatorLight => Color.Transparent;
 }
-
-

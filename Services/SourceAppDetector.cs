@@ -61,7 +61,8 @@ public static class SourceAppDetector
     {
         try
         {
-            var currentPid = (uint)Process.GetCurrentProcess().Id;
+            // 使用 Environment.ProcessId 取本进程 PID，避免每次调用都分配带终结器的 Process 对象
+            var currentPid = (uint)Environment.ProcessId;
             IntPtr hwnd = GetClipboardOwner();
             if (hwnd != IntPtr.Zero && NativeMethods.IsWindow(hwnd))
             {
@@ -89,7 +90,8 @@ public static class SourceAppDetector
     {
         try
         {
-            var currentPid = (uint)Process.GetCurrentProcess().Id;
+            // 使用 Environment.ProcessId 取本进程 PID，避免每次调用都分配带终结器的 Process 对象
+            var currentPid = (uint)Environment.ProcessId;
 
             // 1. 优先级 1: 剪贴板当前所有者窗口
             IntPtr hwnd = GetClipboardOwner();

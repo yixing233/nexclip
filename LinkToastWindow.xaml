@@ -93,7 +93,7 @@
                     </StackPanel>
                 </Button>
 
-                <!-- 主要操作按钮 (Enter 默认执行，亮蓝底纯白字高对比度) -->
+                <!-- 主要操作按钮 (亮蓝底纯白字高对比度) -->
                 <Button x:Name="PrimaryActionButton" Click="PrimaryAction_Click" Style="{StaticResource AccentButtonStyle}" CornerRadius="6" Padding="14,6" MinHeight="32" Background="#2563EB" BorderThickness="0">
                     <Button.Resources>
                         <SolidColorBrush x:Key="AccentButtonBackground" Color="#2563EB" />
@@ -107,9 +107,9 @@
                     </StackPanel>
                 </Button>
 
-                <!-- 忽略关闭按钮 (Esc) -->
+                <!-- 忽略关闭按钮 -->
                 <Button Click="Close_Click" CornerRadius="6" Padding="10,6" Background="Transparent" BorderThickness="0" MinHeight="32">
-                    <TextBlock Text="忽略 (Esc)" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    <TextBlock Text="忽略" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                 </Button>
             </StackPanel>
         </StackPanel>

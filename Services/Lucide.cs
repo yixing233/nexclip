@@ -108,9 +108,12 @@ public static class Lucide
     public static ImageSource StarActive => Get("star-filled", "amber");
     public static ImageSource Trash => Get("trash-2", "secondary");
     public static ImageSource FileText => Get("file-text", "secondary");
+    public static ImageSource RichText => Get("type", "secondary");
     public static ImageSource Image => Get("image", "secondary");
     public static ImageSource Settings => Get("settings", "primary");
     public static ImageSource Search => Get("search", "secondary");
+    public static ImageSource ListFilter => Get("list-filter", "secondary");
+    public static ImageSource Plus => Get("plus", "secondary");
     public static ImageSource RefreshCw => Get("refresh-cw", "primary");
     public static ImageSource RotateCw => Get("rotate-cw", "secondary");
     public static ImageSource Pin => Get("pin", "primary");

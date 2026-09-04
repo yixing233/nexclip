@@ -20,7 +20,7 @@ public sealed class SmartAction
     public string? Subtitle { get; set; }
     public ImageSource? Icon { get; set; }
 
-    // 主操作 (Enter / Space 默认执行)
+    // 主操作 (点击按钮或全局直达热键执行)
     public string PrimaryButtonText { get; set; } = "";
     public ImageSource? PrimaryButtonIcon { get; set; }
     public Action PrimaryAction { get; set; } = () => { };
