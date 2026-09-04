@@ -3,7 +3,8 @@ namespace NexClip.Desktop.Services;
 /// <summary>自动剪贴板采集的来源应用过滤规则。</summary>
 public static class ClipboardAppFilter
 {
-    public sealed record RunningProcessOption(string ProcessName, string DisplayName, string? ExecutablePath)
+    /// <summary>正在运行的应用选项;IconPath 是 AppIconCache 落盘的 PNG 路径,取不到为 null。</summary>
+    public sealed record RunningProcessOption(string ProcessName, string DisplayName, string? ExecutablePath, string? IconPath = null)
     {
         public string Label => string.IsNullOrWhiteSpace(ExecutablePath)
             ? $"{DisplayName} ({ProcessName})"
@@ -66,7 +67,10 @@ public static class ClipboardAppFilter
                     catch { }
                 }
                 var key = string.IsNullOrWhiteSpace(path) ? processName : path;
-                result.TryAdd(key, new RunningProcessOption(processName, displayName, path));
+                if (result.ContainsKey(key)) continue;
+                // 图标提取有磁盘 IO/GDI 开销,所以只对最终留下的那一份做;AppIconCache 内部有内存+磁盘双缓存
+                var iconPath = AppIconCache.GetOrCreateIconPath(path, processName);
+                result[key] = new RunningProcessOption(processName, displayName, path, iconPath);
             }
             catch { }
             finally { process.Dispose(); }

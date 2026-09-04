@@ -1039,13 +1039,24 @@ public partial class SettingsViewModel : ObservableObject
         foreach (var process in processes) RunningProcesses.Add(process);
     }
 
-    public void AddSelectedFilterProcess()
+    public void AddSelectedFilterProcess() => AddCustomFilterProcess(SelectedRunningProcess?.ProcessName);
+
+    /// <summary>把进程名加入自定义过滤列表;搜索框里直接键入(未在运行的)进程名也走这里。</summary>
+    public void AddCustomFilterProcess(string? processName)
     {
-        var process = SelectedRunningProcess;
-        if (process is null) return;
-        if (!CustomFilteredProcesses.Contains(process.ProcessName, StringComparer.OrdinalIgnoreCase))
-            CustomFilteredProcesses.Add(process.ProcessName);
+        var normalized = NormalizeProcessName(processName);
+        if (normalized is null) return;
+        if (!CustomFilteredProcesses.Contains(normalized, StringComparer.OrdinalIgnoreCase))
+            CustomFilteredProcesses.Add(normalized);
         SaveCustomFilteredProcesses();
+    }
+
+    /// <summary>去掉首尾空白/引号与 .exe 后缀,与 GetRunningProcesses 产出的进程名格式保持一致。</summary>
+    private static string? NormalizeProcessName(string? value)
+    {
+        var trimmed = value?.Trim().Trim('"');
+        if (string.IsNullOrWhiteSpace(trimmed)) return null;
+        return trimmed.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? trimmed[..^4] : trimmed;
     }
 
     public void RemoveCustomFilterProcess(string? processName)

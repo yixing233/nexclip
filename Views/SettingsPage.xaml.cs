@@ -30,6 +30,41 @@ public sealed partial class SettingsPage : Page
     private readonly SettingsViewModel _vm;
     private ContentDialog? _appFilterDialog;
 
+    /// <summary>应用过滤搜索框建议列表的最大高度(超出后在弹出层内滚动,不截断条目)。</summary>
+    private const double ProcessSuggestionListHeight = 360;
+
+    /// <summary>
+    /// 应用过滤搜索框的建议项:进程 + 按需解码的图标。
+    /// BitmapImage 是 DependencyObject,只能在 UI 线程创建,所以不能塞进后台线程产出的
+    /// RunningProcessOption 里,由这层在 UI 线程按 IconPath 现解码。
+    /// 模板见 SettingsPage.xaml 的 AppFilterProcessTemplate。
+    /// </summary>
+    public sealed class ProcessSuggestion(ClipboardAppFilter.RunningProcessOption option, Func<string?, BitmapImage?> iconResolver)
+    {
+        private BitmapImage? _icon;
+        private bool _iconResolved;
+
+        public ClipboardAppFilter.RunningProcessOption Option { get; } = option;
+
+        /// <summary>
+        /// 图标延迟解码:候选项可能有两三百个,而绑定只在虚拟化列表真正生成这一行时才读这个属性,
+        /// 所以只有滚到眼前的行会去读磁盘。
+        /// </summary>
+        public BitmapImage? Icon
+        {
+            get
+            {
+                if (_iconResolved) return _icon;
+                _iconResolved = true;
+                _icon = iconResolver(Option.IconPath);
+                return _icon;
+            }
+        }
+
+        public string Label => Option.Label;
+        public override string ToString() => Label;
+    }
+
     /// <summary>悬浮通知自动关闭计时器(显示后 4 秒消失)。</summary>
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _toastTimer;
 
@@ -337,57 +372,6 @@ public sealed partial class SettingsPage : Page
         if (_appFilterDialog is not null) return;
         try
         {
-            var processPicker = new ComboBox
-            {
-                ItemsSource = _vm.RunningProcesses,
-                DisplayMemberPath = nameof(ClipboardAppFilter.RunningProcessOption.Label),
-                PlaceholderText = "选择当前运行的应用",
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                MinWidth = 360,
-                IsEnabled = false,
-            };
-            var processStatus = new TextBlock
-            {
-                Text = "正在获取当前运行的应用...",
-                FontSize = 12,
-                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
-                Margin = new Thickness(0, 4, 0, 0),
-            };
-            var addButton = new Button
-            {
-                Content = new StackPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    Spacing = 6,
-                    Children = { new Image { Source = Lucide.Plus, Width = 14, Height = 14 }, new TextBlock { Text = "添加" } },
-                },
-                IsEnabled = false,
-            };
-            ToolTipService.SetToolTip(addButton, "添加到自定义过滤进程");
-            addButton.Click += (_, _) =>
-            {
-                _vm.SelectedRunningProcess = processPicker.SelectedItem as ClipboardAppFilter.RunningProcessOption;
-                _vm.AddSelectedFilterProcess();
-            };
-
-            var refreshButton = new Button
-            {
-                Content = new Image { Source = Lucide.RefreshCw, Width = 14, Height = 14 },
-            };
-            ToolTipService.SetToolTip(refreshButton, "刷新当前运行进程");
-            refreshButton.Click += async (_, _) => await _vm.RefreshRunningProcessesAsync();
-
-            var pickerGrid = new Grid { ColumnSpacing = 8 };
-            pickerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            pickerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            pickerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            Grid.SetColumn(processPicker, 0);
-            Grid.SetColumn(addButton, 1);
-            Grid.SetColumn(refreshButton, 2);
-            pickerGrid.Children.Add(processPicker);
-            pickerGrid.Children.Add(addButton);
-            pickerGrid.Children.Add(refreshButton);
-
             Border CreateTag(string text, bool removable, Action? remove)
             {
                 var content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
@@ -442,7 +426,206 @@ public sealed partial class SettingsPage : Page
                 }
             }
             RenderCustomTags();
-            addButton.Click += (_, _) => RenderCustomTags();
+
+            var processStatus = new TextBlock
+            {
+                Text = "正在获取当前运行的应用...",
+                FontSize = 12,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                Margin = new Thickness(0, 4, 0, 0),
+            };
+            // 搜索框:输入关键字筛选正在运行的应用;也允许直接键入当前没在运行的进程名
+            var processPicker = new AutoSuggestBox
+            {
+                PlaceholderText = "搜索当前运行的应用，或直接输入进程名",
+                TextMemberPath = nameof(ProcessSuggestion.Label),
+                ItemTemplate = (DataTemplate)Resources["AppFilterProcessTemplate"],
+                QueryIcon = new ImageIcon { Source = Lucide.Search, Width = 14, Height = 14 },
+                // 选中建议即添加,所以不把 Label 回填到输入框(回填会让下一次筛选拿整条 Label 当关键字)
+                UpdateTextOnSelect = false,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                MinWidth = 360,
+                // 不限制条目数,只限制弹出层高度:列表内部自己滚动,保证运行中的应用都能翻到
+                MaxSuggestionListHeight = ProcessSuggestionListHeight,
+                IsEnabled = false,
+            };
+            // 建议列表里被选中的项;为空表示"用户手打了一个名字",按输入框文本处理
+            ClipboardAppFilter.RunningProcessOption? chosen = null;
+            // 最近一次添加的回执:一直顶在状态行上,直到用户继续输入或刷新
+            // (焦点回弹等情况会再次触发 UpdateSuggestions,回执不能一冲就没)
+            string? addedNotice = null;
+            // 同一个图标文件只解码一次(每次按键都会重建建议列表)
+            var iconCache = new Dictionary<string, BitmapImage>(StringComparer.OrdinalIgnoreCase);
+
+            BitmapImage? ResolveIcon(string? iconPath)
+            {
+                if (string.IsNullOrEmpty(iconPath)) return null;
+                if (iconCache.TryGetValue(iconPath, out var cached)) return cached;
+                if (!System.IO.File.Exists(iconPath)) return null;
+                try
+                {
+                    // 解码尺寸必须先于 UriSource 设置才生效(同 HistoryItemViewModel.BuildAppIcon)
+                    var bmp = new BitmapImage { DecodePixelWidth = 32, DecodePixelHeight = 32 };
+                    bmp.UriSource = new Uri("file:///" + iconPath.Replace('\\', '/'));
+                    iconCache[iconPath] = bmp;
+                    return bmp;
+                }
+                catch (Exception ex)
+                {
+                    Log.Debug($"加载应用图标失败({iconPath})：{ex.Message}");
+                    return null;
+                }
+            }
+
+            static bool MatchesKeyword(ClipboardAppFilter.RunningProcessOption option, string keyword) =>
+                option.DisplayName.Contains(keyword, StringComparison.OrdinalIgnoreCase)
+                || option.ProcessName.Contains(keyword, StringComparison.OrdinalIgnoreCase)
+                // Label 是"名称 (进程名)",输入框里出现整条 Label 时(粘贴、或框架回填)也要能命中
+                || option.Label.Contains(keyword, StringComparison.OrdinalIgnoreCase)
+                || (option.ExecutablePath?.Contains(keyword, StringComparison.OrdinalIgnoreCase) ?? false);
+
+            void UpdateSuggestions()
+            {
+                var keyword = processPicker.Text?.Trim() ?? string.Empty;
+                // 不做数量截断:全部候选都进列表,靠弹出层滚动 + 列表虚拟化 + 图标懒加载扛住体量
+                var matches = (keyword.Length == 0
+                        ? _vm.RunningProcesses.AsEnumerable()
+                        : _vm.RunningProcesses.Where(p => MatchesKeyword(p, keyword)))
+                    .Select(p => new ProcessSuggestion(p, ResolveIcon))
+                    .ToList();
+                processPicker.ItemsSource = matches;
+                processStatus.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+                processStatus.Text = addedNotice ?? (_vm.RunningProcesses.Count == 0
+                    ? "未检测到可用应用，可直接输入进程名后点击添加"
+                    : keyword.Length == 0
+                        ? $"已加载 {_vm.RunningProcesses.Count} 个正在运行的应用，输入关键字可筛选"
+                        : matches.Count == 0
+                            ? $"没有匹配“{keyword}”的运行中应用，可直接添加该进程名"
+                            : $"匹配到 {matches.Count} 个应用");
+            }
+
+            ClipboardAppFilter.RunningProcessOption? ResolveTypedProcess()
+            {
+                var text = processPicker.Text?.Trim();
+                if (string.IsNullOrEmpty(text)) return null;
+                return _vm.RunningProcesses.FirstOrDefault(p =>
+                    p.Label.Equals(text, StringComparison.OrdinalIgnoreCase)
+                    || p.ProcessName.Equals(text, StringComparison.OrdinalIgnoreCase)
+                    || p.DisplayName.Equals(text, StringComparison.OrdinalIgnoreCase));
+            }
+
+            void AddCurrentSelection()
+            {
+                // 选中项优先;没选中就把输入框文本当进程名(允许添加当前没在运行的应用)
+                var option = chosen ?? ResolveTypedProcess();
+                _vm.SelectedRunningProcess = option;
+                var display = option?.Label ?? processPicker.Text?.Trim();
+                var name = option?.ProcessName ?? processPicker.Text;
+                var before = _vm.CustomFilteredProcesses.Count;
+                _vm.AddCustomFilterProcess(name);
+                RenderCustomTags();
+                chosen = null;
+                processPicker.Text = string.Empty;
+                // 明确给回执:否则从列表里选完只看到"没有匹配…",看着像没添加成功
+                addedNotice = string.IsNullOrWhiteSpace(display)
+                    ? null
+                    : _vm.CustomFilteredProcesses.Count > before
+                        ? $"已添加过滤进程：{display}"
+                        : $"“{display}”已在自定义过滤进程中";
+                UpdateSuggestions();
+            }
+
+            processPicker.TextChanged += (_, args) =>
+            {
+                // 只响应用户输入;清空输入框等程序化改动不重算,避免递归
+                if (args.Reason != AutoSuggestionBoxTextChangeReason.UserInput) return;
+                chosen = null;
+                addedNotice = null;
+                UpdateSuggestions();
+            };
+            processPicker.SuggestionChosen += (_, args) => chosen = (args.SelectedItem as ProcessSuggestion)?.Option;
+            processPicker.QuerySubmitted += (_, args) =>
+            {
+                if (args.ChosenSuggestion is ProcessSuggestion suggestion) chosen = suggestion.Option;
+                AddCurrentSelection();
+            };
+
+            var pickerFocused = false;
+            // 正在执行"点输入框外侧 → 失焦"期间为 true:此时到来的程序化回焦要拦掉
+            var defocusing = false;
+            // 本轮失焦是否已经补救过一次(防止和框架来回抢焦点)
+            var defocusRetried = false;
+            // 失焦后焦点的落脚点,取对话框的"完成"按钮;模板部件要等对话框打开后才拿得到,所以延迟取
+            Button? focusFallback = null;
+
+            // 收起建议列表时,AutoSuggestBox 会把焦点还给它内部的 TextBox(Programmatic),
+            // 这就是"失焦后立马又自动聚焦"的来源。在焦点落地之前先把它改道到"完成"按钮。
+            processPicker.GettingFocus += (_, args) =>
+            {
+                if (!defocusing) return;
+                // 用户自己点回来或用 Tab 走回来(Pointer / Keyboard)一律放行
+                if (args.FocusState != FocusState.Programmatic)
+                {
+                    defocusing = false;
+                    return;
+                }
+                if (focusFallback is not null && args.TrySetNewFocusedElement(focusFallback)) return;
+                args.TryCancel();
+            };
+            // 聚焦就直接展开当前运行的应用列表,不用先打字
+            processPicker.GotFocus += (_, _) =>
+            {
+                if (defocusing)
+                {
+                    // 回焦没拦住:不要把列表再弹开,并在下一帧补一次焦点转移(只补一次)
+                    if (!defocusRetried && focusFallback is not null)
+                    {
+                        defocusRetried = true;
+                        DispatcherQueue.TryEnqueue(() => { if (defocusing) focusFallback?.Focus(FocusState.Programmatic); });
+                    }
+                    return;
+                }
+                pickerFocused = true;
+                UpdateSuggestions();
+                processPicker.IsSuggestionListOpen = true;
+            };
+            processPicker.LostFocus += (_, _) => pickerFocused = false;
+
+            var addButton = new Button
+            {
+                Content = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 6,
+                    Children = { new Image { Source = Lucide.Plus, Width = 14, Height = 14 }, new TextBlock { Text = "添加" } },
+                },
+                IsEnabled = false,
+            };
+            ToolTipService.SetToolTip(addButton, "添加到自定义过滤进程");
+            addButton.Click += (_, _) => AddCurrentSelection();
+
+            var refreshButton = new Button
+            {
+                Content = new Image { Source = Lucide.RefreshCw, Width = 14, Height = 14 },
+            };
+            ToolTipService.SetToolTip(refreshButton, "刷新当前运行进程");
+            refreshButton.Click += async (_, _) =>
+            {
+                addedNotice = null;
+                await _vm.RefreshRunningProcessesAsync();
+                UpdateSuggestions();
+            };
+
+            var pickerGrid = new Grid { ColumnSpacing = 8 };
+            pickerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            pickerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            pickerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            Grid.SetColumn(processPicker, 0);
+            Grid.SetColumn(addButton, 1);
+            Grid.SetColumn(refreshButton, 2);
+            pickerGrid.Children.Add(processPicker);
+            pickerGrid.Children.Add(addButton);
+            pickerGrid.Children.Add(refreshButton);
 
             var panel = new StackPanel { Spacing = 12, MinWidth = 500 };
             panel.Children.Add(new TextBlock { Text = "内置远程控制软件", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
@@ -462,15 +645,37 @@ public sealed partial class SettingsPage : Page
                 XamlRoot = XamlRoot,
             };
             _appFilterDialog = dialog;
+            EnableLightDismiss(dialog);
+            // 点输入框外侧就失焦:先把焦点挪到"完成"按钮,再收起建议列表
+            // (Programmatic 焦点不画焦点框,所以看上去就是单纯的失焦)
+            dialog.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, e) =>
+            {
+                if (e.OriginalSource is not DependencyObject source) return;
+                for (DependencyObject? node = source; node is not null; node = VisualTreeHelper.GetParent(node))
+                {
+                    // 点在输入框自身:解除回焦拦截。PointerPressed 早于焦点落地,所以这里放开正好赶得上
+                    if (ReferenceEquals(node, processPicker))
+                    {
+                        defocusing = false;
+                        return;
+                    }
+                }
+                // 走到这里 = 点在输入框之外(建议列表在独立弹出层,事件根本不会冒泡到对话框)
+                if (!pickerFocused) return;
+                defocusing = true;
+                defocusRetried = false;
+                focusFallback ??= FindTemplateChild<Button>(dialog, "CloseButton");
+                // 顺序很重要:先转移焦点,再收列表,这样收列表引发的回焦已经落不回输入框
+                focusFallback?.Focus(FocusState.Programmatic);
+                processPicker.IsSuggestionListOpen = false;
+            }), true);
             var dialogTask = dialog.ShowAsync().AsTask();
             try
             {
                 await _vm.RefreshRunningProcessesAsync();
                 processPicker.IsEnabled = true;
                 addButton.IsEnabled = true;
-                processStatus.Text = _vm.RunningProcesses.Count == 0
-                    ? "未检测到可用应用"
-                    : $"已加载 {_vm.RunningProcesses.Count} 个正在运行的应用";
+                UpdateSuggestions();
             }
             catch (Exception ex)
             {
@@ -489,6 +694,60 @@ public sealed partial class SettingsPage : Page
         {
             _appFilterDialog = null;
         }
+    }
+
+    /// <summary>
+    /// 让 ContentDialog 支持点击遮罩层关闭。ContentDialog 原生没有 light dismiss，
+    /// 这里在打开后给对话框挂 PointerPressed(handledEventsToo=true)：
+    /// 命中点落在对话框卡片(模板部件 BackgroundElement)之外时调用 Hide()。
+    /// </summary>
+    private static void EnableLightDismiss(ContentDialog dialog)
+    {
+        PointerEventHandler? pressed = null;
+
+        void OnOpened(ContentDialog sender, ContentDialogOpenedEventArgs args)
+        {
+            var card = FindTemplateChild<FrameworkElement>(dialog, "BackgroundElement");
+            if (card is null)
+            {
+                // 拿不到模板部件就不启用，对话框仍可用底部按钮关闭
+                Log.Debug("对话框未找到 BackgroundElement，跳过点击外部关闭");
+                return;
+            }
+            pressed = (_, e) =>
+            {
+                if (e.OriginalSource is not DependencyObject source) return;
+                for (DependencyObject? node = source; node is not null; node = VisualTreeHelper.GetParent(node))
+                {
+                    if (ReferenceEquals(node, card)) return;                  // 点在卡片内部，照常交互
+                    if (ReferenceEquals(node, dialog)) { dialog.Hide(); return; } // 走到对话框根都没碰到卡片 → 点在遮罩上
+                }
+                // 事件来自独立弹出层(如搜索建议列表、下拉菜单)，不当作点击外部
+            };
+            dialog.AddHandler(UIElement.PointerPressedEvent, pressed, true);
+        }
+
+        dialog.Opened += OnOpened;
+        dialog.Closed += (_, _) =>
+        {
+            dialog.Opened -= OnOpened;
+            if (pressed is not null) dialog.RemoveHandler(UIElement.PointerPressedEvent, pressed);
+            pressed = null;
+        };
+    }
+
+    /// <summary>按名字在可视树里找元素(ContentDialog 的模板部件不对外暴露，只能自己找)。</summary>
+    private static T? FindTemplateChild<T>(DependencyObject root, string name) where T : FrameworkElement
+    {
+        var count = VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T typed && typed.Name == name) return typed;
+            var found = FindTemplateChild<T>(child, name);
+            if (found is not null) return found;
+        }
+        return null;
     }
 
     /// <summary>按子项实际宽度换行，避免 WrapGrid 的统一单元格截断应用名称。</summary>

@@ -13,6 +13,17 @@
         <converters:BooleanToVisibilityConverter x:Key="BoolToVis" />
         <converters:InverseBooleanToVisibilityConverter x:Key="InverseBoolToVis" />
         <converters:PercentConverter x:Key="Percent" />
+        <!-- 管理应用过滤:搜索框建议项(16px 应用图标 + 名称);取不到图标时留空位保持对齐 -->
+        <DataTemplate x:Key="AppFilterProcessTemplate">
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="16" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Image Grid.Column="0" Width="16" Height="16" Stretch="Uniform" VerticalAlignment="Center" Source="{Binding Icon}" />
+                <TextBlock Grid.Column="1" Text="{Binding Label}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+            </Grid>
+        </DataTemplate>
     </Page.Resources>
     <NavigationView
         x:Name="NavView"
