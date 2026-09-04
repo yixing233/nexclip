@@ -438,7 +438,8 @@ export class SyncService {
         let user = this.getUser(trustedUserId);
         if (!user) {
           user = { Id: trustedUserId, CreatedAt: now };
-          this.db.prepare('INSERT INTO "Users" ("Id", "CreatedAt") VALUES (?, ?)').run(trustedUserId, now);
+          // Name 是 NOT NULL UNIQUE,必须一起写入(与 createUser 的约定一致:Name 默认取 Id),否则这里必然抛约束错误
+          this.db.prepare('INSERT INTO "Users" ("Id","Name","CreatedAt") VALUES (?,?,?)').run(trustedUserId, trustedUserId, now);
         }
         let code: string;
         do { code = randomNumericCode(6); } while (this.db.prepare('SELECT 1 FROM "PairingRequests" WHERE "Code" = ?').get(code));
