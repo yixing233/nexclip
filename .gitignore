@@ -7,6 +7,9 @@ BundleArtifacts/
 Generated Files/
 GeneratedFiles/
 
+# 安装器打包/验证产物(NexClip_Setup.exe 与 pdb,数十 MB)
+.artifacts/
+
 # IDE 与用户配置
 .vs/
 *.user
@@ -18,10 +21,6 @@ GeneratedFiles/
 # 日志
 *.log
 *.tlog
-
-# Inno Setup 编译器输出
-installer/Output/
-Output/
 
 # 操作系统临时文件
 Thumbs.db

@@ -161,6 +161,9 @@ public static class GdiPlus
     public static extern int GdipDrawPath(IntPtr graphics, IntPtr pen, IntPtr path);
 
     [DllImport("gdiplus.dll")]
+    public static extern int GdipDrawLine(IntPtr graphics, IntPtr pen, float x1, float y1, float x2, float y2);
+
+    [DllImport("gdiplus.dll")]
     public static extern int GdipFillPath(IntPtr graphics, IntPtr brush, IntPtr path);
 
     [DllImport("gdiplus.dll")]

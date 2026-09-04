@@ -21,7 +21,8 @@ public static class LucideGdiPlus
         Shield,
         HardDrive,
         RefreshCw,
-        AlertCircle
+        AlertCircle,
+        CheckCircle
     }
 
     public static void DrawIcon(
@@ -211,11 +212,55 @@ public static class LucideGdiPlus
                 GdiPlus.GdipStartPathFigure(path);
                 GdiPlus.GdipAddPathLine(path, x + P(12), y + P(16), x + P(12), y + P(16.5f));
                 break;
+
+            case IconType.CheckCircle:
+                GdiPlus.GdipStartPathFigure(path);
+                GdiPlus.GdipAddPathArc(path, x + P(2), y + P(2), P(20), P(20), 0, 360);
+                GdiPlus.GdipStartPathFigure(path);
+                GdiPlus.GdipAddPathLine(path, x + P(8), y + P(12), x + P(11), y + P(15));
+                GdiPlus.GdipAddPathLine(path, x + P(11), y + P(15), x + P(16), y + P(9));
+                break;
         }
 
         GdiPlus.GdipDrawPath(graphics, pen, path);
         GdiPlus.GdipDeletePath(path);
         GdiPlus.GdipDeletePen(pen);
+    }
+
+    public static void DrawLoaderCircle(
+        IntPtr graphics,
+        float x,
+        float y,
+        float size,
+        uint color,
+        float rotationDegrees,
+        float strokeWidth = 2.0f)
+    {
+        var centerX = x + size / 2.0f;
+        var centerY = y + size / 2.0f;
+        var innerRadius = size * 0.28f;
+        var outerRadius = size * 0.43f;
+
+        for (var index = 0; index < 8; index++)
+        {
+            var angle = (rotationDegrees + index * 45.0f - 90.0f) * MathF.PI / 180.0f;
+            var alpha = (uint)(48 + index * 25);
+            var segmentColor = (Math.Min(223u, alpha) << 24) | (color & 0x00FFFFFF);
+            GdiPlus.GdipCreatePen1(segmentColor, strokeWidth * (size / 24.0f), 0, out var pen);
+            GdiPlus.GdipSetPenLineCap197819(
+                pen,
+                GdiPlus.LineCap.Round,
+                GdiPlus.LineCap.Round,
+                GdiPlus.LineCap.Round);
+            GdiPlus.GdipDrawLine(
+                graphics,
+                pen,
+                centerX + MathF.Cos(angle) * innerRadius,
+                centerY + MathF.Sin(angle) * innerRadius,
+                centerX + MathF.Cos(angle) * outerRadius,
+                centerY + MathF.Sin(angle) * outerRadius);
+            GdiPlus.GdipDeletePen(pen);
+        }
     }
 
     public static void FillRoundedRect(IntPtr graphics, IntPtr brush, float x, float y, float width, float height, float radius)

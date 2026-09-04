@@ -31,6 +31,9 @@ public enum DepState
 
 public class FluentInstallerWindow
 {
+    private const string InstallerVersion = "20260902.02";
+    private const uint AnimationTimerId = 1;
+
     private IntPtr _hwnd;
     private IntPtr _gdiToken;
     private IntPtr _fontTitle;
@@ -53,20 +56,31 @@ public class FluentInstallerWindow
     private bool _createDesktopShortcut = true;
     private bool _autoStartup = false;
     private bool _keepUserData = true;
+    private bool _launchOnFinish = true;
+    private readonly CancellationTokenSource _operationCancellation = new();
+    private bool _operationActive;
 
     private string? _existingVersion = null;
     private bool _isDetecting = true;
 
-    private readonly DepState[] _depStates = new DepState[3];
-    private readonly double[] _depPercent = new double[3] { 0.0, 0.0, 0.0 };
-    private readonly string[] _depProgress = new string[3] { "0%", "0%", "0%" };
-    private readonly string[] _depDetailText = new string[3] { "", "", "" };
-    private readonly GdiPlus.RECTF[] _rectDepBtns = new GdiPlus.RECTF[3];
+    private readonly DepState[] _depStates = new DepState[DependencyService.Dependencies.Count];
+    private readonly double[] _depPercent = new double[DependencyService.Dependencies.Count];
+    private readonly double[] _displayDepPercent = new double[DependencyService.Dependencies.Count];
+    private readonly string[] _depProgress = new string[DependencyService.Dependencies.Count];
+    private readonly string[] _depDetailText = new string[DependencyService.Dependencies.Count];
+    private readonly GdiPlus.RECTF[] _rectDepBtns = new GdiPlus.RECTF[DependencyService.Dependencies.Count];
 
     private double _displayProgress = 0.0;
     private double _targetProgress = 0.0;
     private string _statusText = "正在准备环境...";
     private string _subDetailText = "0%";
+    private float _activityAngle;
+    private long _lastAnimationTick = Environment.TickCount64;
+    private bool _animationTimerRunning;
+    private bool _restartRequired;
+    private bool _detectionPending;
+    private bool _dependenciesIncomplete;
+    private readonly long _requiredInstallSpaceBytes;
 
     private float _mouseX = -1;
     private float _mouseY = -1;
@@ -79,7 +93,7 @@ public class FluentInstallerWindow
     private GdiPlus.RECTF _rectBrowseBtn;
     private GdiPlus.RECTF _rectDesktopCheck;
     private GdiPlus.RECTF _rectStartupCheck;
-    private GdiPlus.RECTF _rectLaunchBtn;
+    private GdiPlus.RECTF _rectLaunchCheck;
     private GdiPlus.RECTF _rectDoneBtn;
     private GdiPlus.RECTF _rectConfirmUninstallBtn;
     private GdiPlus.RECTF _rectCancelUninstallBtn;
@@ -97,14 +111,9 @@ public class FluentInstallerWindow
     {
         _state = isUninstallMode ? PageState.Uninstall : PageState.Welcome;
 
-        if (Directory.Exists(@"D:\"))
-        {
-            _installDir = @"D:\Program Files\NexClip";
-        }
-        else
-        {
-            _installDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "NexClip");
-        }
+        _installDir = InstallerPathHelper.ResolveInstallDirectory(
+            InstallerPathHelper.TryGetRegisteredInstallDirectory(),
+            InstallerPathHelper.GetDefaultInstallDirectory());
 
         var input = new GdiPlus.GdiplusStartupInput { GdiplusVersion = 1 };
         GdiPlus.GdiplusStartup(out _gdiToken, ref input, IntPtr.Zero);
@@ -118,6 +127,9 @@ public class FluentInstallerWindow
         InitAppIcon();
 
         _existingVersion = DetectExistingInstalledVersion();
+        _requiredInstallSpaceBytes = SetupPolicy.CalculateRequiredSpaceBytes(
+            PayloadService.GetExpandedPayloadSizeBytes(),
+            0);
         StartDependencyDetection();
     }
 
@@ -138,7 +150,7 @@ public class FluentInstallerWindow
                 if (File.Exists(exe))
                 {
                     var vi = FileVersionInfo.GetVersionInfo(exe);
-                    return vi.FileVersion ?? "20260828.02";
+                    return vi.FileVersion ?? InstallerVersion;
                 }
             }
         }
@@ -149,24 +161,56 @@ public class FluentInstallerWindow
     private void StartDependencyDetection()
     {
         _isDetecting = true;
-        _depStates[0] = DepState.Checking;
-        _depStates[1] = DepState.Checking;
-        _depStates[2] = DepState.Checking;
+        for (var index = 0; index < _depStates.Length; index++)
+        {
+            _depStates[index] = DepState.Checking;
+            _depDetailText[index] = "检测中...";
+            _depPercent[index] = 0.0;
+            _displayDepPercent[index] = 0.0;
+        }
+        EnsureAnimationTimer();
+        Invalidate();
 
         Task.Run(async () =>
         {
-            await Task.Delay(120);
-            _depStates[0] = DependencyService.IsVCRedistInstalled() ? DepState.Ready : DepState.Missing;
-            Invalidate();
+            try
+            {
+                // 并行检测：Appx 枚举可能回退到 PowerShell，串行等待会明显拖慢欢迎页
+                var detections = DependencyService.Dependencies
+                    .Select((dependency, index) => Task.Run(() =>
+                    {
+                        try
+                        {
+                            var installed = DependencyService.IsInstalled(dependency);
+                            _depStates[index] = installed ? DepState.Ready : DepState.Missing;
+                            _depPercent[index] = installed ? 1.0 : 0.0;
+                            _displayDepPercent[index] = _depPercent[index];
+                            _depDetailText[index] = installed
+                                ? "已就绪"
+                                : $"需下载约 {FormatMegabytes(dependency.ExpectedDownloadBytes)}";
+                        }
+                        catch (Exception exception)
+                        {
+                            DependencyService.WriteLog($"{dependency.DisplayName} 检测失败：{exception}");
+                            _depStates[index] = DepState.Missing;
+                            _depDetailText[index] = "检测异常，将尝试安装";
+                        }
 
-            await Task.Delay(150);
-            _depStates[1] = DependencyService.IsDotNet9Installed() ? DepState.Ready : DepState.Missing;
-            Invalidate();
+                        Invalidate();
+                    }))
+                    .ToArray();
 
-            await Task.Delay(180);
-            _depStates[2] = DependencyService.IsWindowsAppSdkInstalled() ? DepState.Ready : DepState.Missing;
-            _isDetecting = false;
-            Invalidate();
+                await Task.WhenAll(detections);
+            }
+            finally
+            {
+                _isDetecting = false;
+                Invalidate();
+                if (!_depStates.Any(state => state is DepState.Downloading or DepState.Installing))
+                {
+                    StopAnimationTimer();
+                }
+            }
         });
     }
 
@@ -298,6 +342,7 @@ public class FluentInstallerWindow
 
         NativeMethods.ShowWindow(_hwnd, NativeMethods.SW_SHOW);
         NativeMethods.UpdateWindow(_hwnd);
+        EnsureAnimationTimer();
 
         while (NativeMethods.GetMessageW(out var msg, IntPtr.Zero, 0, 0) > 0)
         {
@@ -366,14 +411,39 @@ public class FluentInstallerWindow
                 return IntPtr.Zero;
 
             case NativeMethods.WM_TIMER:
-                if (wParam.ToUInt32() == 1)
+                if (wParam.ToUInt32() == AnimationTimerId)
                 {
                     OnAnimationTick();
                 }
                 return IntPtr.Zero;
 
+            case NativeMethods.WM_CLOSE:
+                if (_operationActive)
+                {
+                    NativeMethods.MessageBoxW(_hwnd, "当前操作正在进行，请等待完成后再关闭安装器。", "NexClip 安装向导", 0x30);
+                    return IntPtr.Zero;
+                }
+
+                // 依赖下载可能长时间运行，关闭窗口时主动取消以避免后台进程残留
+                if (_depStates.Any(state => state is DepState.Downloading or DepState.Installing))
+                {
+                    const uint YesNoWarning = 0x04 | 0x30;
+                    if (NativeMethods.MessageBoxW(
+                            _hwnd,
+                            "运行环境组件正在下载或安装，确定要取消并退出吗？",
+                            "NexClip 安装向导",
+                            YesNoWarning) != 6)
+                    {
+                        return IntPtr.Zero;
+                    }
+
+                    try { _operationCancellation.Cancel(); } catch { }
+                }
+
+                return NativeMethods.DefWindowProcW(hWnd, uMsg, wParam, lParam);
+
             case NativeMethods.WM_DESTROY:
-                NativeMethods.KillTimer(hWnd, (UIntPtr)1);
+                NativeMethods.KillTimer(hWnd, (UIntPtr)AnimationTimerId);
                 NativeMethods.PostQuitMessage(0);
                 return IntPtr.Zero;
         }
@@ -383,19 +453,73 @@ public class FluentInstallerWindow
 
     private void OnAnimationTick()
     {
-        if (_state == PageState.Installing || _state == PageState.Uninstall)
+        var now = Environment.TickCount64;
+        var elapsedSeconds = Math.Clamp((now - _lastAnimationTick) / 1000.0, 0.001, 0.1);
+        _lastAnimationTick = now;
+        var needsRedraw = false;
+
+        if (_isDetecting || _depStates.Any(state => state is DepState.Downloading or DepState.Installing))
         {
-            if (Math.Abs(_displayProgress - _targetProgress) > 0.0005)
+            _activityAngle = (_activityAngle + (float)(elapsedSeconds * 240.0)) % 360.0f;
+            needsRedraw = true;
+        }
+
+        for (var index = 0; index < _displayDepPercent.Length; index++)
+        {
+            var next = SetupPolicy.AnimateTowards(
+                _displayDepPercent[index],
+                _depPercent[index],
+                elapsedSeconds,
+                response: 18.0);
+            if (Math.Abs(next - _displayDepPercent[index]) > 0.00001)
             {
-                double diff = _targetProgress - _displayProgress;
-                // 缓动平滑插值: 15% 步进比率，保底 0.003
-                double step = Math.Max(0.003, diff * 0.15);
-                _displayProgress += step;
-                if (_displayProgress > _targetProgress) _displayProgress = _targetProgress;
-                _subDetailText = $"{(int)(_displayProgress * 100)}%";
-                Invalidate();
+                _displayDepPercent[index] = next;
+                _depProgress[index] = $"{(int)(next * 100)}%";
+                needsRedraw = true;
             }
         }
+
+        if (_state == PageState.Installing)
+        {
+            var next = SetupPolicy.AnimateTowards(
+                _displayProgress,
+                _targetProgress,
+                elapsedSeconds);
+            if (Math.Abs(next - _displayProgress) > 0.00001)
+            {
+                _displayProgress = next;
+                _subDetailText = $"{(int)(_displayProgress * 100)}%";
+                needsRedraw = true;
+            }
+        }
+
+        if (needsRedraw)
+        {
+            Invalidate();
+        }
+    }
+
+    private void EnsureAnimationTimer()
+    {
+        if (_hwnd == IntPtr.Zero || _animationTimerRunning)
+        {
+            return;
+        }
+
+        _lastAnimationTick = Environment.TickCount64;
+        NativeMethods.SetTimer(_hwnd, (UIntPtr)AnimationTimerId, 16, IntPtr.Zero);
+        _animationTimerRunning = true;
+    }
+
+    private void StopAnimationTimer()
+    {
+        if (_hwnd == IntPtr.Zero || !_animationTimerRunning)
+        {
+            return;
+        }
+
+        NativeMethods.KillTimer(_hwnd, (UIntPtr)AnimationTimerId);
+        _animationTimerRunning = false;
     }
 
     private void Invalidate()
@@ -442,7 +566,7 @@ public class FluentInstallerWindow
         if (_state == PageState.Welcome)
         {
             // 单独点击某一项的下载安装按钮
-            for (int i = 0; i < 3; i++)
+            for (int i = 0; i < _rectDepBtns.Length; i++)
             {
                 if (_rectDepBtns[i].Contains(_mouseX, _mouseY))
                 {
@@ -454,7 +578,7 @@ public class FluentInstallerWindow
                 }
             }
 
-            if (_rectInstallBtn.Contains(_mouseX, _mouseY) && !_isDetecting)
+            if (_rectInstallBtn.Contains(_mouseX, _mouseY) && CanStartInstallation())
             {
                 StartInstallation();
                 return;
@@ -510,13 +634,20 @@ public class FluentInstallerWindow
         }
         else if (_state == PageState.Complete)
         {
-            if (_rectLaunchBtn.Contains(_mouseX, _mouseY))
+            if (_rectLaunchCheck.Contains(_mouseX, _mouseY))
             {
-                ProcessHelper.LaunchApp(_installDir);
-                NativeMethods.PostMessageW(_hwnd, NativeMethods.WM_CLOSE, UIntPtr.Zero, IntPtr.Zero);
+                _launchOnFinish = !_launchOnFinish;
+                Invalidate();
+                return;
             }
-            else if (_rectDoneBtn.Contains(_mouseX, _mouseY))
+
+            if (_rectDoneBtn.Contains(_mouseX, _mouseY))
             {
+                // 依赖未就绪时启动主程序只会立即崩溃，此处直接跳过启动
+                if (_launchOnFinish && !_restartRequired && !_detectionPending && !_dependenciesIncomplete)
+                {
+                    ProcessHelper.LaunchApp(_installDir);
+                }
                 NativeMethods.PostMessageW(_hwnd, NativeMethods.WM_CLOSE, UIntPtr.Zero, IntPtr.Zero);
             }
         }
@@ -549,135 +680,143 @@ public class FluentInstallerWindow
 
     private void InstallSingleDependency(int index)
     {
-        if (_depStates[index] == DepState.Downloading || _depStates[index] == DepState.Installing || _depStates[index] == DepState.Ready)
+        if (_depStates[index] == DepState.Ready ||
+            _depStates.Any(state => state is DepState.Downloading or DepState.Installing))
             return;
 
+        EnsureAnimationTimer();
         Task.Run(async () =>
         {
+            var dependency = DependencyService.Dependencies[index];
             try
             {
                 _depStates[index] = DepState.Downloading;
                 _depPercent[index] = 0.0;
+                _displayDepPercent[index] = 0.0;
                 _depProgress[index] = "0%";
-                _depDetailText[index] = "连接中...";
+                _depDetailText[index] = "正在连接...";
                 Invalidate();
 
-                var tempDir = Path.GetTempPath();
-                if (index == 0) // VC++
-                {
-                    var installerPath = Path.Combine(tempDir, "vc_redist.x64.exe");
-                    await DependencyService.DownloadFileAsync(
-                        "https://aka.ms/vs/17/release/vc_redist.x64.exe",
-                        installerPath,
-                        (p, msg) =>
-                        {
-                            _depPercent[0] = p;
-                            _depProgress[0] = $"{(int)(p * 100)}%";
-                            _depDetailText[0] = msg;
-                            Invalidate();
-                        },
-                        "VC++ 运行库");
+                var result = await DependencyService.InstallDependencyAsync(
+                    dependency,
+                    report => ApplyDependencyReport(index, report),
+                    _operationCancellation.Token);
 
-                    _depStates[0] = DepState.Installing;
-                    _depDetailText[0] = "正在安装...";
-                    Invalidate();
-
-                    await Task.Run(() =>
-                    {
-                        using var p = Process.Start(new ProcessStartInfo
-                        {
-                            FileName = installerPath,
-                            Arguments = "/install /norestart",
-                            UseShellExecute = true
-                        });
-                        p?.WaitForExit();
-                    });
-
-                    await Task.Delay(300);
-                    _depStates[0] = DependencyService.IsVCRedistInstalled() ? DepState.Ready : DepState.Failed;
-                    Invalidate();
-                }
-                else if (index == 1) // .NET 9
-                {
-                    var installerPath = Path.Combine(tempDir, "dotnet9_desktop_runtime_x64.exe");
-                    await DependencyService.DownloadFileAsync(
-                        "https://aka.ms/dotnet/9.0/windowsdesktop-runtime-win-x64.exe",
-                        installerPath,
-                        (p, msg) =>
-                        {
-                            _depPercent[1] = p;
-                            _depProgress[1] = $"{(int)(p * 100)}%";
-                            _depDetailText[1] = msg;
-                            Invalidate();
-                        },
-                        ".NET 9 运行时");
-
-                    _depStates[1] = DepState.Installing;
-                    _depDetailText[1] = "正在安装...";
-                    Invalidate();
-
-                    await Task.Run(() =>
-                    {
-                        using var p = Process.Start(new ProcessStartInfo
-                        {
-                            FileName = installerPath,
-                            Arguments = "/install /norestart",
-                            UseShellExecute = true
-                        });
-                        p?.WaitForExit();
-                    });
-
-                    await Task.Delay(300);
-                    _depStates[1] = DependencyService.IsDotNet9Installed() ? DepState.Ready : DepState.Failed;
-                    Invalidate();
-                }
-                else if (index == 2) // Windows App SDK 1.8
-                {
-                    var installerPath = Path.Combine(tempDir, "windowsappruntimeinstall-x64.exe");
-                    await DependencyService.DownloadFileAsync(
-                        "https://download.microsoft.com/download/712421b4-6f72-47fc-acb8-2ebf030b2260/WindowsAppRuntimeInstall-x64.exe",
-                        installerPath,
-                        (p, msg) =>
-                        {
-                            _depPercent[2] = p;
-                            _depProgress[2] = $"{(int)(p * 100)}%";
-                            _depDetailText[2] = msg;
-                            Invalidate();
-                        },
-                        "WinAppSDK 1.8");
-
-                    _depStates[2] = DepState.Installing;
-                    _depDetailText[2] = "正在安装...";
-                    Invalidate();
-
-                    await Task.Run(() =>
-                    {
-                        using var p = Process.Start(new ProcessStartInfo
-                        {
-                            FileName = installerPath,
-                            Arguments = "--quiet --force",
-                            UseShellExecute = false,
-                            CreateNoWindow = true
-                        });
-                        p?.WaitForExit();
-                    });
-
-                    await Task.Delay(300);
-                    _depStates[2] = DependencyService.IsWindowsAppSdkInstalled() ? DepState.Ready : DepState.Failed;
-                    Invalidate();
-                }
+                _restartRequired |= result.RestartRequired;
+                _detectionPending |= !result.DetectionConfirmed;
+                _depPercent[index] = 1.0;
+                _depStates[index] = DepState.Ready;
+                _depDetailText[index] = !result.DetectionConfirmed
+                    ? "已安装，重启后生效"
+                    : result.RestartRequired ? "已就绪，需重启" : "已就绪";
+                Invalidate();
             }
-            catch
+            catch (OperationCanceledException)
+            {
+                _depStates[index] = DepState.Missing;
+                _depDetailText[index] = "已取消";
+                Invalidate();
+            }
+            catch (Exception exception)
             {
                 _depStates[index] = DepState.Failed;
+                _depDetailText[index] = TruncateDetail(exception.Message);
                 Invalidate();
+                ReportDependencyFailure(dependency, exception);
+            }
+            finally
+            {
+                if (!_isDetecting && !_depStates.Any(state => state is DepState.Downloading or DepState.Installing))
+                {
+                    StopAnimationTimer();
+                }
             }
         });
     }
 
+    private void ApplyDependencyReport(int index, DependencyProgress report)
+    {
+        _depPercent[index] = Math.Clamp(report.Progress, 0.0, 1.0);
+        _depProgress[index] = $"{(int)(_depPercent[index] * 100)}%";
+        _depStates[index] = report.Stage switch
+        {
+            DependencyInstallStage.Downloading => DepState.Downloading,
+            DependencyInstallStage.Completed => DepState.Ready,
+            _ => DepState.Installing
+        };
+        _depDetailText[index] = TruncateDetail(report.Detail);
+        Invalidate();
+    }
+
+    private static string TruncateDetail(string detail)
+    {
+        detail = detail.Replace("\r", " ").Replace("\n", " ").Trim();
+        return detail.Length > 60 ? detail[..57] + "..." : detail;
+    }
+
+    private void ReportDependencyFailure(DependencyDefinition dependency, Exception exception)
+    {
+        DependencyService.WriteLog($"{dependency.DisplayName} 配置失败（UI 上报）：{exception}");
+        NativeMethods.MessageBoxW(
+            _hwnd,
+            $"{dependency.DisplayName} 自动配置失败：\n{exception.Message}\n\n" +
+            $"可稍后点击“重试”，或手动下载安装：\n{dependency.ManualDownloadPage}\n\n" +
+            $"诊断日志：\n{DependencyService.LogFilePath}",
+            "NexClip 运行环境配置失败",
+            0x10);
+    }
+
+    private bool CanStartInstallation() =>
+        !_isDetecting &&
+        !_depStates.Any(state => state is DepState.Downloading or DepState.Installing);
+
+    private void EnsureSufficientDiskSpace()
+    {
+        PayloadService.ValidateEmbeddedPayload();
+        if (SetupPolicy.TryGetAvailableDiskSpace(_installDir, out var targetAvailable) &&
+            !SetupPolicy.HasSufficientSpace(targetAvailable, _requiredInstallSpaceBytes))
+        {
+            throw new IOException(
+                $"目标磁盘空间不足，至少需要 {FormatMegabytes(_requiredInstallSpaceBytes)} 可用空间。");
+        }
+
+        // 依赖下载临时空间按真实包体估算（含 25% 余量），避免用上限值误判空间不足
+        var dependencyBytes = PendingDependencies
+            .Sum(dependency => dependency.ExpectedDownloadBytes + dependency.ExpectedDownloadBytes / 4);
+        if (dependencyBytes <= 0)
+        {
+            return;
+        }
+
+        var temporaryRequired = SetupPolicy.CalculateRequiredSpaceBytes(0, dependencyBytes);
+        if (SetupPolicy.TryGetAvailableDiskSpace(DependencyService.DownloadCacheDirectory, out var temporaryAvailable) &&
+            !SetupPolicy.HasSufficientSpace(temporaryAvailable, temporaryRequired))
+        {
+            throw new IOException(
+                $"临时文件磁盘空间不足，运行环境配置至少需要 {FormatMegabytes(temporaryRequired)} 可用空间。");
+        }
+    }
+
+    /// <summary>欢迎页检测结果中尚未就绪的依赖项，避免重复触发昂贵的系统枚举。</summary>
+    private IEnumerable<DependencyDefinition> PendingDependencies =>
+        DependencyService.Dependencies.Where((_, index) => _depStates[index] != DepState.Ready);
+
+    private static string FormatMegabytes(long bytes) => $"{bytes / (1024.0 * 1024.0):F0} MB";
+
     private void StartInstallation()
     {
+        try
+        {
+            EnsureSufficientDiskSpace();
+        }
+        catch (Exception exception)
+        {
+            NativeMethods.MessageBoxW(_hwnd, exception.Message, "NexClip 无法开始安装", 0x30);
+            return;
+        }
+
         _state = PageState.Installing;
+        _operationActive = true;
         _displayProgress = 0.0;
         _targetProgress = 0.05;
         _statusText = "正在检查系统运行环境...";
@@ -685,39 +824,41 @@ public class FluentInstallerWindow
         Invalidate();
 
         // 启动 60fps 缓动动画定时器
-        NativeMethods.SetTimer(_hwnd, (UIntPtr)1, 16, IntPtr.Zero);
+        EnsureAnimationTimer();
 
         Task.Run(async () =>
         {
             try
             {
-                // 1. 运行环境配置 (0% -> 25%)
-                await DependencyService.EnsureDependenciesAsync((p, text) =>
+                // 1. 运行环境配置 (0% -> 25%)：失败时允许用户选择继续部署主程序并稍后手动补装依赖
+                if (!await ConfigureDependenciesAsync())
                 {
-                    _targetProgress = 0.05 + Math.Clamp(p, 0.0, 1.0) * 0.20;
-                    _statusText = text;
-                });
+                    return;
+                }
 
                 // 2. 进程检查与释放 (25% -> 32%)
                 _targetProgress = 0.26;
                 _statusText = "正在检查并释放后台运行中的旧版本进程...";
-                await ProcessHelper.TerminateRunningInstancesAsync();
+                await ProcessHelper.TerminateRunningInstancesAsync(_operationCancellation.Token);
                 
                 _targetProgress = 0.32;
                 _statusText = "正在准备安装目录与工作区...";
                 await Task.Delay(150);
 
                 // 3. 解压核心组件 (32% -> 88%)
-                await PayloadService.ExtractPayloadAsync(_installDir, (p, fileName) =>
+                await PayloadService.InstallPayloadWithRollbackAsync(_installDir, (p, fileName) =>
                 {
                     _targetProgress = 0.32 + Math.Clamp(p, 0.0, 1.0) * 0.56;
                     _statusText = $"正在释放: {fileName}";
-                });
+                }, _operationCancellation.Token);
 
                 // 4. 部署卸载与快捷方式 (88% -> 98%)
                 _targetProgress = 0.90;
                 _statusText = "正在配置应用程序与卸载服务...";
-                PayloadService.DeployUninstaller(_installDir);
+                if (!PayloadService.DeployUninstaller(_installDir))
+                {
+                    throw new IOException("无法部署卸载程序，安装已中止。");
+                }
                 await Task.Delay(100);
 
                 _targetProgress = 0.94;
@@ -729,7 +870,7 @@ public class FluentInstallerWindow
 
                 _targetProgress = 0.98;
                 _statusText = "正在注册系统卸载信息...";
-                RegistryHelper.RegisterUninstall(_installDir, "20260828.02");
+                RegistryHelper.RegisterUninstall(_installDir, InstallerVersion);
                 await Task.Delay(100);
 
                 // 5. 完成过渡 (98% -> 100%)
@@ -747,13 +888,20 @@ public class FluentInstallerWindow
                 Invalidate();
                 await Task.Delay(350);
 
-                NativeMethods.KillTimer(_hwnd, (UIntPtr)1);
+                StopAnimationTimer();
                 _state = PageState.Complete;
+                Invalidate();
+            }
+            catch (OperationCanceledException)
+            {
+                StopAnimationTimer();
+                _statusText = "安装已取消";
+                _state = PageState.Welcome;
                 Invalidate();
             }
             catch (Exception ex)
             {
-                NativeMethods.KillTimer(_hwnd, (UIntPtr)1);
+                StopAnimationTimer();
                 var logPath = Path.Combine(Path.GetTempPath(), "nexclip_install_error.log");
                 try { File.WriteAllText(logPath, ex.ToString()); } catch { }
 
@@ -763,19 +911,121 @@ public class FluentInstallerWindow
 
                 NativeMethods.MessageBoxW(_hwnd, $"安装过程中遇到错误:\n{ex.Message}\n\n详细信息已记录至:\n{logPath}", "NexClip 安装失败", 0x10);
             }
+            finally
+            {
+                _operationActive = false;
+            }
         });
+    }
+
+    /// <summary>
+    /// 配置运行环境依赖。返回 false 表示用户选择中止安装并回到欢迎页。
+    /// </summary>
+    private async Task<bool> ConfigureDependenciesAsync()
+    {
+        try
+        {
+            var result = await DependencyService.EnsureDependenciesAsync(
+                (progress, text) =>
+                {
+                    _targetProgress = 0.05 + Math.Clamp(progress, 0.0, 1.0) * 0.20;
+                    _statusText = TruncateDetail(text);
+                },
+                _operationCancellation.Token);
+            _restartRequired |= result.RestartRequired;
+            _detectionPending |= !result.DetectionConfirmed;
+            RefreshDependencyStates();
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            DependencyService.WriteLog($"依赖配置失败：{exception}");
+            RefreshDependencyStates();
+            MarkFailedDependencies(exception);
+
+            var manualList = string.Join(
+                Environment.NewLine,
+                PendingDependencies.Select(dependency =>
+                    $"· {dependency.DisplayName}：{dependency.ManualDownloadPage}"));
+            const uint YesNoWarning = 0x04 | 0x30;
+            var choice = NativeMethods.MessageBoxW(
+                _hwnd,
+                $"运行环境依赖自动配置失败：\n{exception.Message}\n\n" +
+                $"仍要继续安装 NexClip 主程序吗？\n（选择“是”后需手动安装以下组件，NexClip 才能启动）\n\n{manualList}\n\n" +
+                $"诊断日志：\n{DependencyService.LogFilePath}",
+                "NexClip 运行环境配置失败",
+                YesNoWarning);
+            if (choice != 6)
+            {
+                StopAnimationTimer();
+                _statusText = "运行环境依赖未就绪，安装已中止";
+                _state = PageState.Welcome;
+                Invalidate();
+                return false;
+            }
+
+            _dependenciesIncomplete = true;
+            return true;
+        }
+    }
+
+    /// <summary>把批量配置中真正失败的组件标记为 Failed，其余未就绪项保持 Missing 以便单独重试。</summary>
+    private void MarkFailedDependencies(Exception exception)
+    {
+        if (exception is not DependencyConfigurationException configurationFailure)
+        {
+            return;
+        }
+
+        for (var index = 0; index < DependencyService.Dependencies.Count; index++)
+        {
+            var dependency = DependencyService.Dependencies[index];
+            if (_depStates[index] != DepState.Ready &&
+                configurationFailure.FailedDependencies.Any(failed => failed.Kind == dependency.Kind))
+            {
+                _depStates[index] = DepState.Failed;
+                _depDetailText[index] = "自动配置失败，可重试";
+            }
+        }
+
+        Invalidate();
+    }
+
+    private void RefreshDependencyStates()
+    {
+        for (var index = 0; index < DependencyService.Dependencies.Count; index++)
+        {
+            var installed = DependencyService.IsInstalled(DependencyService.Dependencies[index]);
+            if (installed)
+            {
+                _depStates[index] = DepState.Ready;
+                _depPercent[index] = 1.0;
+                _depDetailText[index] = "已就绪";
+            }
+            else if (_depStates[index] != DepState.Failed)
+            {
+                _depStates[index] = DepState.Missing;
+            }
+        }
+
+        Invalidate();
     }
 
     private void StartUninstallation()
     {
         _state = PageState.Installing;
+        _operationActive = true;
         _displayProgress = 0.0;
         _targetProgress = 0.15;
         _statusText = "正在安全清理 NexClip 组件...";
         _subDetailText = "0%";
         Invalidate();
 
-        NativeMethods.SetTimer(_hwnd, (UIntPtr)1, 16, IntPtr.Zero);
+        EnsureAnimationTimer();
 
         Task.Run(async () =>
         {
@@ -783,7 +1033,7 @@ public class FluentInstallerWindow
             {
                 _targetProgress = 0.30;
                 _statusText = "正在结束后台进程...";
-                await ProcessHelper.TerminateRunningInstancesAsync();
+                await ProcessHelper.TerminateRunningInstancesAsync(_operationCancellation.Token);
 
                 _targetProgress = 0.60;
                 _statusText = "正在清理系统快捷方式与注册表...";
@@ -792,24 +1042,16 @@ public class FluentInstallerWindow
 
                 if (!_keepUserData)
                 {
-                    var appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NexClip");
-                    if (Directory.Exists(appData)) { try { Directory.Delete(appData, true); } catch { } }
+                    foreach (var appData in InstallerPathHelper.GetUserDataDirectories(
+                                 InstallerPathHelper.TryGetConfiguredStorageDirectory()))
+                    {
+                        try { if (Directory.Exists(appData)) Directory.Delete(appData, true); } catch { }
+                    }
                 }
 
                 _targetProgress = 0.85;
                 _statusText = "正在移除安装目录文件...";
-                var currentExe = Environment.ProcessPath ?? "";
-                var installFolder = Path.GetDirectoryName(currentExe);
-                if (!string.IsNullOrEmpty(installFolder) && Directory.Exists(installFolder))
-                {
-                    foreach (var file in Directory.GetFiles(installFolder, "*.*", SearchOption.AllDirectories))
-                    {
-                        if (!string.Equals(file, currentExe, StringComparison.OrdinalIgnoreCase))
-                        {
-                            try { File.Delete(file); } catch { }
-                        }
-                    }
-                }
+                ProcessHelper.ScheduleDirectoryDeletion(_installDir);
 
                 _targetProgress = 1.0;
                 _statusText = "卸载已完成";
@@ -824,15 +1066,19 @@ public class FluentInstallerWindow
                 Invalidate();
                 await Task.Delay(350);
 
-                NativeMethods.KillTimer(_hwnd, (UIntPtr)1);
+                StopAnimationTimer();
                 _state = PageState.UninstallComplete;
                 Invalidate();
             }
             catch (Exception ex)
             {
-                NativeMethods.KillTimer(_hwnd, (UIntPtr)1);
+                StopAnimationTimer();
                 _statusText = $"卸载遇到错误: {ex.Message}";
                 Invalidate();
+            }
+            finally
+            {
+                _operationActive = false;
             }
         });
     }
@@ -967,7 +1213,7 @@ public class FluentInstallerWindow
         }
 
         string brand = "NexClip 剪贴板管理";
-        string verStr = "v20260828.02";
+        string verStr = $"v{InstallerVersion}";
 
         var dummyLayout = new GdiPlus.RECTF(0, 0, S(600), S(100));
         GdiPlus.GdipMeasureString(g, brand, brand.Length, _fontTitle, ref dummyLayout, IntPtr.Zero, out var brandBox, out _, out _);
@@ -1032,10 +1278,19 @@ public class FluentInstallerWindow
         GdiPlus.GdipDeleteBrush(cardTitleBrush);
         GdiPlus.GdipDeleteStringFormat(cTitleFmt);
 
-        // 渲染 3 个环境检测项 (右侧支持独立下载/实时速度/安装/重试按钮交互)
-        RenderDepItemRow(g, 0, startX + S(16), cardY + S(42), contentW - S(32), S(28), "Microsoft Visual C++ x64 运行库", _depStates[0]);
-        RenderDepItemRow(g, 1, startX + S(16), cardY + S(74), contentW - S(32), S(28), ".NET 9 Desktop Runtime x64", _depStates[1]);
-        RenderDepItemRow(g, 2, startX + S(16), cardY + S(106), contentW - S(32), S(28), "Windows App SDK 1.8 Runtime x64", _depStates[2]);
+        // 渲染各环境检测项 (右侧支持独立下载/实时速度/安装/重试按钮交互)
+        for (var depIndex = 0; depIndex < _depStates.Length; depIndex++)
+        {
+            RenderDepItemRow(
+                g,
+                depIndex,
+                startX + S(16),
+                cardY + S(42) + depIndex * S(32),
+                contentW - S(32),
+                S(28),
+                DependencyService.Dependencies[depIndex].DisplayName,
+                _depStates[depIndex]);
+        }
 
         // 3. 安装路径选择区
         float pathAreaY = S(272.0f);
@@ -1083,7 +1338,7 @@ public class FluentInstallerWindow
         string freeSpace = GetDiskFreeSpaceText(_installDir);
         GdiPlus.GdipCreateSolidFill(GdiPlus.FromHex("#94A3B8"), out var spaceBrush);
         var spaceRect = new GdiPlus.RECTF(startX + S(24), spaceY, contentW - S(24), S(20));
-        string spaceText = $"所需空间: 约 32.0 MB       可用空间: {freeSpace}";
+        string spaceText = $"所需空间: 约 {FormatMegabytes(_requiredInstallSpaceBytes)}       可用空间: {freeSpace}";
         GdiPlus.GdipDrawString(g, spaceText, spaceText.Length, _fontSmall, ref spaceRect, IntPtr.Zero, spaceBrush);
         GdiPlus.GdipDeleteBrush(spaceBrush);
 
@@ -1106,6 +1361,10 @@ public class FluentInstallerWindow
         if (_isDetecting)
         {
             RenderButton(g, _rectInstallBtn, "检查环境中...", null, isPrimary: false, isDisabled: true);
+        }
+        else if (!CanStartInstallation())
+        {
+            RenderButton(g, _rectInstallBtn, "配置环境中...", null, isPrimary: false, isDisabled: true);
         }
         else if (!string.IsNullOrEmpty(_existingVersion))
         {
@@ -1150,10 +1409,22 @@ public class FluentInstallerWindow
 
         float iconSize = S(16.0f);
         float iconY = y + (h - iconSize) / 2.0f;
-        LucideGdiPlus.DrawIcon(g, icon, x, iconY, iconSize, iconColor, 2.0f);
+        if (state is DepState.Installing or DepState.Checking)
+        {
+            LucideGdiPlus.DrawLoaderCircle(g, x, iconY, iconSize, iconColor, _activityAngle, 2.0f);
+        }
+        else
+        {
+            LucideGdiPlus.DrawIcon(g, icon, x, iconY, iconSize, iconColor, 2.0f);
+        }
 
-        // 如果正在下载，左侧组件名宽度略微缩小，给右侧进度详情留足空间
-        float nameWidth = state == DepState.Downloading ? w - S(200) : w - S(100);
+        // 下载/安装中右侧胶囊更宽，待安装状态需要给下载体积提示留出空间
+        float nameWidth = state switch
+        {
+            DepState.Downloading or DepState.Installing => w - S(200),
+            DepState.Missing or DepState.Failed => w - S(218),
+            _ => w - S(100)
+        };
         GdiPlus.GdipCreateSolidFill(GdiPlus.FromHex("#E2E8F0"), out var nameBrush);
         var nameRect = new GdiPlus.RECTF(x + S(24), y, nameWidth, h);
         GdiPlus.GdipCreateStringFormat(0, 0, out var nameFmt);
@@ -1162,10 +1433,25 @@ public class FluentInstallerWindow
         GdiPlus.GdipDeleteBrush(nameBrush);
         GdiPlus.GdipDeleteStringFormat(nameFmt);
 
+        // 待安装/失败态把检测结论（预计下载体积或失败原因）直接呈现在胶囊左侧
+        if (state is DepState.Missing or DepState.Failed && !string.IsNullOrWhiteSpace(_depDetailText[index]))
+        {
+            var hintColor = state == DepState.Failed ? "#F87171" : "#94A3B8";
+            GdiPlus.GdipCreateSolidFill(GdiPlus.FromHex(hintColor), out var hintBrush);
+            GdiPlus.GdipCreateStringFormat(0, 0, out var hintFmt);
+            GdiPlus.GdipSetStringFormatAlign(hintFmt, GdiPlus.StringAlignment.Far);
+            GdiPlus.GdipSetStringFormatLineAlign(hintFmt, GdiPlus.StringAlignment.Center);
+            var hintRect = new GdiPlus.RECTF(x + S(24) + nameWidth, y, S(126), h);
+            var hintText = _depDetailText[index];
+            GdiPlus.GdipDrawString(g, hintText, hintText.Length, _fontPill, ref hintRect, hintFmt, hintBrush);
+            GdiPlus.GdipDeleteBrush(hintBrush);
+            GdiPlus.GdipDeleteStringFormat(hintFmt);
+        }
+
         float badgeW = S(84.0f);
         float badgeH = S(24.0f);
 
-        if (state == DepState.Downloading)
+        if (state is DepState.Downloading or DepState.Installing)
         {
             badgeW = S(185.0f);
             badgeH = S(24.0f);
@@ -1194,7 +1480,13 @@ public class FluentInstallerWindow
         }
         else if (state == DepState.Missing)
         {
-            RenderButton(g, _rectDepBtns[index], "安装", LucideGdiPlus.IconType.Download, isPrimary: true);
+            RenderButton(
+                g,
+                _rectDepBtns[index],
+                "安装",
+                LucideGdiPlus.IconType.Download,
+                isPrimary: true,
+                isDisabled: !CanStartInstallation());
         }
         else if (state == DepState.Downloading)
         {
@@ -1204,7 +1496,7 @@ public class FluentInstallerWindow
             GdiPlus.GdipDeleteBrush(bBgBrush);
 
             // 进度条内部高亮填充
-            float barW = (badgeW - S(2.0f)) * (float)Math.Clamp(_depPercent[index], 0.0, 1.0);
+            float barW = (badgeW - S(2.0f)) * (float)Math.Clamp(_displayDepPercent[index], 0.0, 1.0);
             if (barW > S(4.0f))
             {
                 GdiPlus.GdipCreateSolidFill(GdiPlus.Argb(60, 56, 189, 248), out var fillBrush);
@@ -1239,14 +1531,23 @@ public class FluentInstallerWindow
             GdiPlus.GdipSetStringFormatAlign(cFmt, GdiPlus.StringAlignment.Center);
             GdiPlus.GdipSetStringFormatLineAlign(cFmt, GdiPlus.StringAlignment.Center);
             var bRect = new GdiPlus.RECTF(badgeX, badgeY, badgeW, badgeH);
-            string instText = "安装中...";
+            string instText = !string.IsNullOrWhiteSpace(_depDetailText[index])
+                ? _depDetailText[index]
+                : "安装中...";
             GdiPlus.GdipDrawString(g, instText, instText.Length, _fontPill, ref bRect, cFmt, bTxtBrush);
             GdiPlus.GdipDeleteBrush(bTxtBrush);
             GdiPlus.GdipDeleteStringFormat(cFmt);
         }
         else if (state == DepState.Failed)
         {
-            RenderButton(g, _rectDepBtns[index], "重试", LucideGdiPlus.IconType.RefreshCw, isPrimary: false, isDanger: true);
+            RenderButton(
+                g,
+                _rectDepBtns[index],
+                "重试",
+                LucideGdiPlus.IconType.RefreshCw,
+                isPrimary: false,
+                isDanger: true,
+                isDisabled: !CanStartInstallation());
         }
         else // Checking
         {
@@ -1334,54 +1635,72 @@ public class FluentInstallerWindow
 
     private void RenderCompletePage(IntPtr g)
     {
-        float iconBoxW = S(68.0f);
-        float iconBoxH = S(68.0f);
-        float iconBoxX = (WindowWidth - iconBoxW) / 2.0f;
-        float iconBoxY = S(92.0f);
+        // 1. 顶部成功图标 (CheckCircle 绿色圆圈矢量图标)
+        float iconSize = S(58.0f);
+        float iconX = (WindowWidth - iconSize) / 2.0f;
+        float iconY = S(80.0f);
+        var needsAttention = _restartRequired || _detectionPending || _dependenciesIncomplete;
+        var iconColor = needsAttention ? GdiPlus.FromHex("#F59E0B") : GdiPlus.FromHex("#10B981");
 
-        GdiPlus.GdipCreateSolidFill(GdiPlus.Argb(36, 16, 185, 129), out var succBgBrush);
-        LucideGdiPlus.FillRoundedRect(g, succBgBrush, iconBoxX, iconBoxY, iconBoxW, iconBoxH, S(18.0f));
-        GdiPlus.GdipDeleteBrush(succBgBrush);
+        LucideGdiPlus.DrawIcon(
+            g,
+            needsAttention ? LucideGdiPlus.IconType.RefreshCw : LucideGdiPlus.IconType.CheckCircle,
+            iconX,
+            iconY,
+            iconSize,
+            iconColor,
+            2.8f);
 
-        GdiPlus.GdipCreatePen1(GdiPlus.FromHex("#10B981"), 1.2f, 0, out var succPen);
-        LucideGdiPlus.DrawRoundedRect(g, succPen, iconBoxX, iconBoxY, iconBoxW, iconBoxH, S(18.0f));
-        GdiPlus.GdipDeletePen(succPen);
+        // 2. 主标题：NexClip 升级完成！ / NexClip 安装完成！
+        string appName = "NexClip";
+        bool isUpgrade = !string.IsNullOrEmpty(_existingVersion);
+        string head = _dependenciesIncomplete
+            ? $"{appName} 已安装，依赖待补装"
+            : _restartRequired || _detectionPending
+                ? $"{appName} 安装完成，需要重启"
+                : (isUpgrade ? $"{appName} 升级完成！" : $"{appName} 安装完成！");
 
-        LucideGdiPlus.DrawIcon(g, LucideGdiPlus.IconType.Check, iconBoxX + S(17), iconBoxY + S(17), S(34), GdiPlus.FromHex("#10B981"), 2.4f);
-
-        GdiPlus.GdipCreateSolidFill(GdiPlus.FromHex("#F8FAFC"), out var whiteBrush);
-        var titleRect = new GdiPlus.RECTF(S(30), S(180), WindowWidth - S(60), S(30));
+        GdiPlus.GdipCreateSolidFill(GdiPlus.FromHex("#F8FAFC"), out var titleBrush);
+        var titleRect = new GdiPlus.RECTF(S(20), S(160), WindowWidth - S(40), S(36));
         GdiPlus.GdipCreateStringFormat(0, 0, out var cFmt);
         GdiPlus.GdipSetStringFormatAlign(cFmt, GdiPlus.StringAlignment.Center);
-        string head = "安装完成！";
-        GdiPlus.GdipDrawString(g, head, head.Length, _fontHeader, ref titleRect, cFmt, whiteBrush);
-        GdiPlus.GdipDeleteBrush(whiteBrush);
+        GdiPlus.GdipDrawString(g, head, head.Length, _fontTitle, ref titleRect, cFmt, titleBrush);
+        GdiPlus.GdipDeleteBrush(titleBrush);
+
+        // 3. 副标题：已成功升级至版本 v{InstallerVersion}，您的剪贴板历史与配置已完整保留。
+        string sub = _dependenciesIncomplete
+            ? "请手动安装缺失的运行环境组件后再启动 NexClip。"
+            : _restartRequired || _detectionPending
+                ? "运行环境已完成配置，请重启 Windows 后使用 NexClip。"
+                : (isUpgrade
+                    ? $"已成功升级至版本 v{InstallerVersion}，您的剪贴板历史与配置已完整保留。"
+                    : $"已成功安装至版本 v{InstallerVersion}，跨端同步与剪贴板历史已就绪。");
 
         GdiPlus.GdipCreateSolidFill(GdiPlus.FromHex("#94A3B8"), out var textSecBrush);
-        var subRect = new GdiPlus.RECTF(S(30), S(218), WindowWidth - S(60), S(24));
-        string sub = "NexClip 已成功部署至您的计算机，随时体验高效同步。";
+        var subRect = new GdiPlus.RECTF(S(20), S(202), WindowWidth - S(40), S(24));
         GdiPlus.GdipDrawString(g, sub, sub.Length, _fontBody, ref subRect, cFmt, textSecBrush);
 
-        // 对称且均衡的双操作按钮布局 (每个 146px 宽，40px 高，间距 16px，整体水平居中)
-        float btnW = S(146.0f);
-        float btnH = S(40.0f);
-        float btnGap = S(16.0f);
-        float totalBtnW = btnW * 2 + btnGap;
-        float startX = (WindowWidth - totalBtnW) / 2.0f;
-        float btnY = S(272.0f);
+        // 4. “立即启动 NexClip” 复选框 (居中对齐)
+        string checkLabel = $"立即启动 {appName}";
+        var dummyLayout = new GdiPlus.RECTF(0, 0, S(400), S(100));
+        GdiPlus.GdipMeasureString(g, checkLabel, checkLabel.Length, _fontBody, ref dummyLayout, IntPtr.Zero, out var checkSize, out _, out _);
 
-        _rectLaunchBtn = new GdiPlus.RECTF(startX, btnY, btnW, btnH);
-        _rectDoneBtn = new GdiPlus.RECTF(startX + btnW + btnGap, btnY, btnW, btnH);
+        float checkTotalW = S(19.0f) + S(8.0f) + checkSize.Width;
+        float checkX = (WindowWidth - checkTotalW) / 2.0f;
+        float checkY = S(248.0f);
+        float checkH = S(24.0f);
 
-        RenderButton(g, _rectLaunchBtn, "立即体验", LucideGdiPlus.IconType.Play, isPrimary: true);
-        RenderButton(g, _rectDoneBtn, "完成", null, isPrimary: false);
+        _rectLaunchCheck = new GdiPlus.RECTF(checkX, checkY, checkTotalW, checkH);
+        RenderCheckBox(g, _rectLaunchCheck, checkLabel, _launchOnFinish, checkedColor: GdiPlus.FromHex("#006EFF"), textColor: GdiPlus.FromHex("#F8FAFC"));
 
-        // 底部快捷键提示
-        var tipRect = new GdiPlus.RECTF(S(30), S(344), WindowWidth - S(60), S(20));
-        string tipText = "快捷键提示：默认按 Alt + V 呼出剪贴板历史，按 Alt + X 打开设置";
-        GdiPlus.GdipCreateSolidFill(GdiPlus.FromHex("#64748B"), out var tipBrush);
-        GdiPlus.GdipDrawString(g, tipText, tipText.Length, _fontSmall, ref tipRect, cFmt, tipBrush);
-        GdiPlus.GdipDeleteBrush(tipBrush);
+        // 5. 底部主操作按钮“完成” (居中主色圆角按钮)
+        float btnW = S(110.0f);
+        float btnH = S(38.0f);
+        float btnX = (WindowWidth - btnW) / 2.0f;
+        float btnY = S(390.0f);
+
+        _rectDoneBtn = new GdiPlus.RECTF(btnX, btnY, btnW, btnH);
+        RenderButton(g, _rectDoneBtn, "完成", null, isPrimary: true);
 
         GdiPlus.GdipDeleteBrush(textSecBrush);
         GdiPlus.GdipDeleteStringFormat(cFmt);
@@ -1472,7 +1791,7 @@ public class FluentInstallerWindow
         RenderButton(g, _rectDoneBtn, "关闭", null, isPrimary: true);
     }
 
-    private void RenderButton(IntPtr g, GdiPlus.RECTF rect, string text, LucideGdiPlus.IconType? icon, bool isPrimary = false, bool isDanger = false, bool isDisabled = false)
+    private void RenderButton(IntPtr g, GdiPlus.RECTF rect, string text, LucideGdiPlus.IconType? icon, bool isPrimary = false, bool isDanger = false, bool isDisabled = false, uint? customColor = null)
     {
         bool isHover = rect.Contains(_mouseX, _mouseY) && !isDisabled;
         bool isPressed = isHover && _isLButtonDown;
@@ -1488,6 +1807,12 @@ public class FluentInstallerWindow
         else if (isDanger)
         {
             bgCol = isPressed ? GdiPlus.FromHex("#DC2626") : (isHover ? GdiPlus.FromHex("#EF4444") : GdiPlus.FromHex("#DC2626"));
+            strokeCol = bgCol;
+            textCol = GdiPlus.FromHex("#FFFFFF");
+        }
+        else if (customColor.HasValue)
+        {
+            bgCol = isPressed ? GdiPlus.FromHex("#C33D14") : (isHover ? GdiPlus.FromHex("#E85A2A") : customColor.Value);
             strokeCol = bgCol;
             textCol = GdiPlus.FromHex("#FFFFFF");
         }
@@ -1540,14 +1865,15 @@ public class FluentInstallerWindow
         GdiPlus.GdipDeleteBrush(txtBrush);
     }
 
-    private void RenderCheckBox(IntPtr g, GdiPlus.RECTF rect, string label, bool isChecked)
+    private void RenderCheckBox(IntPtr g, GdiPlus.RECTF rect, string label, bool isChecked, uint? checkedColor = null, uint? textColor = null)
     {
         float boxSize = S(19.0f);
         float boxY = rect.Y + (rect.Height - boxSize) / 2.0f;
 
         if (isChecked)
         {
-            GdiPlus.GdipCreateSolidFill(GdiPlus.FromHex("#006EFF"), out var accentBrush);
+            uint checkBg = checkedColor ?? GdiPlus.FromHex("#006EFF");
+            GdiPlus.GdipCreateSolidFill(checkBg, out var accentBrush);
             LucideGdiPlus.FillRoundedRect(g, accentBrush, rect.X, boxY, boxSize, boxSize, S(4.0f));
             GdiPlus.GdipDeleteBrush(accentBrush);
 
@@ -1564,7 +1890,8 @@ public class FluentInstallerWindow
             GdiPlus.GdipDeletePen(boxStrokePen);
         }
 
-        GdiPlus.GdipCreateSolidFill(GdiPlus.FromHex("#E2E8F0"), out var labelBrush);
+        uint labelCol = textColor ?? GdiPlus.FromHex("#E2E8F0");
+        GdiPlus.GdipCreateSolidFill(labelCol, out var labelBrush);
         var labelRect = new GdiPlus.RECTF(rect.X + boxSize + S(8), rect.Y, rect.Width - boxSize - S(8), rect.Height);
         GdiPlus.GdipCreateStringFormat(0, 0, out var lblFmt);
         GdiPlus.GdipSetStringFormatLineAlign(lblFmt, GdiPlus.StringAlignment.Center);

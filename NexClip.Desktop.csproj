@@ -15,16 +15,24 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
-    <Version>20260828.01</Version>
-    <AssemblyVersion>2026.8.28.1</AssemblyVersion>
-    <FileVersion>2026.8.28.1</FileVersion>
-    <InformationalVersion>20260828.01</InformationalVersion>
+    <Version>20260902.02</Version>
+    <AssemblyVersion>2026.9.2.2</AssemblyVersion>
+    <FileVersion>2026.9.2.2</FileVersion>
+    <InformationalVersion>20260902.02</InformationalVersion>
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
     <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
     <SatelliteResourceLanguages>zh-Hans;zh-CN;en-US;en</SatelliteResourceLanguages>
+    <!-- 常驻托盘应用的内存策略:保留后台(并发)GC 以保证 Alt+V 呼出的交互响应,
+         降低驻留内存改用 System.GC.ConserveMemory(见下方 RuntimeHostConfigurationOption) -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
     <WindowsSdkPackageVersion>10.0.19041.57</WindowsSdkPackageVersion>
-    <DefaultItemExcludes>$(DefaultItemExcludes);tmp\**;backup\**;server\**;server-node\**;android\**;web\**;syncclipboard-client\**;NexClip.Installer\**;NexClip.Installer.Native\**;installer\**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);tmp\**;backup\**;server\**;server-node\**;android\**;web\**;syncclipboard-client\**;NexClip.Installer.Native\**;NexClip.Installer.Native.Tests\**</DefaultItemExcludes>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- 内存节约模式:让 GC 更积极地归还已提交内存,常驻托盘场景下显著降低驻留内存(0-9,5 为均衡值) -->
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="5" />
+  </ItemGroup>
   <ItemGroup>
     <Content Include="Assets\lucide\*.svg">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -41,6 +49,10 @@
     <Compile Remove="NexClip.Tray\**\*.cs" />
     <EmbeddedResource Remove="NexClip.Tray\**\*.resx" />
     <None Remove="NexClip.Tray\**" />
+    <!-- 测试项目同样位于 desktop 下，必须从主 WinUI 项目的默认通配项中排除 -->
+    <Compile Remove="NexClip.Tray.Tests\**\*.cs" />
+    <EmbeddedResource Remove="NexClip.Tray.Tests\**\*.resx" />
+    <None Remove="NexClip.Tray.Tests\**" />
   </ItemGroup>
   <ItemGroup>
     <!-- UIAutomationClient:粘贴时用 UIA 定位目标输入框,精确重建焦点 -->

@@ -6,9 +6,11 @@ namespace NexClip.Installer.Native.Services;
 
 public static class RegistryHelper
 {
-    private const string UninstallRootKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\NexClip";
+    private const string UninstallRootKey = InstallerPathHelper.UninstallRootKey;
 
-    public static void RegisterUninstall(string installDir, string version = "20260828.02")
+    internal static string? TryGetInstallLocation() => InstallerPathHelper.TryGetRegisteredInstallDirectory();
+
+    public static void RegisterUninstall(string installDir, string version = "20260902.02")
     {
         try
         {

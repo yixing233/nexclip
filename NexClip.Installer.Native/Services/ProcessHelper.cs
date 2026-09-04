@@ -26,15 +26,17 @@ public static class ProcessHelper
     /// <summary>
     /// 自动平滑且强制结束所有正在运行的 NexClip 实例，并等待文件句柄完全释放
     /// </summary>
-    public static async Task TerminateRunningInstancesAsync()
+    public static async Task TerminateRunningInstancesAsync(CancellationToken cancellationToken = default)
     {
         foreach (var name in ProcessNames)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 var procs = Process.GetProcessesByName(name);
                 foreach (var p in procs)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     try
                     {
                         if (!p.HasExited)
@@ -55,6 +57,7 @@ public static class ProcessHelper
         }
 
         // 辅以 taskkill 兜底，确保子进程及托盘完全清理
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             using var psi = new Process();
@@ -83,12 +86,40 @@ public static class ProcessHelper
             var exePath = Path.Combine(installDir, "NexClip.exe");
             if (!File.Exists(exePath)) return false;
 
-            var psi = new ProcessStartInfo(exePath)
+            var psi = new ProcessStartInfo("explorer.exe")
             {
+                Arguments = $"\"{exePath}\"",
                 WorkingDirectory = installDir,
-                UseShellExecute = true
+                UseShellExecute = true,
+                CreateNoWindow = true
             };
             Process.Start(psi);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static bool ScheduleDirectoryDeletion(string directory)
+    {
+        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)) return false;
+
+        try
+        {
+            var scriptPath = Path.Combine(Path.GetTempPath(), $"NexClip-cleanup-{Guid.NewGuid():N}.cmd");
+            var escaped = directory.Replace("\"", "\"\"");
+            File.WriteAllText(scriptPath, $"@echo off\r\ntimeout /t 2 /nobreak >nul\r\nrmdir /s /q \"{escaped}\"\r\ndel /f /q \"%~f0\"\r\n");
+
+            Process.Start(new ProcessStartInfo("cmd.exe")
+            {
+                Arguments = $"/d /c \"\"{scriptPath}\"\"",
+                WorkingDirectory = Path.GetTempPath(),
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden
+            });
             return true;
         }
         catch

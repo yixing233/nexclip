@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "comment": "安装器运行环境依赖清单：固定 HTTPS 地址 + SHA-256，由 resolve-setup-dependencies.ps1 校验后注入安装器程序集元数据。",
+  "visualCppRuntime": {
+    "displayName": "Microsoft Visual C++ x64 运行库",
+    "version": "14.50.35719.0",
+    "minimumVersion": "14.40.33810",
+    "fileName": "vc_redist.x64.exe",
+    "sizeBytes": 25635768,
+    "url": "https://download.visualstudio.microsoft.com/download/pr/9d270333-8b7b-4f96-9458-6fcdb2ec0b25/CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/VC_redist.x64.exe",
+    "sha256": "cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b",
+    "fallbackUrl": "https://aka.ms/vs/17/release/vc_redist.x64.exe",
+    "manualDownloadPage": "https://aka.ms/vs/17/release/vc_redist.x64.exe",
+    "silentArguments": "/install /quiet /norestart",
+    "repairArguments": "/repair /quiet /norestart"
+  },
+  "dotNetDesktopRuntime": {
+    "displayName": ".NET 9 Desktop Runtime x64",
+    "version": "9.0.19",
+    "minimumVersion": "9.0.0",
+    "majorVersion": 9,
+    "fileName": "windowsdesktop-runtime-9-win-x64.exe",
+    "sizeBytes": 60405064,
+    "url": "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/9.0.19/windowsdesktop-runtime-9.0.19-win-x64.exe",
+    "sha256": "4bee05aa0637468a19cd82490858fc69e93fce8d22c0aeb272a76b71f0dc93e9",
+    "fallbackUrl": "https://aka.ms/dotnet/9.0/windowsdesktop-runtime-win-x64.exe",
+    "manualDownloadPage": "https://dotnet.microsoft.com/download/dotnet/9.0",
+    "silentArguments": "/install /quiet /norestart",
+    "repairArguments": "/repair /quiet /norestart"
+  },
+  "windowsAppRuntime": {
+    "displayName": "Windows App SDK 1.8 Runtime x64",
+    "version": "1.8.260710003",
+    "sdkPackageVersion": "1.8.260529003",
+    "packageName": "Microsoft.WindowsAppRuntime.1.8",
+    "mainPackageName": "MicrosoftCorporationII.WinAppRuntime.Main.1.8",
+    "packageVersion": "8000.921.1539.0",
+    "minimumVersion": "8000.879.2017.0",
+    "fileName": "windowsappruntimeinstall-x64.exe",
+    "sizeBytes": 106920248,
+    "url": "https://download.microsoft.com/download/712421b4-6f72-47fc-acb8-2ebf030b2260/WindowsAppRuntimeInstall-x64.exe",
+    "sha256": "b8cda840267ab72797f654f801f9a064ab6d9e508cedee3df79f772f104db6d6",
+    "fallbackUrl": "https://aka.ms/windowsappsdk/1.8/latest/windowsappruntimeinstall-x64.exe",
+    "manualDownloadPage": "https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads",
+    "silentArguments": "--quiet",
+    "repairArguments": "--quiet --force"
+  }
+}

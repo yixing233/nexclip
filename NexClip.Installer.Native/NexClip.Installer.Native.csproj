@@ -9,10 +9,10 @@
     <AssemblyName>NexClip_Setup</AssemblyName>
     <RootNamespace>NexClip.Installer.Native</RootNamespace>
     <ApplicationIcon>..\Assets\icon.ico</ApplicationIcon>
-    <Version>20260828.02</Version>
-    <AssemblyVersion>2026.8.28.2</AssemblyVersion>
-    <FileVersion>2026.8.28.2</FileVersion>
-    <InformationalVersion>20260828.02</InformationalVersion>
+    <Version>20260902.02</Version>
+    <AssemblyVersion>2026.9.2.2</AssemblyVersion>
+    <FileVersion>2026.9.2.2</FileVersion>
+    <InformationalVersion>20260902.02</InformationalVersion>
     
     <!-- Native AOT 纯机器码编译 -->
     <PublishAot>true</PublishAot>
@@ -23,9 +23,15 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- 运行环境依赖清单（固定下载地址 + SHA-256）由 installer\setup-dependencies.json 单点维护 -->
+    <EmbeddedResource Include="..\installer\setup-dependencies.json" LogicalName="NexClip.Installer.Native.Resources.setup-dependencies.json" />
     <EmbeddedResource Include="Resources\payload.zip" Condition="Exists('Resources\payload.zip')" />
     <EmbeddedResource Include="Resources\app_icon.png" Condition="Exists('Resources\app_icon.png')" />
     <EmbeddedResource Include="Resources\app_icon.ico" Condition="Exists('Resources\app_icon.ico')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NexClip.Installer.Native.Tests" />
   </ItemGroup>
 
 </Project>

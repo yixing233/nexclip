@@ -1,12 +1,13 @@
-# NexClip 自研 Fluent 现代安装器自动化打包脚本
+﻿# NexClip 自研 Fluent 现代安装器自动化打包脚本
 $ErrorActionPreference = "Stop"
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $root = Split-Path -Parent $PSScriptRoot
 $desktopDir = Join-Path $root "desktop"
 $installerDir = Join-Path $desktopDir "NexClip.Installer.Native"
 $resourcesDir = Join-Path $installerDir "Resources"
 $releasesDir = "e:\Code\syncclipboard-releases"
-$version = "20260828.02"
+$version = "20260902.02"
 
 Write-Host ">>> 1. 编译 NexClip.Desktop 主程序 (Release win-x64, 轻量框架依赖)..." -ForegroundColor Cyan
 $tempStaging = Join-Path ([System.IO.Path]::GetTempPath()) "NexClip_Staging_$([Guid]::NewGuid().ToString('N'))"
@@ -46,14 +47,30 @@ try {
             $rel = $_.FullName.Substring($binDir.Length).TrimStart('\', '/')
             $dest = Join-Path $tempStaging $rel
             $destParent = Split-Path $dest -Parent
-            if (!(Test-Path $destParent)) { New-Item -ItemType Directory -Path $destParent -Force | Out-Null }
-            Copy-Item $_.FullName $dest -Force
+            if (-not (Test-Path -LiteralPath $destParent)) {
+                [System.IO.Directory]::CreateDirectory($destParent) | Out-Null
+            }
+            Copy-Item -LiteralPath $_.FullName -Destination $dest -Force
         }
+    }
+
+    $requiredPayloadFiles = @("NexClip.exe", "NexClip.Tray.dll", "Svg.dll")
+    foreach ($requiredFile in $requiredPayloadFiles) {
+        $requiredPath = Join-Path $tempStaging $requiredFile
+        if (!(Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+            throw "Payload 缺少必要运行时文件: $requiredFile"
+        }
+    }
+
+    $priFiles = @(Get-ChildItem -Path $tempStaging -Filter "*.pri" -File)
+    $xbfFiles = @(Get-ChildItem -Path $tempStaging -Filter "*.xbf" -File -Recurse)
+    if ($priFiles.Count -eq 0 -or $xbfFiles.Count -eq 0) {
+        throw "Payload 缺少 WinUI 资源索引文件 (.pri/.xbf)"
     }
 
     # 压缩为 payload.zip (使用最高压缩级别)
     Write-Host ">>> 正在压缩核心 Payload 数据包..." -ForegroundColor Cyan
-    [System.IO.Compression.ZipFile]::CreateFromDirectory($tempStaging, $payloadZip, [System.IO.Compression.CompressionLevel]::SmallestSize, $false)
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($tempStaging, $payloadZip, [System.IO.Compression.CompressionLevel]::Optimal, $false)
     $zipSize = (Get-Item $payloadZip).Length
     Write-Host ">>> Payload 压缩完成，大小: $([Math]::Round($zipSize / 1MB, 2)) MB" -ForegroundColor Green
 }
@@ -63,16 +80,34 @@ finally {
     }
 }
 
-Write-Host ">>> 3. Native AOT 纯机器码编译 NexClip.Installer.Native..." -ForegroundColor Cyan
+Write-Host ">>> 3. 校验运行环境依赖清单 (固定下载地址 + SHA-256)..." -ForegroundColor Cyan
+$dependencyManifest = Join-Path $desktopDir "installer\setup-dependencies.json"
+[xml]$desktopProject = Get-Content -LiteralPath (Join-Path $desktopDir "NexClip.Desktop.csproj") -Raw -Encoding UTF8
+$sdkReference = @($desktopProject.Project.ItemGroup.PackageReference |
+    Where-Object { $_.Include -eq "Microsoft.WindowsAppSDK" })[0]
+if ($null -eq $sdkReference -or [string]::IsNullOrWhiteSpace([string]$sdkReference.Version)) {
+    throw "NexClip.Desktop.csproj 中未找到 Microsoft.WindowsAppSDK 版本引用。"
+}
+$dependencies = & (Join-Path $desktopDir "installer\resolve-setup-dependencies.ps1") `
+    -ManifestPath $dependencyManifest `
+    -WindowsAppSdkPackageVersion ([string]$sdkReference.Version)
+Write-Host ">>>   VC++       : $($dependencies.VisualCppMinimumVersion) ($([Math]::Round($dependencies.VisualCppInstallerSizeBytes / 1MB, 1)) MB)" -ForegroundColor DarkGray
+Write-Host ">>>   .NET       : $($dependencies.DotNetDesktopMinimumVersion) ($([Math]::Round($dependencies.DotNetDesktopInstallerSizeBytes / 1MB, 1)) MB)" -ForegroundColor DarkGray
+Write-Host ">>>   WinAppSDK  : $($dependencies.WindowsAppRuntimeMinimumVersion) ($([Math]::Round($dependencies.WindowsAppRuntimeInstallerSizeBytes / 1MB, 1)) MB)" -ForegroundColor DarkGray
+
+Write-Host ">>> 4. Native AOT 纯机器码编译 NexClip.Installer.Native..." -ForegroundColor Cyan
 $installerPublishDir = Join-Path $desktopDir "bin\Release\CustomInstallerNative"
 dotnet publish "$installerDir\NexClip.Installer.Native.csproj" -c Release -r win-x64 -p:PublishAot=true -o $installerPublishDir
+if ($LASTEXITCODE -ne 0) {
+    throw "安装器 Native AOT 发布失败，退出码 $LASTEXITCODE。"
+}
 
 $installerExe = Join-Path $installerPublishDir "NexClip_Setup.exe"
 if (!(Test-Path $installerExe)) {
     throw "安装器单文件输出未找到: $installerExe"
 }
 
-Write-Host ">>> 4. 归档发布安装包..." -ForegroundColor Cyan
+Write-Host ">>> 5. 归档发布安装包..." -ForegroundColor Cyan
 Get-Process | Where-Object { $_.ProcessName -like "*NexClip_Setup*" } | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 200
 if (!(Test-Path $releasesDir)) {
@@ -81,11 +116,20 @@ if (!(Test-Path $releasesDir)) {
 
 $finalInstallerName = "NexClip_Setup_v$($version)_x64.exe"
 $finalInstallerDest = Join-Path $releasesDir $finalInstallerName
-Copy-Item $installerExe $finalInstallerDest -Force
+try {
+    Copy-Item $installerExe $finalInstallerDest -Force -ErrorAction Stop
+} catch {
+    $timestamp = Get-Date -Format "yyyyMMddHHmmss"
+    $finalInstallerName = "NexClip_Setup_v$($version)_$($timestamp)_x64.exe"
+    $finalInstallerDest = Join-Path $releasesDir $finalInstallerName
+    Copy-Item $installerExe $finalInstallerDest -Force
+}
 
 $installerLocalDir = Join-Path $desktopDir "bin\Release\Installer"
 if (!(Test-Path $installerLocalDir)) { New-Item -ItemType Directory -Path $installerLocalDir | Out-Null }
-Copy-Item $installerExe (Join-Path $installerLocalDir $finalInstallerName) -Force
+try {
+    Copy-Item $installerExe (Join-Path $installerLocalDir $finalInstallerName) -Force -ErrorAction SilentlyContinue
+} catch {}
 
 $hash = (Get-FileHash $finalInstallerDest -Algorithm SHA256).Hash.ToLowerInvariant()
 $size = (Get-Item $finalInstallerDest).Length
