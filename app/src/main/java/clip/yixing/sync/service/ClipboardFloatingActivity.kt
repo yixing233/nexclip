@@ -37,7 +37,9 @@ class ClipboardFloatingActivity : Activity() {
         params.flags = params.flags or
             WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
             WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+            WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
+        params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED
         window.attributes = params
     }
 

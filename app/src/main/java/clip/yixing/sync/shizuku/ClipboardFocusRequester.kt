@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import clip.yixing.sync.service.ClipboardFloatingActivity
+import clip.yixing.sync.service.ClipboardMonitorService
 import java.util.UUID
 
 object ClipboardFocusRequester {
@@ -16,6 +17,10 @@ object ClipboardFocusRequester {
     private var pendingToken: String? = null
 
     fun request(context: Context) {
+        if (ClipboardMonitorService.isApplyingRemote || ClipboardMonitorService.isInternalCopy) {
+            Log.d(TAG, "request ignored (service is applying remote clip or internal copy)")
+            return
+        }
         val now = System.currentTimeMillis()
         if (now - lastRequestAt < REQUEST_DEBOUNCE_MILLIS) return
         lastRequestAt = now

@@ -55,9 +55,6 @@ class ClipboardMonitorService : Service() {
     private var lastLocalTime: Long = 0L
     private lateinit var clipboard: ClipboardManager
     private var push: PushClient? = null
-    @Volatile
-    private var isApplyingRemote = false
-
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -462,6 +459,9 @@ class ClipboardMonitorService : Service() {
         @Volatile
         var isInternalCopy: Boolean = false
             private set
+
+        @Volatile
+        var isApplyingRemote: Boolean = false
 
         fun sha256(s: String): String {
             val md = java.security.MessageDigest.getInstance("SHA-256")

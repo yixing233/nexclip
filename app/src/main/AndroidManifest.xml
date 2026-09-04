@@ -85,6 +85,7 @@
             android:launchMode="singleTask"
             android:noHistory="true"
             android:taskAffinity=""
+            android:windowSoftInputMode="stateUnchanged"
             android:theme="@style/ClipboardFloatingTheme" />
         <service
             android:name=".service.ClipboardMonitorService"
