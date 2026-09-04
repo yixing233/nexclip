@@ -186,7 +186,7 @@ fun AppUpdateDialog(
                     Text(
                         text = if (downloadedApkFile != null) "下载完成，点击立即安装" else (downloadBytesText.ifEmpty { "正在下载安装包..." }),
                         fontSize = 11.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceVariant
+                        color = MiuixTheme.colorScheme.onBackgroundVariant
                     )
                     if (downloadSpeed.isNotBlank()) {
                         Text(
