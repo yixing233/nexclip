@@ -59,13 +59,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.input.TextFieldState
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.Composable
@@ -1276,6 +1273,28 @@ internal fun RecordsPage(
                             }
                         }
                     },
+                    onPushText = { selected ->
+                        val url = SyncSettings.serverUrl(context)
+                        if (url.isBlank()) {
+                            scope.launch { snackbarHostState.showAppSnack("请先配置服务器", SnackType.Info) }
+                        } else {
+                            scope.launch {
+                                try {
+                                    val api = SyncApi(url, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
+                                    withContext(Dispatchers.IO) {
+                                        api.putText(
+                                            text = selected,
+                                            deviceId = SyncSettings.ensureDeviceId(context),
+                                            deviceName = SyncSettings.deviceName(context)
+                                        )
+                                    }
+                                    snackbarHostState.showAppSnack("已推送选中文本到所有设备", SnackType.Success)
+                                } catch (e: Exception) {
+                                    snackbarHostState.showAppSnack(e.message ?: "推送失败", SnackType.Error)
+                                }
+                            }
+                        }
+                    },
                     onPreviewImage = { previewImageClip = detailClip },
                     isMenuExpanded = isDetailMenuExpanded,
                     onMenuExpandedChange = { isDetailMenuExpanded = it }
@@ -1451,6 +1470,8 @@ private fun RecordDetailPage(
     onUpdateText: (String) -> Unit,
     onDelete: () -> Unit,
     onPushToAll: () -> Unit,
+    /** 把选中的片段(而非整条记录)推给其他设备,供文本选中菜单使用 */
+    onPushText: (String) -> Unit,
     onPreviewImage: () -> Unit,
     isMenuExpanded: Boolean = false,
     onMenuExpandedChange: (Boolean) -> Unit = {}
@@ -1693,31 +1714,31 @@ private fun RecordDetailPage(
                         .verticalScroll(rememberScrollState())
                         .padding(horizontal = 20.dp, vertical = 10.dp)
                 ) {
+                    // 正文改用原生 EditText / TextView 承载:只有 ActionMode.Callback
+                    // 能把自定义项排到剪切/复制之前并强制显示在浮动条上,Compose 的
+                    // 文本菜单 API 只能追加到末尾,可编辑态一定被系统项挤到 ⋮ 里
                     if (isEditing) {
-                        BasicTextField(
+                        NexClipEditableText(
                             state = editFieldState,
-                            textStyle = MiuixTheme.textStyles.body1.copy(
-                                fontSize = 16.sp,
-                                lineHeight = 24.sp,
-                                color = MiuixTheme.colorScheme.onSurface
-                            ),
-                            cursorBrush = SolidColor(MiuixTheme.colorScheme.primary),
+                            textColor = MiuixTheme.colorScheme.onSurface,
+                            highlightColor = MiuixTheme.colorScheme.primary.copy(alpha = 0.3f),
+                            fontSize = 16.sp,
+                            lineHeight = 24.sp,
+                            onPushText = onPushText,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .focusRequester(editFocusRequester)
                         )
                     } else {
-                        SelectionContainer {
-                            Text(
-                                text = clip.text,
-                                style = MiuixTheme.textStyles.body1.copy(
-                                    fontSize = 16.sp,
-                                    lineHeight = 24.sp,
-                                    color = MiuixTheme.colorScheme.onSurface
-                                ),
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        }
+                        NexClipSelectableText(
+                            text = clip.text,
+                            textColor = MiuixTheme.colorScheme.onSurface,
+                            highlightColor = MiuixTheme.colorScheme.primary.copy(alpha = 0.3f),
+                            fontSize = 16.sp,
+                            lineHeight = 24.sp,
+                            onPushText = onPushText,
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                 }
             }
