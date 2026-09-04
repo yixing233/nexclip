@@ -590,60 +590,52 @@ class ClipboardMonitorService : Service() {
                 ) + captured.value
             }
 
-            persist(context, list)
-            captured.value = list
+            captured.value = persist(context, list)
         }
 
         fun toggleFavorite(context: Context, clip: CapturedClip) {
             val list = captured.value.map {
                 if (it == clip || it.id == clip.id) it.copy(isFavorite = !it.isFavorite) else it
             }
-            persist(context, list)
-            captured.value = list
+            captured.value = persist(context, list)
         }
 
         fun updateClip(context: Context, oldClip: CapturedClip, newText: String) {
             val list = captured.value.map {
                 if (it == oldClip || it.id == oldClip.id) it.copy(text = newText) else it
             }
-            persist(context, list)
-            captured.value = list
+            captured.value = persist(context, list)
         }
 
         fun deleteAt(context: Context, index: Int) {
             val list = captured.value.toMutableList()
             if (index !in list.indices) return
             list.removeAt(index)
-            persist(context, list)
-            captured.value = list
+            captured.value = persist(context, list)
         }
 
         fun deleteClip(context: Context, clip: CapturedClip) {
             val list = captured.value.filterNot { it == clip || it.id == clip.id }
-            persist(context, list)
-            captured.value = list
+            captured.value = persist(context, list)
         }
 
         fun deleteClips(context: Context, targetClips: Collection<CapturedClip>) {
             val ids = targetClips.map { it.id }.toSet()
             val list = captured.value.filterNot { it.id in ids }
-            persist(context, list)
-            captured.value = list
+            captured.value = persist(context, list)
         }
 
         /** 清空记录(支持保留收藏项) */
         fun clearAll(context: Context, keepFavorites: Boolean = true) {
             val list = if (keepFavorites) captured.value.filter { it.isFavorite } else emptyList()
-            persist(context, list)
-            captured.value = list
+            captured.value = persist(context, list)
         }
 
         fun clear(context: Context) = clearAll(context, true)
 
         /** 恢复整份记录(撤销清空) */
         fun replaceAll(context: Context, list: List<CapturedClip>) {
-            persist(context, list)
-            captured.value = list
+            captured.value = persist(context, list)
         }
 
         /** 写回本机剪贴板并移到最新 */
@@ -655,8 +647,7 @@ class ClipboardMonitorService : Service() {
             val list = captured.value.toMutableList()
             val safeIndex = index.coerceIn(0, list.size)
             list.add(safeIndex, clip)
-            persist(context, list)
-            captured.value = list
+            captured.value = persist(context, list)
         }
 
         /** 导出为备份 JSON 字符串 */
@@ -713,8 +704,7 @@ class ClipboardMonitorService : Service() {
 
             val current = captured.value
             val combined = (importedList + current).distinctBy { it.id }.sortedByDescending { it.time }
-            persist(context, combined)
-            captured.value = combined
+            captured.value = persist(context, combined)
             return importedList.size
         }
 
@@ -745,7 +735,14 @@ class ClipboardMonitorService : Service() {
             captured.value = list
         }
 
-        private fun persist(context: Context, list: List<CapturedClip>) {
+        /**
+         * 落盘并返回真正被保存下来的列表(已按「记录上限」裁剪、去重、按时间倒序)。
+         *
+         * 调用方必须用返回值回写 [captured],否则内存里的列表会比磁盘上的长
+         * (例如上限 100 时内存停在 101),重启后又突然变短,并导致记录页触底分页
+         * 永远差最后一条而一直显示"正在加载更多"。
+         */
+        private fun persist(context: Context, list: List<CapturedClip>): List<CapturedClip> {
             val maxHistory = SyncSettings.maxHistory(context)
             val favorites = list.filter { it.isFavorite }
             val nonFavorites = list.filterNot { it.isFavorite }.take(maxHistory)
@@ -768,6 +765,7 @@ class ClipboardMonitorService : Service() {
             }
             context.getSharedPreferences(PREFS_CAPTURED, Context.MODE_PRIVATE)
                 .edit().putString("clips", arr.toString()).apply()
+            return toSave
         }
 
         fun updateMonitoringState(context: Context) {

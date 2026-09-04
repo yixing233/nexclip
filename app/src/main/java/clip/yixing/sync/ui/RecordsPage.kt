@@ -442,17 +442,21 @@ internal fun RecordsPage(
 
     val listState = rememberLazyListState()
 
-    val shouldLoadMore by remember {
+    // 仅判断「是否已滚动到接近列表末尾」。derivedStateOf 里只读 listState 这个稳定对象:
+    // 不要把 filteredList 这类普通 List 闭包进来 —— remember 无 key 时只创建一次,
+    // 会永久捕获首次组合时的列表快照,之后记录增减它仍拿旧长度比较,触底加载会永久失效。
+    val isNearListEnd by remember {
         derivedStateOf {
             val layoutInfo = listState.layoutInfo
             val totalItems = layoutInfo.totalItemsCount
-            val lastVisibleItemIndex = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            totalItems > 0 && lastVisibleItemIndex >= totalItems - 3 && displayLimit < filteredList.size
+            totalItems > 0 && (layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= totalItems - 3
         }
     }
 
-    LaunchedEffect(shouldLoadMore) {
-        if (shouldLoadMore) {
+    // 把列表长度和已放行数量一起作为 key:长度变化或刚放行一页后都会重新执行,
+    // 避免布尔量长期停在 true 时 LaunchedEffect 不再重启而卡住分页。
+    LaunchedEffect(isNearListEnd, filteredList.size, displayLimit) {
+        if (isNearListEnd && displayLimit < filteredList.size) {
             displayLimit = (displayLimit + PAGE_SIZE).coerceAtMost(filteredList.size)
         }
     }
