@@ -39,20 +39,20 @@ interface ReleaseData {
 }
 
 const defaultReleaseInfo: ReleaseData = {
-  version: 'v20260901.01',
+  version: 'v20260904.01',
   windows: {
-    filename: 'NexClip_Setup_v20260901.01_x64.exe',
-    size: '18.3 MB',
-    serverUrl: '/releases/NexClip_Setup_v20260901.01_x64.exe',
-    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260901.01/NexClip_Setup_v20260901.01_x64.exe',
-    sha256: '8fb9e32c586a7538a7bad5d93b386afa9f25f0795f77d236b55cbfb1930bb4ad',
+    filename: 'NexClip_Setup_v20260904.01_x64.exe',
+    size: '18.9 MB',
+    serverUrl: '/releases/NexClip_Setup_v20260904.01_x64.exe',
+    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260904.01/NexClip_Setup_v20260904.01_x64.exe',
+    sha256: '412a08466a40514320cf229f11a8762f2e5334ba7ae9057024d760e4c09dc9ec',
   },
   android: {
-    filename: 'NexClip_v20260901.01_Android.apk',
+    filename: 'NexClip_v20260904.01_Android.apk',
     size: '15.3 MB',
-    serverUrl: '/releases/NexClip_v20260901.01_Android.apk',
-    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260901.01/NexClip_v20260901.01_Android.apk',
-    sha256: 'a8b42c9776c4129dca043c641fcbd5631d3af0c5257f5d6d7811a075c2289083',
+    serverUrl: '/releases/NexClip_v20260904.01_Android.apk',
+    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260904.01/NexClip_v20260904.01_Android.apk',
+    sha256: '60c8822b698caaa7a0682ad8ddd607faf123f637b107a11d5ebb022c3b869964',
   },
 }
 
