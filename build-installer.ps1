@@ -7,7 +7,7 @@ $desktopDir = Join-Path $root "desktop"
 $installerDir = Join-Path $desktopDir "NexClip.Installer.Native"
 $resourcesDir = Join-Path $installerDir "Resources"
 $releasesDir = "e:\Code\syncclipboard-releases"
-$version = "20260904.02"
+$version = "20260905.01"
 
 # Native AOT 的链接步骤依赖 vswhere.exe 定位 MSVC link.exe。
 # VS 开发者命令行会自带,普通 PowerShell 里不在 PATH 上,链接会以 exit 123 失败,

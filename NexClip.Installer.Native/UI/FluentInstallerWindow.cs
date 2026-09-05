@@ -31,7 +31,7 @@ public enum DepState
 
 public class FluentInstallerWindow
 {
-    private const string InstallerVersion = "20260904.02";
+    private const string InstallerVersion = "20260905.01";
     private const uint AnimationTimerId = 1;
 
     private IntPtr _hwnd;

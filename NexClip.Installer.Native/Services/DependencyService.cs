@@ -46,7 +46,7 @@ internal static class DependencyService
 
         // 单次请求不再设置总超时，改由连接超时与停滞超时精细控制，避免大文件被强行中断
         var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("NexClip-Installer/20260904.02");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("NexClip-Installer/20260905.01");
         return client;
     }
 
