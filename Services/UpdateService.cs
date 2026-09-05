@@ -36,6 +36,9 @@ public class UpdateService
 
     public const string ServerDirectBaseUrl = "https://nexclip.157342.xyz/releases";
 
+    private const string GitHubReleasesApi = "https://api.github.com/repos/yixing233/nexclip/releases";
+    private const string DefaultReleasesPage = "https://github.com/yixing233/nexclip/releases";
+
     public async Task<UpdateCheckResult> CheckForUpdateAsync(string currentVersion, string updateSource = "github", string? customServerUrl = null)
     {
         bool isDirect = string.Equals(updateSource, "direct", StringComparison.OrdinalIgnoreCase);
@@ -89,43 +92,43 @@ public class UpdateService
             using var response = await _httpClient.SendAsync(request);
             if (!response.IsSuccessStatusCode)
             {
-                return new UpdateCheckResult(false, false, currentVersion, "", "", "", "", null, null, null, $"HTTP {(int)response.StatusCode}");
+                return Failure(currentVersion, $"HTTP {(int)response.StatusCode}");
             }
 
             var json = await response.Content.ReadAsStringAsync();
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
 
-            var tagName = root.TryGetProperty("tag_name", out var tagElem) ? tagElem.GetString() ?? "" :
-                          (root.TryGetProperty("version", out var verElem) ? verElem.GetString() ?? "" : "");
+            // windows 段优先，缺字段才回落顶层：顶层版本号是两端共用的，
+            // 只发布 Android 的版本不应该把桌面端也顶成"有新版本"。
+            JsonElement? platform =
+                root.TryGetProperty("windows", out var winElem) && winElem.ValueKind == JsonValueKind.Object
+                    ? winElem
+                    : null;
+
+            var tagName = ReadString(platform, root, "tag_name", "version") ?? "";
             var cleanLatest = tagName.TrimStart('v', 'V').Trim();
             var cleanCurrent = currentVersion.TrimStart('v', 'V').Trim();
 
-            var title = root.TryGetProperty("name", out var nameElem) ? nameElem.GetString() ?? "" : $"NexClip v{cleanLatest}";
-            var body = root.TryGetProperty("body", out var bodyElem) ? bodyElem.GetString() ?? "" : "";
-            var htmlUrl = root.TryGetProperty("html_url", out var urlElem) ? urlElem.GetString() ?? "https://github.com/yixing233/nexclip/releases" : "https://github.com/yixing233/nexclip/releases";
+            var title = ReadString(platform, root, "name") ?? $"NexClip v{cleanLatest}";
+            var body = ReadString(platform, root, "body") ?? "";
+            var htmlUrl = ReadString(platform, root, "html_url") ?? DefaultReleasesPage;
 
             string? downloadUrl = null;
             string? sha256 = null;
             long? fileSize = null;
 
-            if (root.TryGetProperty("windows", out var winElem) && winElem.ValueKind == JsonValueKind.Object)
+            if (platform is { } windows)
             {
-                if (winElem.TryGetProperty("url", out var winUrlElem))
+                downloadUrl = ReadString(windows, "url");
+                if (downloadUrl is null && ReadString(windows, "filename") is { } fileName)
                 {
-                    downloadUrl = winUrlElem.GetString();
-                }
-                else if (winElem.TryGetProperty("filename", out var fnElem))
-                {
-                    downloadUrl = $"{baseUrl}/{fnElem.GetString()}";
+                    downloadUrl = $"{baseUrl}/{fileName}";
                 }
 
-                if (winElem.TryGetProperty("sha256", out var shaValElem))
-                {
-                    sha256 = shaValElem.GetString();
-                }
+                sha256 = ReadString(windows, "sha256");
 
-                if (winElem.TryGetProperty("size", out var szElem) && szElem.TryGetInt64(out var szVal))
+                if (windows.TryGetProperty("size", out var szElem) && szElem.TryGetInt64(out var szVal))
                 {
                     fileSize = szVal;
                 }
@@ -150,100 +153,183 @@ public class UpdateService
         }
         catch (Exception ex)
         {
-            return new UpdateCheckResult(false, false, currentVersion, "", "", "", "", null, null, null, ex.Message);
+            return Failure(currentVersion, ex.Message);
         }
     }
 
+    private static UpdateCheckResult Failure(string currentVersion, string error) =>
+        new(false, false, currentVersion, "", "", "", "", null, null, null, error);
+
+    /// <summary>取非空字符串字段；空串与空白视为缺失，好让平台段里的占位值自动回落。</summary>
+    private static string? ReadString(JsonElement element, string name) =>
+        element.ValueKind == JsonValueKind.Object &&
+        element.TryGetProperty(name, out var value) &&
+        value.ValueKind == JsonValueKind.String &&
+        !string.IsNullOrWhiteSpace(value.GetString())
+            ? value.GetString()
+            : null;
+
+    /// <summary>先在平台段里按顺序找，再在顶层按同样顺序找。</summary>
+    private static string? ReadString(JsonElement? platform, JsonElement root, params string[] names)
+    {
+        if (platform is { } element)
+        {
+            foreach (var name in names)
+            {
+                if (ReadString(element, name) is { } value) return value;
+            }
+        }
+
+        foreach (var name in names)
+        {
+            if (ReadString(root, name) is { } value) return value;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// GitHub 通道。先在发布列表里找"最新一个挂了 Windows 安装包的发布"，而不是直接用 /releases/latest：
+    /// 后者是两端共用的单一指针，只发 Android 的版本会把它顶走，
+    /// 桌面端照它比版本号就会提示一个根本没有 exe 可下的新版本。
+    /// </summary>
     private async Task<UpdateCheckResult> CheckGitHubAsync(string currentVersion, bool useDirectDownload)
     {
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/yixing233/nexclip/releases/latest");
-            request.Headers.UserAgent.Add(new ProductInfoHeaderValue("NexClip-Windows", "1.0"));
-            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github.v3+json"));
-
-            using var response = await _httpClient.SendAsync(request);
-            if (!response.IsSuccessStatusCode)
+            var (list, listError) = await ReadGitHubJsonAsync($"{GitHubReleasesApi}?per_page=20");
+            if (list is not null)
             {
-                return new UpdateCheckResult(false, false, currentVersion, "", "", "", "", null, null, null, $"HTTP {(int)response.StatusCode}");
-            }
-
-            var json = await response.Content.ReadAsStringAsync();
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            var tagName = root.TryGetProperty("tag_name", out var tagElem) ? tagElem.GetString() ?? "" : "";
-            var cleanLatest = tagName.TrimStart('v', 'V').Trim();
-            var cleanCurrent = currentVersion.TrimStart('v', 'V').Trim();
-
-            var title = root.TryGetProperty("name", out var nameElem) ? nameElem.GetString() ?? "" : "";
-            var body = root.TryGetProperty("body", out var bodyElem) ? bodyElem.GetString() ?? "" : "";
-            var htmlUrl = root.TryGetProperty("html_url", out var urlElem) ? urlElem.GetString() ?? "https://github.com/yixing233/nexclip/releases" : "https://github.com/yixing233/nexclip/releases";
-
-            string? downloadUrl = null;
-            string? assetFileName = null;
-            string? fallbackExeUrl = null;
-            long? fileSize = null;
-
-            if (root.TryGetProperty("assets", out var assetsElem) && assetsElem.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var asset in assetsElem.EnumerateArray())
+                using (list)
                 {
-                    if (asset.TryGetProperty("name", out var assetNameElem) &&
-                        asset.TryGetProperty("browser_download_url", out var downloadElem))
+                    if (list.RootElement.ValueKind == JsonValueKind.Array)
                     {
-                        var assetName = assetNameElem.GetString() ?? "";
-                        if (assetName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                        foreach (var release in list.RootElement.EnumerateArray())
                         {
-                            if (assetName.Contains("Setup", StringComparison.OrdinalIgnoreCase) ||
-                                assetName.Contains("Installer", StringComparison.OrdinalIgnoreCase))
-                            {
-                                downloadUrl = downloadElem.GetString();
-                                assetFileName = assetName;
-                                if (asset.TryGetProperty("size", out var szElem) && szElem.TryGetInt64(out var szVal))
-                                {
-                                    fileSize = szVal;
-                                }
-                                break;
-                            }
-                            fallbackExeUrl ??= downloadElem.GetString();
-                            assetFileName ??= assetName;
-                            if (asset.TryGetProperty("size", out var fbSzElem) && fbSzElem.TryGetInt64(out var fbSzVal))
-                            {
-                                fileSize = fbSzVal;
-                            }
+                            if (IsDraft(release)) continue;
+
+                            var candidate = BuildGitHubResult(release, currentVersion, useDirectDownload, out var hasInstaller);
+                            if (hasInstaller) return candidate;
                         }
                     }
                 }
-                downloadUrl ??= fallbackExeUrl;
             }
 
-            // 如果指定了直连加速，将 GitHub 下载链接重定向到服务端直连
-            if (useDirectDownload && !string.IsNullOrWhiteSpace(assetFileName))
+            // 列表不可用（限流/网络/返回结构变化）就退回旧路径，行为与改动前一致
+            var (latest, latestError) = await ReadGitHubJsonAsync($"{GitHubReleasesApi}/latest");
+            if (latest is null)
             {
-                downloadUrl = $"{ServerDirectBaseUrl}/{assetFileName}";
+                return Failure(currentVersion, latestError ?? listError ?? "无法获取发布信息");
             }
 
-            bool hasUpdate = CompareVersions(cleanLatest, cleanCurrent) > 0;
-
-            return new UpdateCheckResult(
-                Success: true,
-                HasUpdate: hasUpdate,
-                CurrentVersion: currentVersion,
-                LatestVersion: cleanLatest,
-                ReleaseTitle: title,
-                ReleaseNotes: body,
-                ReleaseUrl: htmlUrl,
-                DownloadUrl: downloadUrl,
-                Sha256: null,
-                FileSize: fileSize,
-                ErrorMessage: null
-            );
+            using (latest)
+            {
+                return BuildGitHubResult(latest.RootElement, currentVersion, useDirectDownload, out _);
+            }
         }
         catch (Exception ex)
         {
-            return new UpdateCheckResult(false, false, currentVersion, "", "", "", "", null, null, null, ex.Message);
+            return Failure(currentVersion, ex.Message);
         }
+    }
+
+    private static async Task<(JsonDocument? Document, string? Error)> ReadGitHubJsonAsync(string url)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.UserAgent.Add(new ProductInfoHeaderValue("NexClip-Windows", "1.0"));
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github.v3+json"));
+
+        using var response = await _httpClient.SendAsync(request);
+        if (!response.IsSuccessStatusCode)
+        {
+            return (null, $"HTTP {(int)response.StatusCode}");
+        }
+
+        var json = await response.Content.ReadAsStringAsync();
+        return (JsonDocument.Parse(json), null);
+    }
+
+    private static bool IsDraft(JsonElement release) =>
+        release.TryGetProperty("draft", out var draft) && draft.ValueKind == JsonValueKind.True;
+
+    /// <summary>
+    /// 解析单个 GitHub release。<paramref name="hasInstaller"/> 表示它是否真的挂了 Windows 安装包，
+    /// 调用方靠它跳过"只发 Android"的版本。
+    /// </summary>
+    private static UpdateCheckResult BuildGitHubResult(
+        JsonElement release, string currentVersion, bool useDirectDownload, out bool hasInstaller)
+    {
+        var tagName = ReadString(release, "tag_name") ?? "";
+        var cleanLatest = tagName.TrimStart('v', 'V').Trim();
+        var cleanCurrent = currentVersion.TrimStart('v', 'V').Trim();
+
+        var title = ReadString(release, "name") ?? "";
+        var body = ReadString(release, "body") ?? "";
+        var htmlUrl = ReadString(release, "html_url") ?? DefaultReleasesPage;
+
+        string? downloadUrl = null;
+        string? assetFileName = null;
+        long? fileSize = null;
+        string? fallbackUrl = null;
+        string? fallbackName = null;
+        long? fallbackSize = null;
+
+        if (release.TryGetProperty("assets", out var assetsElem) && assetsElem.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var asset in assetsElem.EnumerateArray())
+            {
+                var assetName = ReadString(asset, "name");
+                var assetUrl = ReadString(asset, "browser_download_url");
+                if (assetName is null || assetUrl is null) continue;
+                if (!assetName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) continue;
+
+                var size = asset.TryGetProperty("size", out var szElem) && szElem.TryGetInt64(out var szVal)
+                    ? szVal
+                    : (long?)null;
+
+                if (assetName.Contains("Setup", StringComparison.OrdinalIgnoreCase) ||
+                    assetName.Contains("Installer", StringComparison.OrdinalIgnoreCase))
+                {
+                    downloadUrl = assetUrl;
+                    assetFileName = assetName;
+                    fileSize = size;
+                    break;
+                }
+
+                fallbackUrl ??= assetUrl;
+                fallbackName ??= assetName;
+                fallbackSize ??= size;
+            }
+
+            if (downloadUrl is null)
+            {
+                downloadUrl = fallbackUrl;
+                assetFileName = fallbackName;
+                fileSize = fallbackSize;
+            }
+        }
+
+        hasInstaller = downloadUrl is not null;
+
+        // 指定了直连加速，就把 GitHub 下载链接换成服务端上的同名文件
+        if (useDirectDownload && !string.IsNullOrWhiteSpace(assetFileName))
+        {
+            downloadUrl = $"{ServerDirectBaseUrl}/{assetFileName}";
+        }
+
+        return new UpdateCheckResult(
+            Success: true,
+            HasUpdate: CompareVersions(cleanLatest, cleanCurrent) > 0,
+            CurrentVersion: currentVersion,
+            LatestVersion: cleanLatest,
+            ReleaseTitle: title,
+            ReleaseNotes: body,
+            ReleaseUrl: htmlUrl,
+            DownloadUrl: downloadUrl,
+            Sha256: null,
+            FileSize: fileSize,
+            ErrorMessage: null
+        );
     }
 
     /// <summary>
