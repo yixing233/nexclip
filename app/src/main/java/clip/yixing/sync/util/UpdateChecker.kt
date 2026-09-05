@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -31,6 +32,9 @@ data class UpdateInfo(
 
 object UpdateChecker {
     const val SERVER_DIRECT_BASE_URL = "https://nexclip.157342.xyz/releases"
+
+    private const val GITHUB_RELEASES_API = "https://api.github.com/repos/yixing233/nexclip/releases"
+    private const val DEFAULT_RELEASES_PAGE = "https://github.com/yixing233/nexclip/releases"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -88,25 +92,26 @@ object UpdateChecker {
             val bodyStr = response.body?.string() ?: throw Exception("返回内容为空")
             val json = JSONObject(bodyStr)
 
-            val tagName = json.optString("tag_name", "").ifEmpty { json.optString("version", "") }.trim()
+            // android 段优先，缺字段才回落顶层：顶层版本号是两端共用的，
+            // 只发布 Windows 的版本不应该把 Android 也顶成「有新版本」。
+            val platform = json.optJSONObject("android")
+
+            val tagName = readString(platform, json, "tag_name", "version") ?: ""
             val cleanLatest = tagName.removePrefix("v").removePrefix("V").trim()
             val cleanCurrent = currentVersion.removePrefix("v").removePrefix("V").trim()
 
-            val title = json.optString("name", "NexClip v$cleanLatest")
-            val body = json.optString("body", "")
-            val htmlUrl = json.optString("html_url", "https://github.com/yixing233/nexclip/releases")
+            val title = readString(platform, json, "name") ?: "NexClip v$cleanLatest"
+            val body = readString(platform, json, "body") ?: ""
+            val htmlUrl = readString(platform, json, "html_url") ?: DEFAULT_RELEASES_PAGE
 
             var downloadUrl: String? = null
             var sha256: String? = null
             var fileSize: Long? = null
-            val androidObj = json.optJSONObject("android")
-            if (androidObj != null) {
-                downloadUrl = androidObj.optString("url", "").ifEmpty {
-                    val fn = androidObj.optString("filename", "")
-                    if (fn.isNotBlank()) "$baseUrl/$fn" else null
-                }
-                sha256 = androidObj.optString("sha256", "").takeIf { it.isNotBlank() }
-                fileSize = androidObj.optLong("size", 0L).takeIf { it > 0 }
+            if (platform != null) {
+                downloadUrl = readString(platform, "url")
+                    ?: readString(platform, "filename")?.let { "$baseUrl/$it" }
+                sha256 = readString(platform, "sha256")
+                fileSize = platform.optLong("size", 0L).takeIf { it > 0 }
             }
             if (downloadUrl.isNullOrBlank()) {
                 downloadUrl = "$baseUrl/NexClip_v${cleanLatest}_Android.apk"
@@ -129,66 +134,100 @@ object UpdateChecker {
         }
     }
 
+    /**
+     * GitHub 通道。先在发布列表里找「最新一个挂了 APK 的发布」，而不是直接用 /releases/latest：
+     * 后者是两端共用的单一指针，只发 Windows 的版本会把它顶走，
+     * Android 照它比版本号就会提示一个根本没有 APK 可下的新版本。
+     */
     private fun checkGitHub(currentVersion: String, useDirectDownload: Boolean): Result<UpdateInfo> {
         return runCatching {
-            val request = Request.Builder()
-                .url("https://api.github.com/repos/yixing233/nexclip/releases/latest")
-                .header("User-Agent", "NexClip-Android")
-                .header("Accept", "application/vnd.github.v3+json")
-                .build()
-
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) {
-                throw Exception("HTTP ${response.code}")
-            }
-
-            val bodyStr = response.body?.string() ?: throw Exception("返回内容为空")
-            val json = JSONObject(bodyStr)
-
-            val tagName = json.optString("tag_name", "").trim()
-            val cleanLatest = tagName.removePrefix("v").removePrefix("V").trim()
-            val cleanCurrent = currentVersion.removePrefix("v").removePrefix("V").trim()
-
-            val title = json.optString("name", "")
-            val body = json.optString("body", "")
-            val htmlUrl = json.optString("html_url", "https://github.com/yixing233/nexclip/releases")
-
-            var downloadUrl: String? = null
-            var assetFileName: String? = null
-            var fileSize: Long? = null
-            val assets = json.optJSONArray("assets")
-            if (assets != null) {
-                for (i in 0 until assets.length()) {
-                    val asset = assets.optJSONObject(i) ?: continue
-                    val name = asset.optString("name", "")
-                    if (name.endsWith(".apk", ignoreCase = true)) {
-                        downloadUrl = asset.optString("browser_download_url")
-                        assetFileName = name
-                        fileSize = asset.optLong("size", 0L).takeIf { it > 0 }
-                        break
-                    }
+            val list = runCatching { JSONArray(readGitHubJson("$GITHUB_RELEASES_API?per_page=20")) }.getOrNull()
+            if (list != null) {
+                for (i in 0 until list.length()) {
+                    val release = list.optJSONObject(i) ?: continue
+                    if (release.optBoolean("draft", false)) continue
+                    if (findApkAsset(release) == null) continue
+                    return@runCatching buildGitHubInfo(release, currentVersion, useDirectDownload)
                 }
             }
 
-            if (useDirectDownload && !assetFileName.isNullOrBlank()) {
-                downloadUrl = "$SERVER_DIRECT_BASE_URL/$assetFileName"
-            }
-
-            val hasUpdate = compareVersions(cleanLatest, cleanCurrent) > 0
-
-            UpdateInfo(
-                hasUpdate = hasUpdate,
-                currentVersion = currentVersion,
-                latestVersion = cleanLatest,
-                releaseTitle = title,
-                releaseNotes = body,
-                releaseUrl = htmlUrl,
-                downloadUrl = downloadUrl,
-                isDirectSource = useDirectDownload,
-                sha256 = null,
-                fileSize = fileSize
+            // 列表不可用（限流/网络/返回结构变化）就退回旧路径，行为与改动前一致
+            buildGitHubInfo(
+                JSONObject(readGitHubJson("$GITHUB_RELEASES_API/latest")),
+                currentVersion,
+                useDirectDownload
             )
         }
+    }
+
+    private fun readGitHubJson(url: String): String {
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", "NexClip-Android")
+            .header("Accept", "application/vnd.github.v3+json")
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw Exception("HTTP ${response.code}")
+            }
+            return response.body?.string() ?: throw Exception("返回内容为空")
+        }
+    }
+
+    /** 取出 release 里的 APK 资产；没有就返回 null，调用方靠它跳过「只发 Windows」的版本。 */
+    private fun findApkAsset(release: JSONObject): JSONObject? {
+        val assets = release.optJSONArray("assets") ?: return null
+        for (i in 0 until assets.length()) {
+            val asset = assets.optJSONObject(i) ?: continue
+            if (asset.optString("name", "").endsWith(".apk", ignoreCase = true)) {
+                return asset
+            }
+        }
+        return null
+    }
+
+    private fun buildGitHubInfo(
+        release: JSONObject,
+        currentVersion: String,
+        useDirectDownload: Boolean
+    ): UpdateInfo {
+        val tagName = readString(release, "tag_name") ?: ""
+        val cleanLatest = tagName.removePrefix("v").removePrefix("V").trim()
+        val cleanCurrent = currentVersion.removePrefix("v").removePrefix("V").trim()
+
+        val asset = findApkAsset(release)
+        val assetFileName = asset?.let { readString(it, "name") }
+        var downloadUrl = asset?.let { readString(it, "browser_download_url") }
+        val fileSize = asset?.optLong("size", 0L)?.takeIf { it > 0 }
+
+        if (useDirectDownload && !assetFileName.isNullOrBlank()) {
+            downloadUrl = "$SERVER_DIRECT_BASE_URL/$assetFileName"
+        }
+
+        return UpdateInfo(
+            hasUpdate = compareVersions(cleanLatest, cleanCurrent) > 0,
+            currentVersion = currentVersion,
+            latestVersion = cleanLatest,
+            releaseTitle = readString(release, "name") ?: "",
+            releaseNotes = readString(release, "body") ?: "",
+            releaseUrl = readString(release, "html_url") ?: DEFAULT_RELEASES_PAGE,
+            downloadUrl = downloadUrl,
+            isDirectSource = useDirectDownload,
+            sha256 = null,
+            fileSize = fileSize
+        )
+    }
+
+    /** 取非空字符串字段；空串与空白视为缺失，好让平台段里的占位值自动回落。 */
+    private fun readString(json: JSONObject?, name: String): String? =
+        json?.optString(name)?.trim()?.takeIf { it.isNotEmpty() }
+
+    /** 先在平台段里按顺序找，再在顶层按同样顺序找。 */
+    private fun readString(platform: JSONObject?, root: JSONObject, vararg names: String): String? {
+        names.forEach { name -> readString(platform, name)?.let { return it } }
+        names.forEach { name -> readString(root, name)?.let { return it } }
+        return null
     }
 
     /**
