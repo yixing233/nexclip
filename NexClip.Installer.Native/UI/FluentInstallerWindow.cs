@@ -839,8 +839,16 @@ public class FluentInstallerWindow
                 // 2. 进程检查与释放 (25% -> 32%)
                 _targetProgress = 0.26;
                 _statusText = "正在检查并释放后台运行中的旧版本进程...";
-                await ProcessHelper.TerminateRunningInstancesAsync(_operationCancellation.Token);
-                
+                var survivors = await ProcessHelper.TerminateRunningInstancesAsync(
+                    _installDir, _operationCancellation.Token);
+                if (survivors.Count > 0)
+                {
+                    // 结束不掉也不必中止：PayloadService 会退回逐文件覆盖
+                    SetupLog.Write($"以下进程未能结束，将改用逐文件覆盖：{string.Join("、", survivors)}");
+                    _statusText = $"以下进程仍在运行，改用逐文件覆盖：{string.Join("、", survivors)}";
+                    await Task.Delay(600);
+                }
+
                 _targetProgress = 0.32;
                 _statusText = "正在准备安装目录与工作区...";
                 await Task.Delay(150);
@@ -904,12 +912,18 @@ public class FluentInstallerWindow
                 StopAnimationTimer();
                 var logPath = Path.Combine(Path.GetTempPath(), "nexclip_install_error.log");
                 try { File.WriteAllText(logPath, ex.ToString()); } catch { }
+                SetupLog.Write($"安装失败：{ex}");
+
+                // 文件占用是覆盖安装最常见的失败原因，把下一步动作写清楚，别让用户猜
+                var hint = ex is IOException or UnauthorizedAccessException
+                    ? "\n\n安装目录中的文件仍被占用。请退出 NexClip（包括托盘图标），关闭正停留在安装目录的资源管理器窗口，或重启电脑后重试。"
+                    : string.Empty;
 
                 _statusText = $"安装遇到错误: {ex.Message}";
                 _state = PageState.Welcome;
                 Invalidate();
 
-                NativeMethods.MessageBoxW(_hwnd, $"安装过程中遇到错误:\n{ex.Message}\n\n详细信息已记录至:\n{logPath}", "NexClip 安装失败", 0x10);
+                NativeMethods.MessageBoxW(_hwnd, $"安装过程中遇到错误:\n{ex.Message}{hint}\n\n详细信息已记录至:\n{logPath}", "NexClip 安装失败", 0x10);
             }
             finally
             {
@@ -1033,7 +1047,7 @@ public class FluentInstallerWindow
             {
                 _targetProgress = 0.30;
                 _statusText = "正在结束后台进程...";
-                await ProcessHelper.TerminateRunningInstancesAsync(_operationCancellation.Token);
+                await ProcessHelper.TerminateRunningInstancesAsync(_installDir, _operationCancellation.Token);
 
                 _targetProgress = 0.60;
                 _statusText = "正在清理系统快捷方式与注册表...";

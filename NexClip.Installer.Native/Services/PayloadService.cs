@@ -3,6 +3,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Reflection;
 using System.Threading.Tasks;
+using NexClip.Installer.Native.Win32;
 
 namespace NexClip.Installer.Native.Services;
 
@@ -170,6 +171,9 @@ public static class PayloadService
         }
     }
 
+    /// <summary>整目录改名的重试次数，间隔按 250ms × 次数递增。</summary>
+    private const int MoveAttempts = 6;
+
     internal static async Task InstallPayloadWithRollbackAsync(
         string destination,
         Action<double, string> onProgress,
@@ -190,32 +194,88 @@ public static class PayloadService
             ValidateDirectoryPayload(staging);
             cancellationToken.ThrowIfCancellationRequested();
 
-            var hadDestination = Directory.Exists(fullDestination);
-            if (hadDestination)
+            // 上一次安装失败可能留下改名让位的旧文件，先清掉再开始
+            PurgeAbandonedFiles(fullDestination);
+
+            if (!Directory.Exists(fullDestination))
             {
-                Directory.Move(fullDestination, backup);
+                await MoveDirectoryAsync(staging, fullDestination, cancellationToken).ConfigureAwait(false);
+                return;
             }
 
-            try
+            // 首选整目录改名：旧版本一次性让位，失败可原样搬回，最干净。
+            // 但只要还有进程把安装目录当成当前工作目录（或在里面开着文件），
+            // 改名就会 ERROR_SHARING_VIOLATION —— 目录句柄不带 FILE_SHARE_DELETE。
+            if (await TryMoveDirectoryAsync(fullDestination, backup, cancellationToken).ConfigureAwait(false))
             {
-                Directory.Move(staging, fullDestination);
-            }
-            catch
-            {
-                if (hadDestination && Directory.Exists(backup) && !Directory.Exists(fullDestination))
+                try
                 {
-                    Directory.Move(backup, fullDestination);
+                    await MoveDirectoryAsync(staging, fullDestination, cancellationToken).ConfigureAwait(false);
                 }
-                throw;
+                catch
+                {
+                    if (Directory.Exists(backup) && !Directory.Exists(fullDestination))
+                    {
+                        try { Directory.Move(backup, fullDestination); } catch { }
+                    }
+                    throw;
+                }
+
+                TryDeleteDirectory(backup);
+                return;
             }
 
-            TryDeleteDirectory(backup);
+            // 目录改不动就退回逐文件覆盖：单个文件即使正被占用也能改名让位，
+            // 原句柄继续指向改名后的文件，新文件立刻就位，旧文件随后删掉或登记重启后删。
+            ReplaceInPlace(staging, fullDestination, onProgress, cancellationToken);
+            ValidateDirectoryPayload(fullDestination);
         }
-        catch
+        finally
         {
             TryDeleteDirectory(staging);
-            throw;
         }
+    }
+
+    /// <summary>带重试的目录改名，最后一次仍失败就把原始异常抛出去。</summary>
+    private static async Task MoveDirectoryAsync(string source, string target, CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                Directory.Move(source, target);
+                return;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && attempt < MoveAttempts)
+            {
+                // 杀进程后句柄释放、杀毒软件扫描都可能慢一拍，退避再试
+            }
+
+            await Task.Delay(250 * attempt, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>同上，但失败返回 false 而不抛异常，供调用方走回退方案。</summary>
+    private static async Task<bool> TryMoveDirectoryAsync(string source, string target, CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; attempt <= MoveAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                Directory.Move(source, target);
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt == MoveAttempts) return false;
+            }
+
+            await Task.Delay(250 * attempt, cancellationToken).ConfigureAwait(false);
+        }
+
+        return false;
     }
 
     internal static void ValidateDirectoryPayload(string directory)
@@ -226,6 +286,174 @@ public static class PayloadService
         if (missing.Length > 0)
         {
             throw new InvalidDataException($"Payload 缺少必要文件：{string.Join(", ", missing)}");
+        }
+    }
+
+    /// <summary>
+    /// 逐文件把 staging 覆盖到已存在的安装目录。每替换一个文件都记账，中途失败按相反顺序回滚，
+    /// 避免留下半新半旧、根本起不来的安装目录。只覆盖与新增，不删除安装目录里的其它文件
+    /// （Uninstall.exe、日志等不属于 payload，删了反而出事）。
+    /// </summary>
+    internal static void ReplaceInPlace(
+        string staging, string destination, Action<double, string> onProgress, CancellationToken cancellationToken)
+    {
+        var files = Directory.GetFiles(staging, "*", SearchOption.AllDirectories);
+        var asides = new List<(string Target, string Aside)>();
+        var added = new List<string>();
+        try
+        {
+            foreach (var directory in Directory.GetDirectories(staging, "*", SearchOption.AllDirectories))
+            {
+                Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(staging, directory)));
+            }
+
+            for (var i = 0; i < files.Length; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var relative = Path.GetRelativePath(staging, files[i]);
+                var target = Path.Combine(destination, relative);
+                var parent = Path.GetDirectoryName(target);
+                if (!string.IsNullOrEmpty(parent))
+                {
+                    Directory.CreateDirectory(parent);
+                }
+
+                if (File.Exists(target))
+                {
+                    var aside = TryMoveAside(target);
+                    if (aside != null) asides.Add((target, aside));
+                }
+                else
+                {
+                    added.Add(target);
+                }
+
+                File.Copy(files[i], target, overwrite: true);
+
+                // 进度已经在解压阶段跑到 100%，这里只刷文件名，不把进度条拽回去
+                onProgress?.Invoke(1.0, relative);
+            }
+        }
+        catch
+        {
+            RollbackInPlace(asides, added);
+            throw;
+        }
+
+        foreach (var (_, aside) in asides)
+        {
+            ScheduleFileDeletion(aside);
+        }
+    }
+
+    /// <summary>
+    /// 把旧文件改名让位。exe/dll 这类被映射为镜像的文件是以 FILE_SHARE_READ|FILE_SHARE_DELETE
+    /// 打开的：不允许覆盖写入，但允许改名和删除，所以正在运行时也能腾出名字。
+    /// 返回 null 表示连改名都不行（句柄没给 delete 共享权），交由调用方直接覆盖试试。
+    /// </summary>
+    private static string? TryMoveAside(string target)
+    {
+        TryClearReadOnly(target);
+        for (var attempt = 1; attempt <= 3; attempt++)
+        {
+            var aside = $"{target}.nexclip-old-{Guid.NewGuid():N}";
+            try
+            {
+                File.Move(target, aside);
+                return aside;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (attempt == 3) return null;
+                Thread.Sleep(150 * attempt);
+            }
+        }
+
+        return null;
+    }
+
+    private static void RollbackInPlace(List<(string Target, string Aside)> asides, List<string> added)
+    {
+        foreach (var path in added)
+        {
+            try
+            {
+                if (File.Exists(path)) File.Delete(path);
+            }
+            catch
+            {
+            }
+        }
+
+        for (var i = asides.Count - 1; i >= 0; i--)
+        {
+            var (target, aside) = asides[i];
+            try
+            {
+                if (File.Exists(target)) File.Delete(target);
+                if (File.Exists(aside)) File.Move(aside, target);
+            }
+            catch
+            {
+                // 回滚也失败就只能把让位文件留在原地，下次安装的 PurgeAbandonedFiles 会清
+            }
+        }
+    }
+
+    /// <summary>
+    /// 能删就立刻删——镜像映射允许删除，NTFS 会马上摘掉目录项，旧进程的句柄照旧可用；
+    /// 真删不掉（句柄没给 delete 共享权）就登记重启后删，不留垃圾也不打断安装。
+    /// </summary>
+    private static void ScheduleFileDeletion(string path)
+    {
+        try
+        {
+            TryClearReadOnly(path);
+            File.Delete(path);
+            return;
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            NativeMethods.MoveFileExW(path, null, NativeMethods.MOVEFILE_DELAY_UNTIL_REBOOT);
+        }
+        catch
+        {
+        }
+    }
+
+    /// <summary>清理上一次逐文件覆盖遗留的让位文件。</summary>
+    internal static void PurgeAbandonedFiles(string directory)
+    {
+        try
+        {
+            if (!Directory.Exists(directory)) return;
+            foreach (var file in Directory.EnumerateFiles(directory, "*.nexclip-old-*", SearchOption.AllDirectories))
+            {
+                ScheduleFileDeletion(file);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static void TryClearReadOnly(string path)
+    {
+        try
+        {
+            var attributes = File.GetAttributes(path);
+            if ((attributes & (FileAttributes.ReadOnly | FileAttributes.Hidden | FileAttributes.System)) != 0)
+            {
+                File.SetAttributes(path, FileAttributes.Normal);
+            }
+        }
+        catch
+        {
         }
     }
 

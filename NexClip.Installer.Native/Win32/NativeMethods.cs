@@ -367,6 +367,16 @@ public static class NativeMethods
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     public static extern IntPtr GetModuleHandleW(string? lpModuleName);
 
+    /// <summary>
+    /// 把改名/删除登记进 PendingFileRenameOperations，重启时由会话管理器执行。
+    /// 用于清理"覆盖安装时被占用、只能改名让位"的旧文件（需要管理员权限，安装器 manifest 已要求）。
+    /// </summary>
+    public const uint MOVEFILE_DELAY_UNTIL_REBOOT = 0x00000004;
+
+    /// <summary>lpNewFileName 传 null 表示删除，配合 MOVEFILE_DELAY_UNTIL_REBOOT 即"重启后删除"。</summary>
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool MoveFileExW(string lpExistingFileName, string? lpNewFileName, uint dwFlags);
+
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     public static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
 }

@@ -22,6 +22,15 @@ public static class Program
     {
         var options = SetupArguments.Parse(args, Environment.ProcessPath);
 
+        // 参数解析完（/diagnose= 的相对路径依赖原始当前目录）立刻脱离当前目录。
+        // 旧版桌面端启动安装器时没指定工作目录，安装器会继承安装目录，
+        // 继承来的目录句柄会让覆盖安装时的整目录改名直接失败。
+        ProcessHelper.ReleaseWorkingDirectory();
+        if (!string.IsNullOrEmpty(ProcessHelper.StartupWorkingDirectory))
+        {
+            SetupLog.Write($"启动时工作目录：{ProcessHelper.StartupWorkingDirectory}（已切换至临时目录）");
+        }
+
         if (!SetupPolicy.IsSupportedPlatform(out var platformFailure))
         {
             return Fail(options, platformFailure, "NexClip 无法安装");
@@ -86,7 +95,15 @@ public static class Program
                 .GetAwaiter()
                 .GetResult();
 
-            ProcessHelper.TerminateRunningInstancesAsync().GetAwaiter().GetResult();
+            var survivors = ProcessHelper
+                .TerminateRunningInstancesAsync(options.InstallDirectory)
+                .GetAwaiter()
+                .GetResult();
+            if (survivors.Count > 0)
+            {
+                SetupLog.Write($"以下进程未能结束，将改用逐文件覆盖：{string.Join("、", survivors)}");
+            }
+
             PayloadService
                 .InstallPayloadWithRollbackAsync(
                     options.InstallDirectory,
@@ -170,7 +187,15 @@ public static class Program
             {
                 installDir = Path.GetDirectoryName(Environment.ProcessPath);
             }
-            ProcessHelper.TerminateRunningInstancesAsync().GetAwaiter().GetResult();
+            var survivors = ProcessHelper
+                .TerminateRunningInstancesAsync(installDir)
+                .GetAwaiter()
+                .GetResult();
+            if (survivors.Count > 0)
+            {
+                SetupLog.Write($"卸载时仍有进程在运行：{string.Join("、", survivors)}");
+            }
+
             ShortcutHelper.RemoveAllShortcuts();
             RegistryHelper.UnregisterUninstall();
             if (!string.IsNullOrWhiteSpace(installDir))
@@ -225,6 +250,7 @@ public static class Program
         report.AppendLine($"64 位系统: {Environment.Is64BitOperatingSystem}");
         report.AppendLine($"管理员权限: {IsElevated()}");
         report.AppendLine($"安装目录: {options.InstallDirectory}");
+        report.AppendLine($"启动时工作目录: {ProcessHelper.StartupWorkingDirectory ?? "(未知)"}");
         report.AppendLine($"内嵌 Payload: {PayloadService.HasEmbeddedPayload()}");
 
         if (SetupPolicy.TryGetAvailableDiskSpace(options.InstallDirectory, out var installFree))

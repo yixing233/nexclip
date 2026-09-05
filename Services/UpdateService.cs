@@ -399,7 +399,12 @@ public class UpdateService
         var psi = new System.Diagnostics.ProcessStartInfo
         {
             FileName = installerPath,
-            UseShellExecute = true
+            UseShellExecute = true,
+            // 必须显式指定工作目录：不给的话 ShellExecuteEx 拿到的 lpDirectory 是 NULL，
+            // 安装器会继承本进程的当前目录（快捷方式把它设成了安装目录）。
+            // 进程的当前目录句柄不带 FILE_SHARE_DELETE，安装器随后就没法给安装目录改名，
+            // 覆盖更新会直接报“文件正由另一进程使用”。
+            WorkingDirectory = Path.GetDirectoryName(installerPath) ?? Path.GetTempPath()
         };
         System.Diagnostics.Process.Start(psi);
 
