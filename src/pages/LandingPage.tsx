@@ -25,6 +25,7 @@ import {
 } from 'lucide-react'
 
 interface ReleaseItem {
+  version: string
   filename: string
   size: string
   serverUrl: string
@@ -32,27 +33,28 @@ interface ReleaseItem {
   sha256: string
 }
 
+// 版本号按平台各存一份：只发布单端时，另一端要停在它自己的版本上
 interface ReleaseData {
-  version: string
   windows: ReleaseItem
   android: ReleaseItem
 }
 
 const defaultReleaseInfo: ReleaseData = {
-  version: 'v20260904.02',
   windows: {
-    filename: 'NexClip_Setup_v20260904.02_x64.exe',
+    version: 'v20260905.01',
+    filename: 'NexClip_Setup_v20260905.01_x64.exe',
     size: '18.9 MB',
-    serverUrl: '/releases/NexClip_Setup_v20260904.02_x64.exe',
-    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260904.02/NexClip_Setup_v20260904.02_x64.exe',
-    sha256: '2c76e906ac7991c2bda8c77336d4edb147791d46eb9bdd3bb3d00c6286f1331a',
+    serverUrl: '/releases/NexClip_Setup_v20260905.01_x64.exe',
+    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260905.01/NexClip_Setup_v20260905.01_x64.exe',
+    sha256: '05a6a8264c8b44f03730329a4568f17832f882ca00c1d1dc55bd6c6f30dedb3b',
   },
   android: {
-    filename: 'NexClip_v20260904.02_Android.apk',
+    version: 'v20260905.01',
+    filename: 'NexClip_v20260905.01_Android.apk',
     size: '15.3 MB',
-    serverUrl: '/releases/NexClip_v20260904.02_Android.apk',
-    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260904.02/NexClip_v20260904.02_Android.apk',
-    sha256: '994bfb31d3aa97958dfdc41e584761df4e201cd3da97f65308616d588c30a9c3',
+    serverUrl: '/releases/NexClip_v20260905.01_Android.apk',
+    githubUrl: 'https://github.com/yixing233/nexclip/releases/download/v20260905.01/NexClip_v20260905.01_Android.apk',
+    sha256: '4aa987d87dafe8786202650f56ead954cebc5814899af6bfdec5447ca32631fe',
   },
 }
 
@@ -88,27 +90,38 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
         throw new Error('Failed to load version.json')
       })
       .then((data) => {
-        if (data && data.version && data.windows && data.android) {
+        if (data && data.windows && data.android) {
           const winBytes = data.windows.file_size_bytes || 0
           const winSizeStr = winBytes > 0 ? `${(winBytes / (1024 * 1024)).toFixed(1)} MB` : '18.3 MB'
           const apkBytes = data.android.file_size_bytes || 0
           const apkSizeStr = apkBytes > 0 ? `${(apkBytes / (1024 * 1024)).toFixed(1)} MB` : '15.3 MB'
-          const tag = data.version.startsWith('v') ? data.version : `v${data.version}`
+
+          // 平台段里的版本号优先；缺了才回落顶层。顶层版本号是两端共用的，
+          // 只发布单端的版本不该把另一端的下载链接也换成不存在的文件。
+          const tagOf = (item: { tag_name?: string; version?: string } | undefined) => {
+            const raw = (item?.tag_name || item?.version || data.tag_name || data.version || '')
+              .toString()
+              .trim()
+            return raw.startsWith('v') ? raw : `v${raw}`
+          }
+          const winTag = tagOf(data.windows)
+          const apkTag = tagOf(data.android)
 
           setReleaseInfo({
-            version: tag,
             windows: {
-              filename: data.windows.filename || `NexClip_Setup_${tag}_x64.exe`,
+              version: winTag,
+              filename: data.windows.filename || `NexClip_Setup_${winTag}_x64.exe`,
               size: winSizeStr,
               serverUrl: data.windows.download_url || `/releases/${data.windows.filename}`,
-              githubUrl: `https://github.com/yixing233/nexclip/releases/download/${tag}/${data.windows.filename || `NexClip_Setup_${tag}_x64.exe`}`,
+              githubUrl: `https://github.com/yixing233/nexclip/releases/download/${winTag}/${data.windows.filename || `NexClip_Setup_${winTag}_x64.exe`}`,
               sha256: data.windows.sha256 || '',
             },
             android: {
-              filename: data.android.filename || `NexClip_${tag}_Android.apk`,
+              version: apkTag,
+              filename: data.android.filename || `NexClip_${apkTag}_Android.apk`,
               size: apkSizeStr,
               serverUrl: data.android.download_url || `/releases/${data.android.filename}`,
-              githubUrl: `https://github.com/yixing233/nexclip/releases/download/${tag}/${data.android.filename || `NexClip_${tag}_Android.apk`}`,
+              githubUrl: `https://github.com/yixing233/nexclip/releases/download/${apkTag}/${data.android.filename || `NexClip_${apkTag}_Android.apk`}`,
               sha256: data.android.sha256 || '',
             },
           })
@@ -192,7 +205,7 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
       icon: <ExternalLink size={14} />,
       label: '查看 GitHub Releases 发布页面',
       onClick: () => {
-        window.open(`https://github.com/yixing233/nexclip/releases/tag/${releaseInfo.version}`, '_blank')
+        window.open(`https://github.com/yixing233/nexclip/releases/tag/${releaseInfo.windows.version}`, '_blank')
       },
     },
     {
@@ -236,7 +249,7 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
       icon: <ExternalLink size={14} />,
       label: '查看 GitHub Releases 发布页面',
       onClick: () => {
-        window.open(`https://github.com/yixing233/nexclip/releases/tag/${releaseInfo.version}`, '_blank')
+        window.open(`https://github.com/yixing233/nexclip/releases/tag/${releaseInfo.android.version}`, '_blank')
       },
     },
     {
@@ -824,7 +837,7 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
                     color: isDark ? '#58A6FF' : '#2563EB',
                   }}
                 >
-                  {releaseInfo.version}
+                  {releaseInfo.windows.version}
                 </span>
               </div>
               <p style={{ fontSize: 13, color: c.textSecondary, lineHeight: 1.6, marginBottom: 24 }}>
@@ -931,7 +944,7 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
                     color: isDark ? '#3DDC84' : '#10B981',
                   }}
                 >
-                  {releaseInfo.version}
+                  {releaseInfo.android.version}
                 </span>
               </div>
               <p style={{ fontSize: 13, color: c.textSecondary, lineHeight: 1.6, marginBottom: 24 }}>
