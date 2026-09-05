@@ -270,9 +270,9 @@ private fun MainScreen() {
                         @Suppress("DEPRECATION")
                         appContext.packageManager.getPackageInfo(appContext.packageName, 0)
                     }
-                    pInfo.versionName ?: "20260904.02"
+                    pInfo.versionName ?: "20260905.01"
                 } catch (_: Exception) {
-                    "20260904.02"
+                    "20260905.01"
                 }
                 clip.yixing.sync.util.UpdateChecker.check(
                     currentVersion = curVer,
