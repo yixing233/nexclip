@@ -17,7 +17,7 @@ public sealed class HistoryStore : IDisposable
     /// <summary>数据库文件路径(数据管理页展示)。</summary>
     public string DbPath { get; private set; }
 
-    /// <summary>条目上限(超限删除最旧条目并清理图片)。</summary>
+    /// <summary>条目上限(仅限制未收藏条目；收藏项不参与自动淘汰)。</summary>
     public int MaxEntries
     {
         get => _maxEntries;
@@ -443,7 +443,7 @@ public sealed class HistoryStore : IDisposable
         lock (_lock)
         {
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = "SELECT id FROM entries ORDER BY created_at DESC LIMIT -1 OFFSET @limit";
+            cmd.CommandText = "SELECT id FROM entries WHERE starred = 0 ORDER BY created_at DESC LIMIT -1 OFFSET @limit";
             cmd.Parameters.AddWithValue("@limit", max);
             var doomed = new List<long>();
             using (var r = cmd.ExecuteReader())
@@ -452,7 +452,7 @@ public sealed class HistoryStore : IDisposable
             }
             if (doomed.Count == 0) return 0;
             foreach (var id in doomed) DeleteImageForLocked(id);
-            cmd.CommandText = "DELETE FROM entries WHERE id IN (SELECT id FROM entries ORDER BY created_at DESC LIMIT -1 OFFSET @limit)";
+            cmd.CommandText = "DELETE FROM entries WHERE starred = 0 AND id IN (SELECT id FROM entries WHERE starred = 0 ORDER BY created_at DESC LIMIT -1 OFFSET @limit)";
             cmd.Parameters.Clear();
             cmd.Parameters.AddWithValue("@limit", max);
             return cmd.ExecuteNonQuery();
@@ -467,7 +467,7 @@ public sealed class HistoryStore : IDisposable
         {
             var cutoff = DateTime.UtcNow.AddDays(-days).Ticks;
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = "SELECT id, image_path FROM entries WHERE created_at < @cutoff";
+            cmd.CommandText = "SELECT id, image_path FROM entries WHERE starred = 0 AND created_at < @cutoff";
             cmd.Parameters.AddWithValue("@cutoff", cutoff);
             var doomed = new List<(long Id, string? Path)>();
             using (var r = cmd.ExecuteReader())
@@ -482,7 +482,7 @@ public sealed class HistoryStore : IDisposable
                     try { File.Delete(p); } catch { /* 忽略 */ }
                 }
             }
-            cmd.CommandText = "DELETE FROM entries WHERE created_at < @cutoff";
+            cmd.CommandText = "DELETE FROM entries WHERE starred = 0 AND created_at < @cutoff";
             cmd.Parameters.Clear();
             cmd.Parameters.AddWithValue("@cutoff", cutoff);
             return cmd.ExecuteNonQuery();
@@ -576,31 +576,24 @@ public sealed class HistoryStore : IDisposable
         }
     }
 
-    /// <summary>超限清理:删除最旧条目并清理其图片文件。</summary>
+    /// <summary>超限清理:只淘汰最旧的未收藏条目并清理其图片文件。</summary>
     private void TrimToLimitLocked()
     {
         var limit = _maxEntries;
         using var cmd = _conn.CreateCommand();
-        cmd.CommandText = """
-            DELETE FROM entries WHERE id IN (
-                SELECT id FROM entries ORDER BY created_at DESC LIMIT -1 OFFSET @limit
-            )
-            """;
+        cmd.CommandText = "SELECT id FROM entries WHERE starred = 0 ORDER BY created_at DESC LIMIT -1 OFFSET @limit";
         cmd.Parameters.AddWithValue("@limit", limit);
-        using var reader = cmd.ExecuteReader();
-        // 简单做法: 先查被删行,再删;这里改为两步
-        reader.Close();
-        cmd.CommandText = "SELECT id FROM entries ORDER BY created_at DESC LIMIT -1 OFFSET @limit";
         var doomed = new List<long>();
-        using (var r2 = cmd.ExecuteReader())
+        using (var reader = cmd.ExecuteReader())
         {
-            while (r2.Read()) doomed.Add(r2.GetInt64(0));
+            while (reader.Read()) doomed.Add(reader.GetInt64(0));
         }
+        if (doomed.Count == 0) return;
         foreach (var id in doomed)
         {
             DeleteImageForLocked(id);
         }
-        cmd.CommandText = "DELETE FROM entries WHERE id IN (SELECT id FROM entries ORDER BY created_at DESC LIMIT -1 OFFSET @limit)";
+        cmd.CommandText = "DELETE FROM entries WHERE starred = 0 AND id IN (SELECT id FROM entries WHERE starred = 0 ORDER BY created_at DESC LIMIT -1 OFFSET @limit)";
         cmd.ExecuteNonQuery();
     }
 
