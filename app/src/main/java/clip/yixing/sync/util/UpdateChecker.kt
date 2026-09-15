@@ -210,7 +210,7 @@ object UpdateChecker {
             currentVersion = currentVersion,
             latestVersion = cleanLatest,
             releaseTitle = readString(release, "name") ?: "",
-            releaseNotes = readString(release, "body") ?: "",
+            releaseNotes = readPlatformReleaseNotes(readString(release, "body")),
             releaseUrl = readString(release, "html_url") ?: DEFAULT_RELEASES_PAGE,
             downloadUrl = downloadUrl,
             isDirectSource = useDirectDownload,
@@ -220,6 +220,26 @@ object UpdateChecker {
     }
 
     /** 取非空字符串字段；空串与空白视为缺失，好让平台段里的占位值自动回落。 */
+    /**
+     * 从 GitHub Release 正文中提取 Android 平台的更新日志。
+     * 约定以二级标题 `## Android` 分段，只显示对应段落，找不到时回落到全文。
+     */
+    private fun readPlatformReleaseNotes(body: String?): String {
+        if (body.isNullOrBlank()) return ""
+
+        val lines = body.replace("\r\n", "\n").split('\n')
+        val start = lines.indexOfFirst { it.trimStart().startsWith("## Android", ignoreCase = true) }
+        if (start < 0) return body
+
+        val section = StringBuilder()
+        for (i in start + 1 until lines.size) {
+            if (lines[i].trimStart().startsWith("## ")) break
+            section.appendLine(lines[i])
+        }
+
+        return section.toString().trim().takeIf { it.isNotEmpty() } ?: body
+    }
+
     private fun readString(json: JSONObject?, name: String): String? =
         json?.optString(name)?.trim()?.takeIf { it.isNotEmpty() }
 
