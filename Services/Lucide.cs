@@ -108,6 +108,12 @@ public static class Lucide
     public static ImageSource StarActive => Get("star-filled", "amber");
     public static ImageSource Trash => Get("trash-2", "secondary");
     public static ImageSource FileText => Get("file-text", "secondary");
+    /// <summary>
+    /// 文件类型条目图标(lucide 官方 file 图标),与 file-text 区分:file 表示"复制的文件"。
+    /// 命名为 FileIcon 而非 File:后者会在本类内部遮蔽 System.IO.File,
+    /// 使 LoadSvg 中的 File.Exists / File.ReadAllText 等调用全部解析失败。
+    /// </summary>
+    public static ImageSource FileIcon => Get("file", "secondary");
     public static ImageSource RichText => Get("type", "secondary");
     public static ImageSource Image => Get("image", "secondary");
     public static ImageSource Settings => Get("settings", "primary");

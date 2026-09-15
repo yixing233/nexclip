@@ -1,6 +1,7 @@
 ﻿using System.Security.Cryptography;
 using System.Text;
 using Microsoft.UI.Dispatching;
+using NexClip.Desktop.Models;
 using Windows.ApplicationModel.DataTransfer;
 
 namespace NexClip.Desktop.Services;
@@ -11,7 +12,20 @@ namespace NexClip.Desktop.Services;
 /// </summary>
 public sealed class ClipboardMonitor
 {
-    public readonly record struct CapturedClip(string? Text, byte[]? ImagePng, string Hash, SourceAppInfo? SourceApp = null, string? Html = null);
+    public readonly record struct CapturedClip(
+        string? Text,
+        byte[]? ImagePng,
+        string Hash,
+        SourceAppInfo? SourceApp = null,
+        string? Html = null,
+        IReadOnlyList<ClipboardFileInfo>? Files = null);
+
+    /// <summary>一次剪贴板读取的完整结果。文件字段为"复制的文件"元数据,不含文件内容。</summary>
+    public readonly record struct ClipboardPayload(
+        string? Text,
+        string? Html,
+        byte[]? Image,
+        IReadOnlyList<ClipboardFileInfo>? Files);
 
     private readonly DispatcherQueue _dispatcher;
     private readonly SettingsStore _settings;
@@ -85,9 +99,20 @@ public sealed class ClipboardMonitor
     private void OnContentChanged(object? sender, object e)
     {
         if (_pauseCount > 0 || DateTime.UtcNow < _pauseUntil) return;
-        _debounceCts?.Cancel();
+        // 先取出旧实例再替换,最后取消并释放:被替换掉的 CancellationTokenSource 若只 Cancel 不 Dispose,
+        // 其内部的定时器与回调注册会一直存活到 GC,剪贴板高频变动时会持续堆积。
+        var previous = _debounceCts;
         _debounceCts = new CancellationTokenSource();
         var ct = _debounceCts.Token;
+        try
+        {
+            previous?.Cancel();
+            previous?.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+            // 已被释放,忽略
+        }
         _ = DebounceThenCaptureAsync(ct);
     }
 
@@ -127,8 +152,9 @@ public sealed class ClipboardMonitor
         }
         if (clipboardSequence != 0 && clipboardSequence == _lastClipboardSequence) return;
 
-        // 彻底杜绝自写回环: 若剪贴板内容由本程序写回(远端同步/历史列表复制),直接忽略
-        if (ImageCodec.IsSelfWrittenClipboard() || SourceAppDetector.IsClipboardOwnedByCurrentProcess())
+        // 彻底杜绝自写回环(廉价快路径): 若剪贴板所有者即本进程,直接忽略。
+        // 使用 Win32 查询,不触发跨进程 OLE 调用。
+        if (SourceAppDetector.IsClipboardOwnedByCurrentProcess())
         {
             // 这是"明确决定忽略本次剪贴板状态"而非"读取失败需要重试",必须记账序列号:
             // 否则剪贴板长期停在自写内容上时,2 秒轮询会无限期反复执行昂贵的 Clipboard.GetContent()
@@ -139,42 +165,73 @@ public sealed class ClipboardMonitor
         _capturing = true;
         try
         {
-            var (text, html, image) = await ReadClipboardPayloadAsync();
+            // Clipboard.GetContent() 是一次跨进程 OLE 调用,当剪贴板所有者无响应时可能阻塞数百毫秒。
+            // 整条捕获链路只调用一次,后续所有读取(自写标记 / 文本 / HTML / 位图)复用同一视图。
+            DataPackageView content;
+            try
+            {
+                content = Clipboard.GetContent();
+            }
+            catch (Exception ex)
+            {
+                Log.Debug($"获取剪贴板内容失败: {ex.Message}");
+                return;
+            }
 
-        string hash;
-        if (image is not null && image.LongLength > 0)
-        {
-            hash = HashBytes(image);
-        }
-        else if (text is not null)
-        {
-            hash = HashText(text, html);
-        }
-        else
-        {
-            return;
-        }
+            // 精确回环判定:本程序写回的内容带 SelfOrigin 标记(Clipboard.Flush 后系统接管所有权,
+            // 上面的 GetClipboardOwner 快路径会失效,必须靠这个标记兜底)。
+            if (ImageCodec.IsSelfWrittenClipboard(content))
+            {
+                if (clipboardSequence != 0) _lastClipboardSequence = clipboardSequence;
+                return;
+            }
 
-        if (hash.Length == 0) return;
-        // 序列号在确认拿到有效内容之后才记账:若本轮读取失败,下一轮轮询仍会完整重试,不会漏掉变更
-        if (clipboardSequence != 0) _lastClipboardSequence = clipboardSequence;
-        // 应用自写内容:时间窗内消费一次性抑制,并记录 lastSeen,避免轮询把同一内容再次上传/置顶
-        if (hash == _suppressHash && DateTime.UtcNow < _suppressUntil)
-        {
-            _suppressHash = "";
-            _suppressUntil = DateTime.MinValue;
+            var payload = await ReadClipboardPayloadAsync(content);
+
+            string hash;
+            if (payload.Image is { LongLength: > 0 } image)
+            {
+                hash = HashBytes(image);
+            }
+            else if (payload.Files is { Count: > 0 } files)
+            {
+                // 文件条目哈希只基于路径与大小元数据,不对大文件做任何读取
+                hash = ClipboardFileMeta.ComputeHash(files);
+            }
+            else if (payload.Text is not null)
+            {
+                hash = HashText(payload.Text, payload.Html);
+            }
+            else
+            {
+                return;
+            }
+
+            if (hash.Length == 0) return;
+            // 序列号在确认拿到有效内容之后才记账:若本轮读取失败,下一轮轮询仍会完整重试,不会漏掉变更
+            if (clipboardSequence != 0) _lastClipboardSequence = clipboardSequence;
+            // 应用自写内容:时间窗内消费一次性抑制,并记录 lastSeen,避免轮询把同一内容再次上传/置顶
+            if (hash == _suppressHash && DateTime.UtcNow < _suppressUntil)
+            {
+                _suppressHash = "";
+                _suppressUntil = DateTime.MinValue;
+                _lastSeenHash = hash;
+                return;
+            }
+            if (hash == _lastSeenHash) return;
             _lastSeenHash = hash;
-            return;
-        }
-        if (hash == _lastSeenHash) return;
-        _lastSeenHash = hash;
-        var sourceApp = SourceAppDetector.DetectSourceApp();
-        if (ClipboardAppFilter.ShouldFilter(sourceApp, _settings.AppFilterEnabled, _settings.CustomFilteredProcesses))
-        {
-            Log.Debug($"已忽略来自远程控制应用的剪贴板内容: {sourceApp?.Name ?? sourceApp?.ProcessName}");
-            return;
-        }
-        await _onCapture(new CapturedClip(text, image, hash, sourceApp, html), ct);
+
+            // 来源应用识别:先在 UI 线程用三次廉价 Win32 调用钉住来源窗口,再把重活移出 UI 线程。
+            // 进程查询、PE 版本信息读取(磁盘 IO)、图标提取(GDI+)单次可达数毫秒,
+            // 留在 UI 线程会让每一次复制都产生一次可感知的卡顿。
+            var sourceApp = await ResolveSourceAppAsync();
+
+            if (ClipboardAppFilter.ShouldFilter(sourceApp, _settings.AppFilterEnabled, _settings.CustomFilteredProcesses))
+            {
+                Log.Debug($"已忽略来自远程控制应用的剪贴板内容: {sourceApp?.Name ?? sourceApp?.ProcessName}");
+                return;
+            }
+            await _onCapture(new CapturedClip(payload.Text, payload.Image, hash, sourceApp, payload.Html, payload.Files), ct);
         }
         finally
         {
@@ -182,54 +239,99 @@ public sealed class ClipboardMonitor
         }
     }
 
-    /// <summary>
-    /// 按统一优先级读取剪贴板载荷。
-    /// 位图优先:截图/设计软件常同时提供 Bitmap + Text/HTML,先读文本会把图片误判成文本条目。
-    /// 但 Word/Excel 复制带格式内容时同样"位图 + 纯文本 + HTML"三格式齐备,因此仅当位图与
-    /// "非空纯文本 + 去标签后仍有可见文字的 HTML"同时存在时判为富文本,其余仍按图片处理
-    /// (纯截图没有纯文本;浏览器复制图片虽带 HTML,但去掉 img 标签后为空)。
-    /// </summary>
-    private async Task<(string? Text, string? Html, byte[]? Image)> ReadClipboardPayloadAsync()
+    /// <summary>在后台线程解析剪贴板来源应用详情(见 SourceAppDetector.ResolveSourceApp 的性能说明)。</summary>
+    private static async Task<SourceAppInfo?> ResolveSourceAppAsync()
     {
-        var image = await ImageCodec.CaptureClipboardPngAsync();
+        var owner = SourceAppDetector.CaptureOwnerHandle();
+        if (owner is null) return null;
+        try
+        {
+            return await Task.Run(() => SourceAppDetector.ResolveSourceApp(owner.Value));
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"解析剪贴板来源应用失败: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 按统一优先级读取剪贴板载荷(content 为已取得的剪贴板视图,全程复用不重复 GetContent)。
+    ///
+    /// 优先级:位图 &gt; 文本/富文本 &gt; 文件。
+    /// 1) 位图优先:截图/设计软件常同时提供 Bitmap + Text/HTML,先读文本会把图片误判成文本条目。
+    ///    但 Word/Excel 复制带格式内容时同样"位图 + 纯文本 + HTML"三格式齐备,因此仅当位图与
+    ///    "非空纯文本 + 去标签后仍有可见文字的 HTML"同时存在时判为富文本,其余仍按图片处理
+    ///    (纯截图没有纯文本;浏览器复制图片虽带 HTML,但去掉 img 标签后为空)。
+    /// 2) 文件优先级最低:资源管理器复制文件时,部分来源(如"复制为路径"、某些第三方文件管理器)
+    ///    会同时提供文本格式,若先判文件就会把一次文本复制误记为文件条目。
+    ///    只有既无位图也无文本时,才把 CF_HDROP 视为文件条目。
+    /// </summary>
+    private async Task<ClipboardPayload> ReadClipboardPayloadAsync(DataPackageView content)
+    {
+        var image = await ImageCodec.CaptureClipboardPngAsync(content);
         var hasImage = image is not null && image.LongLength > 0;
 
-        if (!_settings.RichTextEnabled)
+        string? text = null;
+        string? html = null;
+        if (_settings.RichTextEnabled)
         {
-            return hasImage ? (null, null, image) : (await ImageCodec.ReadClipboardTextAsync(), null, null);
+            (text, html) = await ImageCodec.ReadClipboardRichTextAsync(content);
+        }
+        else if (!hasImage)
+        {
+            // 已判定为位图时无需再读文本(与既有行为一致,避免多一次跨进程读取)
+            text = await ImageCodec.ReadClipboardTextAsync(content);
         }
 
-        var (text, html) = await ImageCodec.ReadClipboardRichTextAsync();
         if (hasImage)
         {
             return text is not null && ImageCodec.HasVisibleHtmlText(html)
-                ? (text, html, null)
-                : (null, null, image);
+                ? new ClipboardPayload(text, html, null, null)
+                : new ClipboardPayload(null, null, image, null);
         }
-        return (text, html, null);
+        if (text is not null) return new ClipboardPayload(text, html, null, null);
+
+        var files = await ClipboardFiles.ReadClipboardFilesAsync(content);
+        return new ClipboardPayload(null, null, null, files);
     }
 
     /// <summary>手动捕获(忽略自写抑制,用于"同步当前剪贴板")。返回 hash,空则无内容。</summary>
     public async Task<string> CaptureManualAsync(CancellationToken ct = default)
     {
         // 与自动监听完全共用一套优先级判定,避免两条路径对同一剪贴板得出不同类型。
-        var (text, html, image) = await ReadClipboardPayloadAsync();
+        DataPackageView content;
+        try
+        {
+            content = Clipboard.GetContent();
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"获取剪贴板内容失败: {ex.Message}");
+            return "";
+        }
+
+        var payload = await ReadClipboardPayloadAsync(content);
 
         string hash;
-        if (image is not null && image.LongLength > 0)
+        if (payload.Image is { LongLength: > 0 } image)
         {
             hash = HashBytes(image);
         }
-        else if (text is not null)
+        else if (payload.Files is { Count: > 0 } files)
         {
-            hash = HashText(text, html);
+            hash = ClipboardFileMeta.ComputeHash(files);
+        }
+        else if (payload.Text is not null)
+        {
+            hash = HashText(payload.Text, payload.Html);
         }
         else
         {
             return "";
         }
-        var sourceApp = SourceAppDetector.DetectSourceApp();
-        await _onCapture(new CapturedClip(text, image, hash, sourceApp, html), ct);
+        var sourceApp = await ResolveSourceAppAsync();
+        await _onCapture(new CapturedClip(payload.Text, payload.Image, hash, sourceApp, payload.Html, payload.Files), ct);
         return hash;
     }
 

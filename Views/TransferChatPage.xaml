@@ -14,9 +14,19 @@
         <converters:BooleanToVisibilityConverter x:Key="BoolToVis" />
         <converters:InverseBooleanToVisibilityConverter x:Key="InverseBoolToVis" />
         <converters:BoolToPillForegroundConverter x:Key="BoolToPillFg" />
+        <converters:BoolToPillBackgroundConverter x:Key="BoolToPillBg" />
 
-        <!-- 筛选胶囊 ToggleButton 样式: 选中时高亮蓝底(#2563EB)+纯白字; 未选中时自适应卡片底色+主题文字 -->
-        <Style x:Key="FilterPillStyle" TargetType="ToggleButton">
+        <!--
+            筛选胶囊样式。
+            刻意使用 Button 而非 ToggleButton: 胶囊的选中态完全由 VM 派生
+            (Background 与 Foreground 都绑同一个 VM 属性), 不依赖控件的 IsChecked。
+            原因: ToggleButton 的 IsChecked 会在点击时被控件自行翻转, 而 x:Bind 的双向回写
+            走的是弱引用 + initialized 守卫路径, 在本页 DataTemplate 复用场景下实测不回写,
+            于是 IsChecked(驱动底色)与 VM 状态(驱动文字色)会永久分叉,
+            表现为"蓝底 + 深色字"或"白字 + 透明底"。改由 VM 独占真值即可根除该状态错配。
+            悬停/按压反馈由独立的 HoverFill 叠加层提供, 不影响底色。
+        -->
+        <Style x:Key="FilterPillStyle" TargetType="Button">
             <Setter Property="Padding" Value="10,4" />
             <Setter Property="CornerRadius" Value="14" />
             <Setter Property="FontSize" Value="12" />
@@ -26,51 +36,56 @@
             <Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}" />
             <Setter Property="Template">
                 <Setter.Value>
-                    <ControlTemplate TargetType="ToggleButton">
-                        <Border
-                            x:Name="RootBorder"
-                            Background="{TemplateBinding Background}"
-                            BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="{TemplateBinding CornerRadius}"
-                            Padding="{TemplateBinding Padding}">
+                    <ControlTemplate TargetType="Button">
+                        <Grid x:Name="Root">
+                            <Border
+                                x:Name="RootBorder"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{TemplateBinding CornerRadius}" />
+                            <!-- 悬停/按压着色层: 仅由 CommonStates 驱动, 叠加在底色之上 -->
+                            <Border
+                                x:Name="HoverFill"
+                                Background="{ThemeResource SubtleFillColorSecondaryBrush}"
+                                Opacity="0"
+                                CornerRadius="{TemplateBinding CornerRadius}" />
                             <ContentPresenter
                                 x:Name="ContentPresenter"
                                 Content="{TemplateBinding Content}"
                                 ContentTemplate="{TemplateBinding ContentTemplate}"
+                                Margin="{TemplateBinding Padding}"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center" />
                             <VisualStateManager.VisualStateGroups>
                                 <VisualStateGroup x:Name="CommonStates">
-                                    <VisualState x:Name="Normal" />
+                                    <VisualState x:Name="Normal">
+                                        <VisualState.Setters>
+                                            <Setter Target="HoverFill.Opacity" Value="0" />
+                                            <Setter Target="Root.Opacity" Value="1" />
+                                        </VisualState.Setters>
+                                    </VisualState>
                                     <VisualState x:Name="PointerOver">
                                         <VisualState.Setters>
-                                            <Setter Target="RootBorder.Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}" />
+                                            <Setter Target="HoverFill.Opacity" Value="1" />
+                                            <Setter Target="Root.Opacity" Value="1" />
                                         </VisualState.Setters>
                                     </VisualState>
                                     <VisualState x:Name="Pressed">
                                         <VisualState.Setters>
-                                            <Setter Target="RootBorder.Opacity" Value="0.8" />
+                                            <Setter Target="HoverFill.Opacity" Value="1" />
+                                            <Setter Target="Root.Opacity" Value="0.8" />
                                         </VisualState.Setters>
                                     </VisualState>
                                     <VisualState x:Name="Disabled">
                                         <VisualState.Setters>
-                                            <Setter Target="RootBorder.Opacity" Value="0.5" />
+                                            <Setter Target="HoverFill.Opacity" Value="0" />
+                                            <Setter Target="Root.Opacity" Value="0.5" />
                                         </VisualState.Setters>
                                     </VisualState>
-                                </VisualStateGroup>
-                                <VisualStateGroup x:Name="CheckStates">
-                                    <VisualState x:Name="Unchecked" />
-                                    <VisualState x:Name="Checked">
-                                        <VisualState.Setters>
-                                            <Setter Target="RootBorder.Background" Value="#2563EB" />
-                                            <Setter Target="RootBorder.BorderBrush" Value="Transparent" />
-                                        </VisualState.Setters>
-                                    </VisualState>
-                                    <VisualState x:Name="Indeterminate" />
                                 </VisualStateGroup>
                             </VisualStateManager.VisualStateGroups>
-                        </Border>
+                        </Grid>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -85,10 +100,16 @@
                 <ScrollViewer HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled" HorizontalScrollMode="Enabled" VerticalScrollMode="Disabled">
                     <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                         <!-- 全部设备胶囊 -->
-                        <ToggleButton
+                        <!--
+                            底色与文字色均由 ViewModel.SelectAllDevices 派生, 不使用控件的 IsChecked:
+                            ToggleButton 的 IsChecked 会在点击时被控件自行翻转, 与 VM 状态分属两个真值来源,
+                            而 x:Bind 的双向回写在本页 DataTemplate 复用场景下实测不可靠,
+                            会导致"蓝底(IsChecked) + 深色字(VM)"的永久错配。改用 Button + 显式改 VM 后不可能再分叉。
+                        -->
+                        <Button
                             x:Name="SelectAllToggle"
                             Style="{StaticResource FilterPillStyle}"
-                            IsChecked="{x:Bind ViewModel.SelectAllDevices, Mode=OneWay}"
+                            Background="{x:Bind ViewModel.SelectAllDevices, Mode=OneWay, Converter={StaticResource BoolToPillBg}}"
                             Click="SelectAllToggle_Click">
                             <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
                                 <Grid Width="14" Height="14" VerticalAlignment="Center">
@@ -108,7 +129,7 @@
                                     VerticalAlignment="Center"
                                     Foreground="{x:Bind ViewModel.SelectAllDevices, Mode=OneWay, Converter={StaticResource BoolToPillFg}}" />
                             </StackPanel>
-                        </ToggleButton>
+                        </Button>
 
                         <!-- 各设备胶囊 -->
                         <ItemsControl ItemsSource="{x:Bind ViewModel.Devices}">
@@ -119,9 +140,10 @@
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="vm:DeviceSelectViewModel">
-                                    <ToggleButton
+                                    <!-- 底色与文字色均由 IsSelected 派生, 理由同"全部设备"胶囊 -->
+                                    <Button
                                         Style="{StaticResource FilterPillStyle}"
-                                        IsChecked="{x:Bind IsSelected, Mode=OneWay}"
+                                        Background="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToPillBg}}"
                                         Click="DevicePill_Click">
                                         <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
                                             <Ellipse Width="6" Height="6" Fill="{x:Bind StatusBrush, Mode=OneWay}" VerticalAlignment="Center" />
@@ -130,7 +152,7 @@
                                                 VerticalAlignment="Center"
                                                 Foreground="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToPillFg}}" />
                                         </StackPanel>
-                                    </ToggleButton>
+                                    </Button>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>

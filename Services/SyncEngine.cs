@@ -126,8 +126,16 @@ public sealed class SyncEngine : IDisposable
                     {
                         try
                         {
-                            await _svc.SettingsVm.RefreshDevicesAsync();
-                            await _svc.ChatVm.RefreshDevicesAsync();
+                            // 本回调运行在线程池线程,而设备列表是绑定到 XAML 的 ObservableCollection。
+                            // 直接调用会在非 UI 线程触发 CollectionChanged,抛 RPC_E_WRONG_THREAD(0x8001010E):
+                            // 集合被 Clear() 后中断在 foreach 之前,设备列表长期为空并每秒刷屏错误日志。
+                            // 这里统一回切 UI 线程执行,两个刷新各自内部再做一次线程校验以覆盖其它调用方。
+                            _dispatcher.TryEnqueue(() =>
+                            {
+                                _ = _svc.SettingsVm.RefreshDevicesAsync();
+                                _ = _svc.ChatVm.RefreshDevicesAsync();
+                            });
+                            await Task.CompletedTask;
                         }
                         catch (Exception ex)
                         {
@@ -335,7 +343,7 @@ public sealed class SyncEngine : IDisposable
     {
         var s = _svc.Settings;
         if (!s.MonitorEnabled) return;
-        if (clip.Text is null && clip.ImagePng is null) return;
+        if (clip.Text is null && clip.ImagePng is null && clip.Files is null) return;
 
         try
         {
@@ -353,6 +361,16 @@ public sealed class SyncEngine : IDisposable
 
             // 先刷新本地历史,即使服务端离线也能立即看到刚复制的内容。
             _dispatcher.TryEnqueue(() => EntryUpdated?.Invoke(local.Entry, local.ImagePath, false));
+
+            // 文件条目只记录在本地,永不进入上传链路:
+            // 复制的文件常在数百 MB 级(安装包/视频/工程目录),上传会持续占用服务器带宽与存储,
+            // 且这类内容通常只在同一台机器内部使用,跨设备同步的收益远低于其资源成本。
+            // 这里在"落库 + 刷新 UI"之后短路,既保证本地历史完整,又不产生任何网络请求。
+            if (clip.Files is not null)
+            {
+                Log.Debug($"文件条目仅保存到本地历史(共 {clip.Files.Count} 项),按设计不参与同步");
+                return;
+            }
 
             // 未配置/未配对时只保留本地历史;配置恢复后由后续复制触发上传。
             if (string.IsNullOrWhiteSpace(s.ServerUrl) || !s.IsPaired) return;
@@ -375,12 +393,20 @@ public sealed class SyncEngine : IDisposable
         var appPath = clip.SourceApp?.ExecutablePath;
         var appIcon = clip.SourceApp?.IconPath;
 
-        var existing = History.FindByHash(clip.Hash);
+        // 说明:HistoryStore 的读写是同步阻塞的 SQLite 调用,而本方法由剪贴板捕获链路在 UI 线程调用。
+        // 每次复制在 UI 线程做 2~3 次查询 + 1 次写入(Insert 内部还会执行超限清理 TrimToLimitLocked),
+        // 数据库变大或磁盘繁忙时会直接表现为复制卡顿。这里统一挪到线程池;
+        // HistoryStore 内部用锁串行化,跨线程调用是安全的。
+
+        var existing = await Task.Run(() => History.FindByHash(clip.Hash));
         if (existing is not null)
         {
-            History.TouchByHash(clip.Hash, null, s.DeviceId, s.DeviceName, now, appName, appPath, appIcon);
-            existing = History.FindByHash(clip.Hash) ?? existing;
-            return new LocalCapture(ToClipboardEntry(existing), existing.ImagePath);
+            var refreshed = await Task.Run(() =>
+            {
+                History.TouchByHash(clip.Hash, null, s.DeviceId, s.DeviceName, now, appName, appPath, appIcon);
+                return History.FindByHash(clip.Hash) ?? existing;
+            });
+            return new LocalCapture(ToClipboardEntry(refreshed), refreshed.ImagePath);
         }
 
         string? imagePath = null;
@@ -390,12 +416,18 @@ public sealed class SyncEngine : IDisposable
             imagePath = await ImageCodec.SavePngAsync(clip.ImagePng, -Math.Abs(now.Ticks));
         }
 
+        // 文件条目不落 image_path(必须保持 NULL):该列指向本应用生成的图片缓存,
+        // 超限清理与清空历史都会直接删除它指向的文件,写入用户真实文件会导致误删。
+        // 文件内容本身也不复制,只在 file_paths 中记录路径元数据。
+        var isFile = clip.Files is { Count: > 0 };
+
         var item = new Models.HistoryItem
         {
-            Type = clip.ImagePng is { Length: > 0 } ? "Image" : "Text",
+            Type = isFile ? "File" : clip.ImagePng is { Length: > 0 } ? "Image" : "Text",
             Text = clip.Text,
             Html = clip.Html,
             ImagePath = imagePath,
+            FilePathsJson = isFile ? ClipboardFileMeta.Serialize(clip.Files!) : null,
             DeviceId = s.DeviceId,
             DeviceName = s.DeviceName,
             SourceAppName = appName,
@@ -405,8 +437,11 @@ public sealed class SyncEngine : IDisposable
             Origin = 0,
             ContentHash = clip.Hash,
         };
-        History.Insert(item);
-        var saved = History.FindByHash(clip.Hash) ?? item;
+        var saved = await Task.Run(() =>
+        {
+            History.Insert(item);
+            return History.FindByHash(clip.Hash) ?? item;
+        });
         return new LocalCapture(ToClipboardEntry(saved), saved.ImagePath);
     }
 
@@ -424,6 +459,10 @@ public sealed class SyncEngine : IDisposable
 
     private async Task UploadCapturedAsync(ClipboardMonitor.CapturedClip clip, SettingsStore s)
     {
+        // 兜底护栏:文件条目按设计永不外发。OnCapturedAsync 已在调用前短路,
+        // 这里再挡一次,确保后续任何新增的调用路径都不会把文件推到服务端。
+        if (clip.Files is not null) return;
+
         await _uploadGate.WaitAsync();
         SetTransfer(true, TransferKind.Upload);
         try
@@ -605,7 +644,9 @@ public sealed class SyncEngine : IDisposable
             }
             catch (Exception ex)
             {
-                Log.Error($"写回剪贴板失败:{ex.Message}");
+                // 带上类型与 HRESULT:剪贴板争用类异常(如 CLIPBRD_E_CANT_OPEN)的 Message 往往为空,
+                // 只打 Message 会让日志出现"写回剪贴板失败:"这种无法定位的空描述。
+                Log.Error($"写回剪贴板失败: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}", ex);
             }
         }
 
@@ -722,6 +763,31 @@ public sealed class SyncEngine : IDisposable
                 var hash = item.ContentHash ?? ClipboardMonitor.HashBytes(await File.ReadAllBytesAsync(path!));
                 _monitor?.RecordLastSeen(hash);
             }
+            else if (item.Type == "File")
+            {
+                // 写回的是文件引用(CF_HDROP),不是文件内容:即使条目包含大文件也不产生额外磁盘/内存开销。
+                // 已失效的路径由 ClipboardFiles 内部跳过;全部失效时剪贴板保持原内容不变。
+                var alive = item.Files
+                    .Where(f => File.Exists(f.Path) || Directory.Exists(f.Path))
+                    .Select(f => f.Path)
+                    .ToList();
+                if (alive.Count == 0)
+                {
+                    Log.Warn($"复制文件条目失败:文件已全部不存在或无法访问(id={item.Id})");
+                    return;
+                }
+
+                if (plainText)
+                {
+                    // 纯文本模式:写入换行分隔的路径,便于粘贴到终端、编辑器或远程会话
+                    ImageCodec.WriteClipboardText(string.Join(Environment.NewLine, alive));
+                    _monitor?.RecordLastSeen(ClipboardMonitor.HashText(string.Join(Environment.NewLine, alive)));
+                    return;
+                }
+
+                if (!await ClipboardFiles.WriteClipboardFilesAsync(alive)) return;
+                _monitor?.RecordLastSeen(item.ContentHash ?? ClipboardFileMeta.ComputeHash(item.Files));
+            }
         }
         catch (Exception ex)
         {
@@ -729,9 +795,12 @@ public sealed class SyncEngine : IDisposable
         }
     }
 
-    /// <summary>手动推送单条历史记录到所有设备。</summary>
+    /// <summary>手动推送单条历史记录到所有设备。文件条目按设计不支持推送,直接返回 false。</summary>
     public async Task<bool> PushHistoryItemAsync(Models.HistoryItem item)
     {
+        // 文件条目体积大,推送到服务器会显著占用带宽与存储,且跨设备还原文件并非本工具的设计目标
+        if (item.Type == "File") return false;
+
         var s = _svc.Settings;
         if (string.IsNullOrWhiteSpace(s.ServerUrl) || !s.IsPaired)
         {

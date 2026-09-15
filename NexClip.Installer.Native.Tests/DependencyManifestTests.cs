@@ -38,6 +38,8 @@ public sealed class DependencyManifestTests
             "minimumVersion": "8000.879.2017.0",
             "packageName": "Microsoft.WindowsAppRuntime.1.8",
             "mainPackageName": "MicrosoftCorporationII.WinAppRuntime.Main.1.8",
+            "singletonPackageName": "MicrosoftCorporationII.WinAppRuntime.Singleton",
+            "ddlmPackagePrefix": "Microsoft.WinAppRuntime.DDLM.",
             "fileName": "windowsappruntimeinstall-x64.exe",
             "sizeBytes": 106920248,
             "url": "https://download.microsoft.com/download/id/WindowsAppRuntimeInstall-x64.exe",
@@ -71,6 +73,8 @@ public sealed class DependencyManifestTests
         var windowsAppRuntime = dependencies.Single(item => item.Kind == DependencyKind.WindowsAppRuntime);
         Assert.Equal("Microsoft.WindowsAppRuntime.1.8", windowsAppRuntime.RequiredPackageName);
         Assert.Equal("MicrosoftCorporationII.WinAppRuntime.Main.1.8", windowsAppRuntime.RequiredMainPackageName);
+        Assert.Equal("MicrosoftCorporationII.WinAppRuntime.Singleton", windowsAppRuntime.RequiredSingletonPackageName);
+        Assert.Equal("Microsoft.WinAppRuntime.DDLM.", windowsAppRuntime.RequiredDdlmPackagePrefix);
         Assert.Equal(9, dependencies.Single(item => item.Kind == DependencyKind.DotNetDesktopRuntime).RequiredMajorVersion);
     }
 

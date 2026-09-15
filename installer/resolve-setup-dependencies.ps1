@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     校验并解析安装器运行环境依赖清单 setup-dependencies.json。
 .DESCRIPTION
@@ -127,6 +127,12 @@ if ([string]$dependencies.windowsAppRuntime.packageName -ne "Microsoft.WindowsAp
 if ([string]$dependencies.windowsAppRuntime.mainPackageName -ne "MicrosoftCorporationII.WinAppRuntime.Main.1.8") {
     throw "Windows App Runtime Main 包名称无效（非打包应用需要它注册 DDLM）。"
 }
+if ([string]$dependencies.windowsAppRuntime.singletonPackageName -ne "MicrosoftCorporationII.WinAppRuntime.Singleton") {
+    throw "Windows App Runtime Singleton 包名称无效。"
+}
+if ([string]$dependencies.windowsAppRuntime.ddlmPackagePrefix -ne "Microsoft.WinAppRuntime.DDLM.") {
+    throw "Windows App Runtime DDLM 包前缀无效。"
+}
 
 $packageVersion = Assert-Version -Value ([string]$dependencies.windowsAppRuntime.packageVersion) -Name "windowsAppRuntime.packageVersion"
 $minimumPackageVersion = [Version]$windowsAppRuntime.MinimumVersion
@@ -160,4 +166,6 @@ return [pscustomobject]@{
     WindowsAppRuntimeMinimumVersion = $windowsAppRuntime.MinimumVersion
     WindowsAppRuntimePackageName = [string]$dependencies.windowsAppRuntime.packageName
     WindowsAppRuntimeMainPackageName = [string]$dependencies.windowsAppRuntime.mainPackageName
+    WindowsAppRuntimeSingletonPackageName = [string]$dependencies.windowsAppRuntime.singletonPackageName
+    WindowsAppRuntimeDdlmPackagePrefix = [string]$dependencies.windowsAppRuntime.ddlmPackagePrefix
 }

@@ -196,7 +196,10 @@ public sealed partial class ClipboardMainPage : Page
     private int _lastVisualIndex;
     private Storyboard? _transitionStoryboard;
 
-    /// <summary>程序化切换分类或互传标签页(0:全部, 1:文本, 2:图片, 3:文件, 4:收藏, 5:即时互传)。</summary>
+    /// <summary>
+    /// 程序化切换分类或互传标签页。索引与 SelectorBarItem 的 Tag 一致:
+    /// 0=全部, 1=文本, 2=图片, 4=链接, 6=文件, 3=收藏, 5=即时互传。
+    /// </summary>
     public void SelectTab(int filterIndex)
     {
         foreach (var item in CategorySelectorBar.Items)
@@ -632,8 +635,9 @@ public sealed partial class ClipboardMainPage : Page
         if (sender is MenuFlyout flyout)
         {
             var isImage = _contextItem?.IsImage ?? false;
+            var isFile = _contextItem?.IsFile ?? false;
             var text = _contextItem?.Item.Text;
-            _contextSmartAction = (!isImage && !string.IsNullOrWhiteSpace(text)) ? SmartActionService.Detect(text) : null;
+            _contextSmartAction = (!isImage && !isFile && !string.IsNullOrWhiteSpace(text)) ? SmartActionService.Detect(text) : null;
 
             foreach (var item in flyout.Items)
             {
@@ -675,13 +679,30 @@ public sealed partial class ClipboardMainPage : Page
                     {
                         menuItem.Text = (_contextItem?.HasRemark == true) ? "修改备注" : "添加备注";
                     }
-                    else if (menuItem.Name == "EditMenuItem" || menuItem.Name == "PastePlainTextMenuItem" || menuItem.Name == "CopyPlainTextMenuItem")
+                    else if (menuItem.Name == "EditMenuItem" || menuItem.Name == "CopyPlainTextMenuItem")
                     {
+                        // 编辑与"复制为纯文本"只对文本条目有意义
+                        menuItem.Visibility = isImage || isFile ? Visibility.Collapsed : Visibility.Visible;
+                    }
+                    else if (menuItem.Name == "PastePlainTextMenuItem")
+                    {
+                        // 文件条目的纯文本粘贴等价于粘贴文件路径,仍有实用价值,故保持可见
+                        menuItem.Text = isFile ? "粘贴文件路径 (Shift+Enter)" : "纯文本粘贴 (Shift+Enter)";
                         menuItem.Visibility = isImage ? Visibility.Collapsed : Visibility.Visible;
                     }
-                    else if (menuItem.Name is "ViewImageMenuItem" or "OpenSystemViewerMenuItem" or "SaveImageMenuItem" or "LocateFileMenuItem")
+                    else if (menuItem.Name is "ViewImageMenuItem" or "SaveImageMenuItem")
                     {
                         menuItem.Visibility = isImage ? Visibility.Visible : Visibility.Collapsed;
+                    }
+                    else if (menuItem.Name is "OpenSystemViewerMenuItem" or "LocateFileMenuItem")
+                    {
+                        // 文件条目同样支持"用系统应用打开"与"在文件夹中显示",作用于首个仍存在的路径
+                        menuItem.Visibility = isImage || isFile ? Visibility.Visible : Visibility.Collapsed;
+                    }
+                    else if (menuItem.Name == "PushToDevicesMenuItem")
+                    {
+                        // 文件条目按设计只保存在本地:体积常在数百 MB 级,推送会显著占用服务器带宽与存储
+                        menuItem.Visibility = isFile ? Visibility.Collapsed : Visibility.Visible;
                     }
                     else if (menuItem.Name == "CopyAppNameMenuItem")
                     {
@@ -786,9 +807,14 @@ public sealed partial class ClipboardMainPage : Page
         if (_contextItem is { } vm) OpenImageViewer(vm);
     }
 
+    /// <summary>菜单"打开/定位"类动作的目标路径:图片取本地缓存文件,文件条目取首个仍存在的路径。</summary>
+    private string? ContextPrimaryPath => _contextItem is { } vm
+        ? (vm.IsFile ? vm.FirstExistingPath : vm.Item.ImagePath)
+        : null;
+
     private void OpenSystemViewerMenuItem_Click(object sender, RoutedEventArgs e)
     {
-        if (_contextItem is { } vm) OpenWithSystemViewer(vm.Item.ImagePath);
+        OpenWithSystemViewer(ContextPrimaryPath);
     }
 
     private void SaveImageMenuItem_Click(object sender, RoutedEventArgs e)
@@ -798,7 +824,7 @@ public sealed partial class ClipboardMainPage : Page
 
     private void LocateFileMenuItem_Click(object sender, RoutedEventArgs e)
     {
-        if (_contextItem is { } vm) LocateInExplorer(vm.Item.ImagePath);
+        LocateInExplorer(ContextPrimaryPath);
     }
 
     private void CopyAppNameMenuItem_Click(object sender, RoutedEventArgs e)
@@ -816,22 +842,22 @@ public sealed partial class ClipboardMainPage : Page
         if (_contextItem is { } vm) _history.DeleteAsync(vm);
     }
 
-    /// <summary>调用系统默认关联看图软件打开原图。</summary>
-    private static void OpenWithSystemViewer(string? imagePath)
+    /// <summary>用系统默认关联程序打开文件(图片条目为看图软件,文件条目为对应的默认应用或文件夹)。</summary>
+    private static void OpenWithSystemViewer(string? path)
     {
-        if (string.IsNullOrEmpty(imagePath) || !File.Exists(imagePath)) return;
+        if (string.IsNullOrEmpty(path) || !(File.Exists(path) || Directory.Exists(path))) return;
         try
         {
-            Process.Start(new ProcessStartInfo(imagePath) { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
         }
         catch (Exception ex)
         {
-            Log.Error("使用系统默认看图软件打开失败", ex);
+            Log.Error("使用系统默认关联程序打开失败", ex);
         }
     }
 
-    /// <summary>在 Windows 文件资源管理器中定位并选中图片文件。</summary>
-    private static void LocateInExplorer(string? imagePath) => NativeMethods.LocateInExplorer(imagePath);
+    /// <summary>在 Windows 文件资源管理器中定位并选中目标文件。</summary>
+    private static void LocateInExplorer(string? path) => NativeMethods.LocateInExplorer(path);
 
     private void OpenInSystemApp_Click(object sender, RoutedEventArgs e)
     {
@@ -1093,7 +1119,7 @@ public sealed partial class ClipboardMainPage : Page
         ViewerRotateTransform.Angle = _currentRotation;
     }
 
-    private void CopyViewerImage_Click(object sender, RoutedEventArgs e)
+    private async void CopyViewerImage_Click(object sender, RoutedEventArgs e)
     {
         if (_currentViewerVm is { } vm)
         {
@@ -1101,7 +1127,7 @@ public sealed partial class ClipboardMainPage : Page
         }
         else if (!string.IsNullOrEmpty(_currentViewerImagePath) && File.Exists(_currentViewerImagePath))
         {
-            ImageCodec.WriteClipboardImage(_currentViewerImagePath);
+            await ImageCodec.WriteClipboardImageAsync(_currentViewerImagePath);
             App.Services.Tray?.Notify("NexClip", "已复制图片");
         }
     }

@@ -111,6 +111,8 @@ internal static class DependencyManifest
             kind == DependencyKind.DotNetDesktopRuntime ? ReadInt32(node, "majorVersion", propertyName) : 0,
             kind == DependencyKind.WindowsAppRuntime ? ReadString(node, "packageName", propertyName) : string.Empty,
             kind == DependencyKind.WindowsAppRuntime ? ReadString(node, "mainPackageName", propertyName) : string.Empty,
+            kind == DependencyKind.WindowsAppRuntime ? ReadOptionalString(node, "singletonPackageName", "MicrosoftCorporationII.WinAppRuntime.Singleton") : string.Empty,
+            kind == DependencyKind.WindowsAppRuntime ? ReadOptionalString(node, "ddlmPackagePrefix", "Microsoft.WinAppRuntime.DDLM.") : string.Empty,
             ReadString(node, "repairArguments", propertyName));
     }
 
@@ -129,6 +131,18 @@ internal static class DependencyManifest
             string.IsNullOrWhiteSpace(value.GetString()))
         {
             throw new InvalidDataException($"{owner}.{name} 缺失或为空。");
+        }
+
+        return value.GetString()!.Trim();
+    }
+
+    private static string ReadOptionalString(JsonElement node, string name, string defaultValue)
+    {
+        if (!node.TryGetProperty(name, out var value) ||
+            value.ValueKind != JsonValueKind.String ||
+            string.IsNullOrWhiteSpace(value.GetString()))
+        {
+            return defaultValue;
         }
 
         return value.GetString()!.Trim();

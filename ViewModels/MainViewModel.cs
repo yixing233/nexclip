@@ -84,9 +84,13 @@ public partial class MainViewModel : ObservableObject
         return new BitmapImage(new Uri("file:///" + path.Replace('\\', '/')));
     }
 
-    public string CurrentSummary => CurrentEntry?.Type == "Image"
-        ? "[图片]"
-        : (CurrentEntry?.Text?.ReplaceLineEndings(" ").Trim() ?? "");
+    /// <summary>首页当前条目摘要。文件条目仅本地记录,不来自服务端,此处仅作兜底展示。</summary>
+    public string CurrentSummary => CurrentEntry?.Type switch
+    {
+        "Image" => "[图片]",
+        "File" => "[文件]",
+        _ => CurrentEntry?.Text?.ReplaceLineEndings(" ").Trim() ?? "",
+    };
 
     public string EmptyHint => CurrentEntry is null ? "服务器当前没有剪贴板内容" : "";
 

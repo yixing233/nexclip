@@ -49,7 +49,7 @@
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <!-- 搜索框(内置一键清空按钮与快捷键提示) -->
+                <!-- 搜索框(自绘 Lucide 清除按钮与快捷键提示) -->
                 <Grid x:Name="SearchBoxHost" VerticalAlignment="Center" Margin="0,0,8,0">
                     <TextBox
                         x:Name="SearchBox"
@@ -59,7 +59,20 @@
                         LostFocus="SearchBox_LostFocus"
                         Padding="10,5,28,5"
                         Height="32"
-                        VerticalAlignment="Center" />
+                        VerticalAlignment="Center">
+                        <TextBox.Resources>
+                            <!-- 使用外层 Lucide 清除按钮,用空模板收掉 TextBox 自带的同名按钮,避免两个清除入口重叠。 -->
+                            <Style x:Key="DeleteButtonStyle" TargetType="Button">
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="Button">
+                                            <Grid />
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </TextBox.Resources>
+                    </TextBox>
                     <Button
                         Command="{Binding ClearSearchCommand}"
                         Visibility="{Binding HasSearchText, Converter={StaticResource BoolToVis}}"
@@ -111,6 +124,7 @@
             <SelectorBarItem x:Name="TabAll" Text="全部" Tag="0" />
             <SelectorBarItem x:Name="TabText" Text="文本" Tag="1" />
             <SelectorBarItem x:Name="TabImage" Text="图片" Tag="2" />
+            <SelectorBarItem x:Name="TabFile" Text="文件" Tag="6" />
             <SelectorBarItem x:Name="TabLink" Text="链接" Tag="4" />
             <SelectorBarItem x:Name="TabStar" Text="收藏" Tag="3" />
             <SelectorBarItem x:Name="TabTransfer" Text="即时互传" Tag="5" />
@@ -203,7 +217,7 @@
                                             <ImageIcon Source="{x:Bind services:Lucide.Copy}" />
                                         </MenuFlyoutItem.Icon>
                                     </MenuFlyoutItem>
-                                    <MenuFlyoutItem Text="推送到所有设备" Click="PushToDevicesMenuItem_Click">
+                                    <MenuFlyoutItem x:Name="PushToDevicesMenuItem" Text="推送到所有设备" Click="PushToDevicesMenuItem_Click">
                                         <MenuFlyoutItem.Icon>
                                             <ImageIcon Source="{x:Bind services:Lucide.Upload}" />
                                         </MenuFlyoutItem.Icon>
@@ -397,6 +411,39 @@
                                                 MaxHeight="80"
                                                 TextTrimming="CharacterEllipsis"
                                                 FontSize="13" />
+                                        </Border>
+                                        <!-- 文件条目预览:文件名 + 剩余项数(仅本地记录,不参与同步) -->
+                                        <Border
+                                            Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="6"
+                                            Padding="10,7"
+                                            HorizontalAlignment="Left"
+                                            MaxWidth="420"
+                                            ToolTipService.ToolTip="{x:Bind FileTooltip, Mode=OneWay}"
+                                            Visibility="{x:Bind IsFile, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <Image
+                                                    Source="{x:Bind services:Lucide.FileIcon, Mode=OneTime}"
+                                                    Width="16"
+                                                    Height="16"
+                                                    VerticalAlignment="Center" />
+                                                <TextBlock
+                                                    Text="{x:Bind FilePrimaryName, Mode=OneWay}"
+                                                    FontSize="14"
+                                                    FontWeight="SemiBold"
+                                                    VerticalAlignment="Center"
+                                                    MaxWidth="280"
+                                                    TextTrimming="CharacterEllipsis"
+                                                    TextWrapping="NoWrap" />
+                                                <TextBlock
+                                                    Text="{x:Bind FileRestText, Mode=OneWay}"
+                                                    FontSize="12"
+                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                    VerticalAlignment="Center"
+                                                    Visibility="{x:Bind HasFileRest, Mode=OneWay, Converter={StaticResource BoolToVis}}" />
+                                            </StackPanel>
                                         </Border>
                                         <!-- 普通文本预览 -->
                                         <TextBlock

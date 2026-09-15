@@ -34,6 +34,8 @@
     "sdkPackageVersion": "1.8.260529003",
     "packageName": "Microsoft.WindowsAppRuntime.1.8",
     "mainPackageName": "MicrosoftCorporationII.WinAppRuntime.Main.1.8",
+    "singletonPackageName": "MicrosoftCorporationII.WinAppRuntime.Singleton",
+    "ddlmPackagePrefix": "Microsoft.WinAppRuntime.DDLM.",
     "packageVersion": "8000.921.1539.0",
     "minimumVersion": "8000.879.2017.0",
     "fileName": "windowsappruntimeinstall-x64.exe",

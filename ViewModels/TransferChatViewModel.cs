@@ -15,6 +15,13 @@ public partial class DeviceSelectViewModel : ObservableObject
     private static readonly SolidColorBrush OnlineBrush = new(ColorHelper.FromArgb(255, 16, 185, 129));
     private static readonly SolidColorBrush OfflineBrush = new(ColorHelper.FromArgb(255, 156, 163, 175));
 
+    /// <summary>
+    /// 所属的互传 VM。选中态变化时回传给它统一收敛(重算"全部设备"高亮 + 刷新消息过滤)。
+    /// 采用可写属性而非构造参数:该 VM 由 XAML 以对象初始化器方式创建,
+    /// 且 XAML 类型信息可能要求可无参构造,保持默认构造最省事。
+    /// </summary>
+    internal TransferChatViewModel? Owner { get; set; }
+
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
     public string Platform { get; set; } = "";
@@ -22,6 +29,13 @@ public partial class DeviceSelectViewModel : ObservableObject
 
     [ObservableProperty]
     private bool isSelected;
+
+    /// <summary>
+    /// 选中态变化的唯一收敛入口。
+    /// 之所以放在属性回调而不是点击事件里: ToggleButton.OnClick 是"先抛 Click、后执行 OnToggle",
+    /// 在 Click 阶段改状态会被其随后的翻转覆盖, 只有属性回调不依赖任何事件顺序。
+    /// </summary>
+    partial void OnIsSelectedChanged(bool value) => Owner?.OnDeviceSelectionChanged(this);
 
     public Brush StatusBrush => IsOnline ? OnlineBrush : OfflineBrush;
     public string DisplayText => IsOnline ? $"{Name} (在线)" : $"{Name} (离线)";
@@ -201,17 +215,28 @@ public partial class TransferChatViewModel : ObservableObject
             var selfId = _services.Settings.DeviceId;
             var others = cached.Where(d => !string.Equals(d.Id, selfId, StringComparison.OrdinalIgnoreCase)).ToList();
             Devices.Clear();
-            foreach (var d in others)
+            // 重建期间置位闸门,理由同 RefreshDevicesAsync:避免集合半填充时反复重算全选状态
+            _isUpdatingDeviceSelection = true;
+            try
             {
-                var devVm = new DeviceSelectViewModel
+                foreach (var d in others)
                 {
-                    Id = d.Id,
-                    Name = d.Name,
-                    Platform = d.Platform ?? "Unknown",
-                    IsOnline = d.Online,
-                    IsSelected = SelectAllDevices ? d.Online : false,
-                };
-                Devices.Add(devVm);
+                    Devices.Add(new DeviceSelectViewModel
+                    {
+                        // Owner 必须先于 IsSelected 赋值:初始化器按书写顺序执行,
+                        // IsSelected 一旦赋值就会回调 OnDeviceSelectionChanged
+                        Owner = this,
+                        Id = d.Id,
+                        Name = d.Name,
+                        Platform = d.Platform ?? "Unknown",
+                        IsOnline = d.Online,
+                        IsSelected = SelectAllDevices ? d.Online : false,
+                    });
+                }
+            }
+            finally
+            {
+                _isUpdatingDeviceSelection = false;
             }
             var onlineCount = others.Count(d => d.Online);
             OnlineSummary = $"{onlineCount} 台设备在线";
@@ -422,14 +447,21 @@ public partial class TransferChatViewModel : ObservableObject
         catch { return null; }
     }
 
+    /// <summary>设备刷新重入闸门:1 表示上一轮仍在执行。</summary>
+    private int _devicesRefreshing;
+
     public async Task RefreshDevicesAsync()
     {
         var s = _services.Settings;
         if (string.IsNullOrWhiteSpace(s.ServerUrl) || !s.IsPaired)
         {
-            OnlineSummary = "未配对";
+            App.RunOnUiThread(() => OnlineSummary = "未配对");
             return;
         }
+
+        // 心跳(30 秒一次)与服务端 DevicesChanged 广播可能叠加触发。没有闸门时多轮并发刷新
+        // 会交错清空/重建 Devices,既浪费请求也会让设备选择状态来回跳。
+        if (Interlocked.Exchange(ref _devicesRefreshing, 1) == 1) return;
 
         try
         {
@@ -439,31 +471,54 @@ public partial class TransferChatViewModel : ObservableObject
             // 过滤掉本机
             var others = list.Where(d => !string.Equals(d.Id, selfId, StringComparison.OrdinalIgnoreCase)).ToList();
 
-            var prevSelection = Devices.Where(d => d.IsSelected).Select(d => d.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            Devices.Clear();
-            foreach (var d in others)
+            // Devices 与 Messages 都绑定到 XAML,集合变更必须在 UI 线程执行。
+            // 本方法会被心跳定时器(线程池线程)调用,在非 UI 线程触发 CollectionChanged 会抛
+            // RPC_E_WRONG_THREAD (0x8001010E):Clear() 抛异常后 foreach 永不执行,
+            // 设备列表长期为空且每秒刷屏错误日志。
+            App.RunOnUiThread(() =>
             {
-                var devVm = new DeviceSelectViewModel
-                {
-                    Id = d.Id,
-                    Name = d.Name,
-                    Platform = d.Platform ?? "Unknown",
-                    IsOnline = d.Online,
-                    IsSelected = SelectAllDevices ? d.Online : prevSelection.Contains(d.Id),
-                };
-                Devices.Add(devVm);
-            }
+                var prevSelection = Devices.Where(d => d.IsSelected).Select(d => d.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            var onlineCount = others.Count(d => d.Online);
-            OnlineSummary = $"{onlineCount} 台设备在线";
+                Devices.Clear();
+                // 重建期间置位闸门:逐台设置 IsSelected 会触发 OnIsSelectedChanged,
+                // 不闸住就会在集合只填了一半时反复重算"是否全选"并反复刷新消息列表。
+                _isUpdatingDeviceSelection = true;
+                try
+                {
+                    foreach (var d in others)
+                    {
+                        Devices.Add(new DeviceSelectViewModel
+                        {
+                            Owner = this,
+                            Id = d.Id,
+                            Name = d.Name,
+                            Platform = d.Platform ?? "Unknown",
+                            IsOnline = d.Online,
+                            IsSelected = SelectAllDevices ? d.Online : prevSelection.Contains(d.Id),
+                        });
+                    }
+                }
+                finally
+                {
+                    _isUpdatingDeviceSelection = false;
+                }
+
+                OnlineSummary = $"{others.Count(d => d.Online)} 台设备在线";
+                ApplyFilter();
+            });
+
+            // 缓存写入与网络无关,留在后台线程,避免磁盘 IO 落在 UI 线程
             s.SaveCachedDevices(list);
-            ApplyFilter();
         }
         catch (Exception ex)
         {
-            Log.Error("获取在线设备列表失败", ex);
-            OnlineSummary = "获取设备列表失败";
+            // 只记录消息:服务器不可达属预期场景,逐条打完整堆栈会迅速撑大日志文件
+            Log.Warn($"获取在线设备列表失败: {ex.Message}");
+            App.RunOnUiThread(() => OnlineSummary = "获取设备列表失败");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _devicesRefreshing, 0);
         }
     }
 
@@ -483,15 +538,26 @@ public partial class TransferChatViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// 「全部设备」胶囊点击: 置位主开关并把它传播到各在线设备。
+    /// 由页面点击处理器显式调用——胶囊的选中态完全由 VM 派生(见 TransferChatPage.xaml 的 FilterPillStyle 说明),
+    /// 不再依赖控件的 IsChecked, 因此不存在"控件自行翻转"导致的真值分叉。
+    /// </summary>
     public void ToggleSelectAll(bool selectAll)
+    {
+        SelectAllDevices = selectAll;
+        ApplySelectAllToDevices(selectAll);
+    }
+
+    /// <summary>把主开关状态应用到各设备(仅在线设备可被选中)。</summary>
+    private void ApplySelectAllToDevices(bool selected)
     {
         _isUpdatingDeviceSelection = true;
         try
         {
-            SelectAllDevices = selectAll;
             foreach (var dev in Devices)
             {
-                dev.IsSelected = selectAll && dev.IsOnline;
+                dev.IsSelected = selected && dev.IsOnline;
             }
         }
         finally
@@ -502,44 +568,34 @@ public partial class TransferChatViewModel : ObservableObject
         ApplyFilter();
     }
 
+    /// <summary>
+    /// 单台设备胶囊点击: 切换该设备自身的选中状态(纯开关语义, 不隐式改变其他设备)。
+    /// 后续的"全部设备"高亮与消息过滤由 <see cref="OnDeviceSelectionChanged"/> 统一收敛。
+    /// </summary>
     public void OnDevicePillClicked(DeviceSelectViewModel target)
     {
+        target.IsSelected = !target.IsSelected;
+    }
+
+    /// <summary>
+    /// 单台设备选中态变化后的统一收敛点:重算"全部设备"高亮并刷新消息过滤。
+    /// 放在属性回调里, 使收敛不依赖任何事件顺序(点击处理器只负责翻转状态)。
+    /// </summary>
+    public void OnDeviceSelectionChanged(DeviceSelectViewModel changed)
+    {
+        // 批量更新(主开关传播、设备列表重建)期间不逐台收敛, 由发起方在结束后统一处理
+        if (_isUpdatingDeviceSelection) return;
+
+        var total = Devices.Count;
+        var selectedCount = Devices.Count(d => d.IsSelected);
+
         _isUpdatingDeviceSelection = true;
         try
         {
-            if (SelectAllDevices)
-            {
-                SelectAllDevices = false;
-                foreach (var dev in Devices)
-                {
-                    dev.IsSelected = string.Equals(dev.Id, target.Id, StringComparison.OrdinalIgnoreCase);
-                }
-            }
-            else
-            {
-                if (target.IsSelected && Devices.Count(d => d.IsSelected) == 1)
-                {
-                    SelectAllDevices = true;
-                    foreach (var dev in Devices)
-                    {
-                        dev.IsSelected = dev.IsOnline;
-                    }
-                }
-                else
-                {
-                    target.IsSelected = !target.IsSelected;
-                    var selectedCount = Devices.Count(d => d.IsSelected);
-                    if (selectedCount == 0 || selectedCount == Devices.Count)
-                    {
-                        SelectAllDevices = true;
-                        foreach (var dev in Devices) dev.IsSelected = dev.IsOnline;
-                    }
-                    else
-                    {
-                        SelectAllDevices = false;
-                    }
-                }
-            }
+            // "全部设备"高亮 ⟺ 确实全选。取消任意一台后必须熄灭:
+            // 否则会出现"全部设备"高亮与设备未选中并存的矛盾状态, 且 ApplyFilter 的 isAll
+            // 会因主开关仍为 true 而继续显示全部消息, 取消选择形同无效。
+            SelectAllDevices = total > 0 && selectedCount == total;
         }
         finally
         {

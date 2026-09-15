@@ -38,3 +38,38 @@ public sealed class BoolToPillForegroundConverter : IValueConverter
     public object ConvertBack(object value, Type targetType, object parameter, string language) =>
         throw new NotSupportedException();
 }
+
+/// <summary>
+/// 胶囊选中状态 → 底色: 选中=品牌蓝(#2563EB), 未选中=卡片次级底色(随主题自适应)。
+/// 与 <see cref="BoolToPillForegroundConverter"/> 配对使用, 两者由同一个 VM 属性驱动,
+/// 从而保证底色与文字色不可能分叉(参见 TransferChatPage.xaml 中 FilterPillStyle 的说明)。
+/// </summary>
+public sealed class BoolToPillBackgroundConverter : IValueConverter
+{
+    private static readonly SolidColorBrush SelectedBrush = new(ColorHelper.FromArgb(255, 37, 99, 235));   // #2563EB
+    private static readonly SolidColorBrush LightFallback = new(ColorHelper.FromArgb(255, 243, 244, 246));
+    private static readonly SolidColorBrush DarkFallback = new(ColorHelper.FromArgb(255, 45, 48, 56));
+
+    public object Convert(object value, Type targetType, object parameter, string language)
+    {
+        if (value is true) return SelectedBrush;
+
+        // 未选中: 优先复用主题的卡片次级底色, 取不到时按当前主题回退
+        try
+        {
+            if (Application.Current.Resources.TryGetValue("CardBackgroundFillColorSecondaryBrush", out var res)
+                && res is Brush themeBrush)
+            {
+                return themeBrush;
+            }
+        }
+        catch
+        {
+            // 资源字典在启动早期可能尚未就绪, 走回退色
+        }
+        return Services.Lucide.IsDarkTheme ? DarkFallback : LightFallback;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) =>
+        throw new NotSupportedException();
+}

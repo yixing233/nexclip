@@ -41,6 +41,8 @@ internal sealed record DependencyDefinition(
     int RequiredMajorVersion = 0,
     string RequiredPackageName = "",
     string RequiredMainPackageName = "",
+    string RequiredSingletonPackageName = "",
+    string RequiredDdlmPackagePrefix = "",
     string RepairArguments = "")
 {
     internal Uri DownloadUri => Sources[0].Uri;

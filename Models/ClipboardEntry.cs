@@ -4,7 +4,7 @@
 public sealed class ClipboardEntry
 {
     public long Id { get; set; }
-    public string Type { get; set; } = "Text";       // Text | Image
+    public string Type { get; set; } = "Text";       // Text | Image(文件条目仅存于本地,不经过服务端)
     public string? Text { get; set; }
     public string? Html { get; set; }                // 富文本 HTML 片段(可选;老服务端不返回该字段时为 null)
     public string? ImageRef { get; set; }
@@ -28,8 +28,11 @@ public sealed class ClipboardEntry
         }
     }
 
-    /// <summary>首页摘要(单行省略用)。</summary>
-    public string SummaryText => Type == "Image"
-        ? "[图片]"
-        : (Text?.ReplaceLineEndings(" ").Trim() ?? "");
+    /// <summary>首页摘要(单行省略用)。文件条目仅本地记录,不会经由服务端出现,此处仅作兜底。</summary>
+    public string SummaryText => Type switch
+    {
+        "Image" => "[图片]",
+        "File" => "[文件]",
+        _ => Text?.ReplaceLineEndings(" ").Trim() ?? "",
+    };
 }

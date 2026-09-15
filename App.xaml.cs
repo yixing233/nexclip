@@ -11,6 +11,34 @@ public partial class App : Application
     private const string RestartWaitArg = "--restart-wait";
 
     public static AppServices Services { get; private set; } = null!;
+
+    /// <summary>
+    /// UI 线程调度器(启动时捕获)。后台线程(心跳定时器、SignalR 回调等)需要触碰
+    /// 绑定到 XAML 的 ObservableCollection 或依赖线程亲和性的 WinRT 对象时,必须经此回切,
+    /// 否则会抛出 RPC_E_WRONG_THREAD (0x8001010E)。
+    /// </summary>
+    public static DispatcherQueue? UiDispatcher { get; private set; }
+
+    /// <summary>
+    /// 若当前不在 UI 线程则把动作投递回 UI 线程执行;已在 UI 线程(或调度器不可用)时同步执行。
+    /// 返回是否已同步执行完成(便于调用方决定是否需要等待)。
+    /// </summary>
+    public static bool RunOnUiThread(Action action)
+    {
+        var dispatcher = UiDispatcher;
+        if (dispatcher is null || dispatcher.HasThreadAccess)
+        {
+            action();
+            return true;
+        }
+        dispatcher.TryEnqueue(() =>
+        {
+            try { action(); }
+            catch (Exception ex) { Log.Error("UI 线程回调执行失败", ex); }
+        });
+        return false;
+    }
+
     public static ClipboardWindow? ClipboardWindow { get; private set; }
     public static SettingsWindow? SettingsWindow { get; private set; }
     public static HotKeyService? Hotkey { get; private set; }            // 剪贴板呼出(Alt+V)
@@ -179,6 +207,7 @@ public partial class App : Application
             }
         }
         var dispatcher = DispatcherQueue.GetForCurrentThread();
+        UiDispatcher = dispatcher;
         _showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
         var waiter = new Thread(() =>
         {

@@ -84,13 +84,20 @@ public static class SourceAppDetector
     }
 
     /// <summary>
-    /// 嗅探当前向剪贴板写入内容或正在前台交互的应用程序来源
+    /// 剪贴板来源窗口的轻量快照(窗口句柄 + 进程 Id)。
+    /// 仅由 Win32 调用取得,不含任何磁盘 IO 或进程查询,可在 UI 线程即时执行。
     /// </summary>
-    public static SourceAppInfo? DetectSourceApp()
+    public readonly record struct ClipboardOwnerHandle(IntPtr Hwnd, uint Pid);
+
+    /// <summary>
+    /// 快速捕获剪贴板当前所有者窗口。返回 null 表示无法确定来源或来源即本进程。
+    /// 只做 GetClipboardOwner / GetOpenClipboardWindow / GetForegroundWindow 三次廉价调用,
+    /// 目的是在 UI 线程上先"钉住"来源,再交给后台线程做重活,避免来源在解析期间漂移。
+    /// </summary>
+    public static ClipboardOwnerHandle? CaptureOwnerHandle()
     {
         try
         {
-            // 使用 Environment.ProcessId 取本进程 PID，避免每次调用都分配带终结器的 Process 对象
             var currentPid = (uint)Environment.ProcessId;
 
             // 1. 优先级 1: 剪贴板当前所有者窗口
@@ -108,20 +115,32 @@ public static class SourceAppDetector
                 hwnd = GetForegroundWindow();
             }
 
-            if (hwnd == IntPtr.Zero || !NativeMethods.IsWindow(hwnd))
-            {
-                return null;
-            }
+            if (hwnd == IntPtr.Zero || !NativeMethods.IsWindow(hwnd)) return null;
 
             GetWindowThreadProcessId(hwnd, out uint pid);
+            if (pid == 0 || pid == currentPid) return null;
 
-            // 若所有者就是本程序自身，则直接返回 null（说明是自身写回）
-            if (pid == currentPid || pid == 0)
-            {
-                return null;
-            }
+            return new ClipboardOwnerHandle(hwnd, pid);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
-            // 4. 处理 UWP 宿主进程 (ApplicationFrameHost.exe)
+    /// <summary>
+    /// 解析来源应用详情:进程名、可执行文件路径、PE 版本信息(磁盘读取)、窗口标题与图标提取(GDI+)。
+    /// 这些操作单次可达数毫秒,必须在后台线程执行,不能放在剪贴板捕获的 UI 线程路径上。
+    /// </summary>
+    public static SourceAppInfo? ResolveSourceApp(ClipboardOwnerHandle owner)
+    {
+        try
+        {
+            var currentPid = (uint)Environment.ProcessId;
+            var hwnd = owner.Hwnd;
+            var pid = owner.Pid;
+
+            // 处理 UWP 宿主进程 (ApplicationFrameHost.exe)
             var (realHwnd, realPid) = ResolveRealUwpWindow(hwnd, pid);
             if (realPid != 0 && realPid != currentPid)
             {
@@ -144,7 +163,7 @@ public static class SourceAppDetector
             }
 
             var exePath = GetProcessExecutablePath(process, pid);
-            var friendlyName = ResolveFriendlyName(processName, exePath);
+            var friendlyName = ResolveFriendlyNameCached(processName, exePath);
 
             var sbTitle = new StringBuilder(256);
             GetWindowText(hwnd, sbTitle, 256);
@@ -162,9 +181,19 @@ public static class SourceAppDetector
         }
         catch (Exception ex)
         {
-            Log.Debug($"检测剪贴板来源程序失败: {ex.Message}");
+            Log.Debug($"解析剪贴板来源程序失败: {ex.Message}");
             return null;
         }
+    }
+
+    /// <summary>
+    /// 嗅探当前向剪贴板写入内容或正在前台交互的应用程序来源(同步版本,UI 线程调用会阻塞)。
+    /// 剪贴板捕获路径请改用 <see cref="CaptureOwnerHandle"/> + <see cref="ResolveSourceApp"/>。
+    /// </summary>
+    public static SourceAppInfo? DetectSourceApp()
+    {
+        var owner = CaptureOwnerHandle();
+        return owner is null ? null : ResolveSourceApp(owner.Value);
     }
 
     /// <summary>
@@ -235,6 +264,20 @@ public static class SourceAppDetector
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// 友好名称缓存(可执行文件路径 → 名称)。
+    /// FileVersionInfo.GetVersionInfo 需要打开并解析目标 PE 文件的资源段,属磁盘 IO,
+    /// 同一程序反复复制时没必要每次都读一遍。
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> FriendlyNameCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private static string ResolveFriendlyNameCached(string processName, string? exePath)
+    {
+        if (string.IsNullOrEmpty(exePath)) return ResolveFriendlyName(processName, exePath);
+        return FriendlyNameCache.GetOrAdd(exePath, key => ResolveFriendlyName(processName, key));
     }
 
     /// <summary>

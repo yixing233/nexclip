@@ -15,10 +15,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
-    <Version>20260910.01</Version>
-    <AssemblyVersion>2026.9.10.1</AssemblyVersion>
-    <FileVersion>2026.9.10.1</FileVersion>
-    <InformationalVersion>20260910.01</InformationalVersion>
+    <Version>20260915.01</Version>
+    <AssemblyVersion>2026.9.15.1</AssemblyVersion>
+    <FileVersion>2026.9.15.1</FileVersion>
+    <InformationalVersion>20260915.01</InformationalVersion>
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
     <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
     <SatelliteResourceLanguages>zh-Hans;zh-CN;en-US;en</SatelliteResourceLanguages>
@@ -43,6 +43,11 @@
     <Content Include="Assets\icon.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 拼音检索映射表（音节 → 汉字，源自 Unicode Unihan kMandarin / kXHC1983）。
+         以嵌入资源而非 Content 打包：它是只读数据、不随输出目录分发，且必须能在任意工作目录下加载。 -->
+    <EmbeddedResource Include="Assets\pinyin.txt" LogicalName="NexClip.Desktop.pinyin.txt" />
   </ItemGroup>
   <ItemGroup>
     <!-- 排除嵌套的 NexClip.Tray 子项目源码与 obj/bin 生成物:默认 Compile 通配会把它们连同自身 obj 里的 AssemblyInfo 一起编进主程序集,造成重复类型/重复特性 -->

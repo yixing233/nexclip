@@ -818,20 +818,27 @@ public partial class SettingsViewModel : ObservableObject
         var s = _svc.Settings;
         if (string.IsNullOrWhiteSpace(s.ServerUrl))
         {
-            Devices.Clear();
             s.ClearCachedDevices();
-            DeviceStatus = "等待配置";
-            DeviceLoadErrorText = "";
-            NotifyDeviceStateChanged();
+            // Devices 绑定到 XAML:集合变更必须回切 UI 线程(本方法可能被心跳定时器从线程池调用)
+            App.RunOnUiThread(() =>
+            {
+                Devices.Clear();
+                DeviceStatus = "等待配置";
+                DeviceLoadErrorText = "";
+                NotifyDeviceStateChanged();
+            });
             return;
         }
 
         if (IsDevicesLoading) return;
 
-        IsDevicesLoading = true;
-        DeviceLoadErrorText = "";
-        DeviceStatus = Devices.Count > 0 ? $"正在更新 · {Devices.Count} 台" : "正在加载…";
-        NotifyDeviceStateChanged();
+        App.RunOnUiThread(() =>
+        {
+            IsDevicesLoading = true;
+            DeviceLoadErrorText = "";
+            DeviceStatus = Devices.Count > 0 ? $"正在更新 · {Devices.Count} 台" : "正在加载…";
+            NotifyDeviceStateChanged();
+        });
         try
         {
             var list = await _svc.Api.GetDevicesAsync(s.ServerUrl, s.DeviceId, s.AuthToken);
@@ -851,23 +858,34 @@ public partial class SettingsViewModel : ObservableObject
                              .ThenByDescending(d => d.LastSeenAt)
                              .ToList();
 
-            Devices.Clear();
-            foreach (var d in sorted) Devices.Add(d);
-            DeviceStatus = list.Count == 0 ? "暂无设备" : $"{list.Count} 台设备";
+            App.RunOnUiThread(() =>
+            {
+                Devices.Clear();
+                foreach (var d in sorted) Devices.Add(d);
+                DeviceStatus = list.Count == 0 ? "暂无设备" : $"{list.Count} 台设备";
+            });
 
-            // 请求成功，持久化更新本地缓存
+            // 请求成功，持久化更新本地缓存(磁盘 IO 留在后台线程)
             s.SaveCachedDevices(sorted);
         }
         catch (Exception ex)
         {
-            DeviceLoadErrorText = BuildDeviceLoadErrorMessage(ex);
-            DeviceStatus = Devices.Count > 0 ? $"更新失败 · 保留 {Devices.Count} 台" : "加载失败";
+            var error = BuildDeviceLoadErrorMessage(ex);
+            App.RunOnUiThread(() =>
+            {
+                DeviceLoadErrorText = error;
+                DeviceStatus = Devices.Count > 0 ? $"更新失败 · 保留 {Devices.Count} 台" : "加载失败";
+            });
             Log.Warn($"设备列表加载失败:{ex.Message}");
         }
         finally
         {
-            IsDevicesLoading = false;
-            NotifyDeviceStateChanged();
+            // 无论成功失败都必须复位闸门,否则后续刷新会被永久短路
+            App.RunOnUiThread(() =>
+            {
+                IsDevicesLoading = false;
+                NotifyDeviceStateChanged();
+            });
         }
     }
 
@@ -1197,6 +1215,8 @@ public partial class SettingsViewModel : ObservableObject
                     type = it.Type,
                     text = it.Text,
                     imageBase64 = img,
+                    // 文件条目只导出路径元数据,不导出文件内容(文件可能达数百 MB)
+                    filePaths = it.IsFile ? it.FilePathsJson : null,
                     deviceName = it.DeviceName,
                     createdAt = it.CreatedAt.ToString("o"),
                     starred = it.Starred,
@@ -1247,6 +1267,7 @@ public partial class SettingsViewModel : ObservableObject
                         ? cdt
                         : DateTime.UtcNow;
                     var starred = el.TryGetProperty("starred", out var st) && st.GetBoolean();
+                    var filePaths = el.TryGetProperty("filePaths", out var fp) ? fp.GetString() : null;
 
                     string? imagePath = null;
                     if (type == "Image" && !string.IsNullOrEmpty(imgB64))
@@ -1265,6 +1286,8 @@ public partial class SettingsViewModel : ObservableObject
                         Type = type ?? "Text",
                         Text = text,
                         ImagePath = imagePath,
+                        // 文件条目只恢复路径清单:导出文件不含文件内容,路径失效时列表会提示无法访问
+                        FilePathsJson = type == "File" ? filePaths : null,
                         DeviceId = "import",
                         DeviceName = deviceName,
                         CreatedAt = createdAt,

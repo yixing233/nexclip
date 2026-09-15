@@ -1,4 +1,5 @@
 using System.Data;
+using System.Text;
 using Microsoft.Data.Sqlite;
 using NexClip.Desktop.Models;
 
@@ -48,18 +49,7 @@ public sealed class HistoryStore : IDisposable
         DbPath = Path.Combine(storageDir, "history.db");
         _conn = new SqliteConnection($"Data Source={DbPath}");
         _conn.Open();
-        RegisterCustomFunctions();
         EnsureSchema();
-    }
-
-    private void RegisterCustomFunctions()
-    {
-        _conn.CreateFunction("pinyin_match", (string? text, string? query) =>
-        {
-            if (string.IsNullOrWhiteSpace(query)) return 1;
-            if (string.IsNullOrWhiteSpace(text)) return 0;
-            return PinyinHelper.IsMatch(text, query) ? 1 : 0;
-        });
     }
 
     /// <summary>建表 + 兼容迁移(构造与 Reopen 共用)。</summary>
@@ -88,7 +78,10 @@ public sealed class HistoryStore : IDisposable
         EnsureSourceAppColumns();
         EnsureRemarkColumn();
         EnsureHtmlColumn();
+        EnsureFilePathColumn();
+        EnsureSearchColumns();
         BackfillContentHashes();
+        BackfillSearchBlobs();
     }
 
     /// <summary>切换数据储存目录(设置页"修改"储存位置):关闭旧库,在新目录重建连接。</summary>
@@ -101,7 +94,6 @@ public sealed class HistoryStore : IDisposable
             DbPath = Path.Combine(storageDir, "history.db");
             _conn = new SqliteConnection($"Data Source={DbPath}");
             _conn.Open();
-            RegisterCustomFunctions();
             EnsureSchema();
         }
     }
@@ -221,13 +213,204 @@ public sealed class HistoryStore : IDisposable
         }
     }
 
-    /// <summary>为历史存量条目回填内容哈希(文本取文本哈希,图片取缓存文件字节哈希)。</summary>
-    private void BackfillContentHashes()
+    /// <summary>
+    /// 兼容旧库:新增 file_paths 列(文件条目的路径元数据 JSON)。
+    /// 该列与 image_path 语义严格分离:文件条目不得写入 image_path,
+    /// 因为所有清理路径(TrimToLimitLocked / PruneOlderThan / Clear)都会直接删除 image_path 指向的文件。
+    /// </summary>
+    private void EnsureFilePathColumn()
     {
-        var rows = new List<(long Id, string Type, string? Text, string? ImagePath, string? Html)>();
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info(entries)";
+        var hasFilePaths = false;
+        using (var r = cmd.ExecuteReader())
+        {
+            while (r.Read())
+            {
+                if (r.GetString(1) == "file_paths") { hasFilePaths = true; break; }
+            }
+        }
+        if (!hasFilePaths)
+        {
+            cmd.CommandText = "ALTER TABLE entries ADD COLUMN file_paths TEXT";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>拼音检索串中"主读音"与"备选读音"的分段符（控制字符，不会出现在用户输入里）。</summary>
+    private const char VariantSeparator = '\u0001';
+
+    /// <summary>
+    /// 兼容旧库:新增 pinyin_blob / initials_blob 两列（拼音与首字母检索串）。
+    ///
+    /// 检索串在写入时预计算，查询阶段只做 LIKE 子串匹配。
+    /// 旧实现把拼音匹配放在 C# 注册的 SQLite 函数里：每行、每字段各回调一次，
+    /// 且每次都重新计算整段文本的拼音——既随库增长线性变慢，又让所有索引失效。
+    /// </summary>
+    private void EnsureSearchColumns()
+    {
+        using var cmd = _conn.CreateCommand();
+        cmd.CommandText = "PRAGMA table_info(entries)";
+        var hasPinyin = false;
+        var hasInitials = false;
+        using (var r = cmd.ExecuteReader())
+        {
+            while (r.Read())
+            {
+                var col = r.GetString(1);
+                if (col == "pinyin_blob") hasPinyin = true;
+                else if (col == "initials_blob") hasInitials = true;
+            }
+        }
+        if (!hasPinyin)
+        {
+            cmd.CommandText = "ALTER TABLE entries ADD COLUMN pinyin_blob TEXT";
+            cmd.ExecuteNonQuery();
+        }
+        if (!hasInitials)
+        {
+            cmd.CommandText = "ALTER TABLE entries ADD COLUMN initials_blob TEXT";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>
+    /// 拼出用于拼音检索的源文本。字段与字面检索保持一致，并额外纳入文件名与完整路径
+    /// （字面检索靠 file_paths 的 JSON 原文，拼音检索需要的是去转义后的可读文本）。
+    /// </summary>
+    private static string BuildPinyinSource(
+        string? text, string? remark, string? appName, string? deviceName, string? type, string? filePathsJson)
+    {
+        var sb = new StringBuilder();
+        Append(text);
+        Append(remark);
+        Append(appName);
+        Append(deviceName);
+        if (string.Equals(type, "File", StringComparison.Ordinal) && !string.IsNullOrEmpty(filePathsJson))
+        {
+            foreach (var f in ClipboardFileMeta.Parse(filePathsJson))
+            {
+                Append(f.Name);
+                Append(f.Path);
+            }
+        }
+        return sb.ToString();
+
+        void Append(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            if (sb.Length > 0) sb.Append(' ');
+            sb.Append(value);
+        }
+    }
+
+    /// <summary>
+    /// 由源文本算出「全拼」与「首字母」检索串。
+    ///
+    /// 多音字的备选读音以 <see cref="VariantSeparator"/> 分段后追加在同一个字段内：
+    /// 这样既能让「重庆」同时被 zhongqing 与 chongqing 命中，又不会破坏两个变体各自内部的
+    /// 音节连续性（跨分段符的查询不会误命中）。文本不含多音字时只存主读音串，避免存储无谓翻倍。
+    /// </summary>
+    private static (string Pinyin, string Initials) BuildSearchBlobs(string source)
+    {
+        if (source.Length == 0) return ("", "");
+
+        var pinyin = PinyinHelper.GetFullPinyin(source);
+        var pinyinAlt = PinyinHelper.GetFullPinyinVariant(source);
+        var initials = PinyinHelper.GetInitials(source);
+        var initialsAlt = PinyinHelper.GetInitialsVariant(source);
+
+        return (
+            pinyinAlt.Length > 0 && !string.Equals(pinyinAlt, pinyin, StringComparison.Ordinal)
+                ? pinyin + VariantSeparator + pinyinAlt
+                : pinyin,
+            initialsAlt.Length > 0 && !string.Equals(initialsAlt, initials, StringComparison.Ordinal)
+                ? initials + VariantSeparator + initialsAlt
+                : initials);
+    }
+
+    /// <summary>
+    /// 转义 LIKE 通配符（配合 SQL 里的 ESCAPE '\'）。
+    /// 用户输入的下划线/百分号必须按字面处理：旧实现把输入直接拼进 '%...%'，
+    /// 而 LIKE 的 _ 匹配任意单字符、% 匹配任意串，导致"搜一个下划线"会命中整库。
+    /// </summary>
+    private static string EscapeLike(string value) =>
+        value.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+
+    /// <summary>
+    /// 为存量条目回填拼音/首字母检索串。
+    /// 以 IS NULL 作为"尚未计算"的标记：新写入的条目即使无可检索内容也会写入空串，
+    /// 因此不会在每次启动时被重复回填。
+    /// </summary>
+    private void BackfillSearchBlobs()
+    {
+        var rows = new List<(long Id, string? Text, string? Remark, string? App, string? Device, string? Type, string? FilePaths)>();
         using (var q = _conn.CreateCommand())
         {
-            q.CommandText = "SELECT id, type, text, image_path, html FROM entries WHERE content_hash IS NULL";
+            q.CommandText = "SELECT id, text, remark, source_app_name, device_name, type, file_paths FROM entries WHERE pinyin_blob IS NULL";
+            using var r = q.ExecuteReader();
+            while (r.Read())
+            {
+                rows.Add((
+                    r.GetInt64(0),
+                    r.IsDBNull(1) ? null : r.GetString(1),
+                    r.IsDBNull(2) ? null : r.GetString(2),
+                    r.IsDBNull(3) ? null : r.GetString(3),
+                    r.IsDBNull(4) ? null : r.GetString(4),
+                    r.IsDBNull(5) ? null : r.GetString(5),
+                    r.IsDBNull(6) ? null : r.GetString(6)));
+            }
+        }
+        if (rows.Count == 0) return;
+
+        foreach (var row in rows)
+        {
+            var source = BuildPinyinSource(row.Text, row.Remark, row.App, row.Device, row.Type, row.FilePaths);
+            var (pinyin, initials) = BuildSearchBlobs(source);
+            using var up = _conn.CreateCommand();
+            up.CommandText = "UPDATE entries SET pinyin_blob = @py, initials_blob = @ini WHERE id = @id";
+            up.Parameters.AddWithValue("@py", pinyin);
+            up.Parameters.AddWithValue("@ini", initials);
+            up.Parameters.AddWithValue("@id", row.Id);
+            up.ExecuteNonQuery();
+        }
+        Log.Info($"已为 {rows.Count} 条存量历史回填拼音检索串");
+    }
+
+    /// <summary>文本或备注变更后重算该条目的拼音检索串。</summary>
+    private void RefreshSearchBlobsLocked(long id)
+    {
+        string? text, remark, app, device, type, filePaths;
+        using (var q = _conn.CreateCommand())
+        {
+            q.CommandText = "SELECT text, remark, source_app_name, device_name, type, file_paths FROM entries WHERE id = @id";
+            q.Parameters.AddWithValue("@id", id);
+            using var r = q.ExecuteReader();
+            if (!r.Read()) return;
+            text = r.IsDBNull(0) ? null : r.GetString(0);
+            remark = r.IsDBNull(1) ? null : r.GetString(1);
+            app = r.IsDBNull(2) ? null : r.GetString(2);
+            device = r.IsDBNull(3) ? null : r.GetString(3);
+            type = r.IsDBNull(4) ? null : r.GetString(4);
+            filePaths = r.IsDBNull(5) ? null : r.GetString(5);
+        }
+
+        var (pinyin, initials) = BuildSearchBlobs(BuildPinyinSource(text, remark, app, device, type, filePaths));
+        using var up = _conn.CreateCommand();
+        up.CommandText = "UPDATE entries SET pinyin_blob = @py, initials_blob = @ini WHERE id = @id";
+        up.Parameters.AddWithValue("@py", pinyin);
+        up.Parameters.AddWithValue("@ini", initials);
+        up.Parameters.AddWithValue("@id", id);
+        up.ExecuteNonQuery();
+    }
+
+    /// <summary>为历史存量条目回填内容哈希(文本取文本哈希,图片取缓存文件字节哈希,文件取路径元数据哈希)。</summary>
+    private void BackfillContentHashes()
+    {
+        var rows = new List<(long Id, string Type, string? Text, string? ImagePath, string? Html, string? FilePaths)>();
+        using (var q = _conn.CreateCommand())
+        {
+            q.CommandText = "SELECT id, type, text, image_path, html, file_paths FROM entries WHERE content_hash IS NULL";
             using var r = q.ExecuteReader();
             while (r.Read())
             {
@@ -236,10 +419,11 @@ public sealed class HistoryStore : IDisposable
                     r.GetString(1),
                     r.IsDBNull(2) ? null : r.GetString(2),
                     r.IsDBNull(3) ? null : r.GetString(3),
-                    r.IsDBNull(4) ? null : r.GetString(4)));
+                    r.IsDBNull(4) ? null : r.GetString(4),
+                    r.IsDBNull(5) ? null : r.GetString(5)));
             }
         }
-        foreach (var (id, type, text, imagePath, html) in rows)
+        foreach (var (id, type, text, imagePath, html, filePaths) in rows)
         {
             string? hash = null;
             try
@@ -252,6 +436,11 @@ public sealed class HistoryStore : IDisposable
                 else if (type == "Image" && !string.IsNullOrEmpty(imagePath) && File.Exists(imagePath))
                 {
                     hash = ClipboardMonitor.HashBytes(File.ReadAllBytes(imagePath));
+                }
+                else if (type == "File" && !string.IsNullOrEmpty(filePaths))
+                {
+                    // 只对元数据求哈希,不读取任何文件内容
+                    hash = ClipboardFileMeta.ComputeHash(ClipboardFileMeta.Parse(filePaths));
                 }
             }
             catch
@@ -267,16 +456,34 @@ public sealed class HistoryStore : IDisposable
         }
     }
 
-    /// <summary>查询历史(新→旧)。search 模糊匹配文本与备注;type 过滤;starredOnly 只看收藏;urlOnly 只看链接。</summary>
+    /// <summary>
+    /// 查询历史(新→旧)。search 匹配文本、备注、来源应用、来源设备、文件路径,以及拼音全拼/首字母;
+    /// type 过滤;starredOnly 只看收藏;urlOnly 只看链接。
+    /// </summary>
     public List<HistoryItem> Query(string? search = null, string? type = null, bool starredOnly = false, int limit = 500, bool urlOnly = false, int offset = 0)
     {
         lock (_lock)
         {
-            var sql = "SELECT id, server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon, remark, html FROM entries";
+            var sql = "SELECT id, server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon, remark, html, file_paths FROM entries";
             var conds = new List<string>();
             if (!string.IsNullOrWhiteSpace(search))
             {
-                conds.Add("(text LIKE @search OR remark LIKE @search OR source_app_name LIKE @search OR pinyin_match(text, @raw_search) = 1 OR pinyin_match(remark, @raw_search) = 1 OR pinyin_match(source_app_name, @raw_search) = 1)");
+                // 字面命中:通配符已转义,用户输入的下划线/百分号按字面处理。
+                // device_name 一并纳入,使"按来源设备找"成为可能。
+                // file_paths 存的是 JSON,反斜杠被转义成双写;先 REPLACE 归一化,
+                // 用户按资源管理器里复制的单反斜杠路径才能命中。
+                //
+                // 拼音命中:直接匹配预计算好的 pinyin_blob / initials_blob,不再走托管回调。
+                // 只做连续子串匹配——旧实现的"顺序子序列"兜底会让 sf/ab 这类两字母查询
+                // 命中全库三分之一,是搜索结果杂乱的主因。
+                conds.Add(@"(
+                    text LIKE @search ESCAPE '\'
+                    OR remark LIKE @search ESCAPE '\'
+                    OR source_app_name LIKE @search ESCAPE '\'
+                    OR device_name LIKE @search ESCAPE '\'
+                    OR REPLACE(file_paths, char(92) || char(92), char(92)) LIKE @search ESCAPE '\'
+                    OR pinyin_blob LIKE @phonetic ESCAPE '\'
+                    OR initials_blob LIKE @phonetic ESCAPE '\')");
             }
             if (!string.IsNullOrWhiteSpace(type)) conds.Add("type = @type");
             if (starredOnly) conds.Add("starred = 1");
@@ -286,8 +493,8 @@ public sealed class HistoryStore : IDisposable
 
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = sql;
-            cmd.Parameters.AddWithValue("@search", $"%{search ?? ""}%");
-            cmd.Parameters.AddWithValue("@raw_search", search?.Trim() ?? "");
+            cmd.Parameters.AddWithValue("@search", $"%{EscapeLike(search ?? "")}%");
+            cmd.Parameters.AddWithValue("@phonetic", $"%{EscapeLike(search?.Trim().ToLowerInvariant() ?? "")}%");
             cmd.Parameters.AddWithValue("@type", type ?? "");
             cmd.Parameters.AddWithValue("@limit", limit);
             cmd.Parameters.AddWithValue("@offset", offset);
@@ -309,15 +516,17 @@ public sealed class HistoryStore : IDisposable
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = """
                 INSERT OR IGNORE INTO entries
-                    (server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon, remark, html)
+                    (server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon, remark, html, file_paths, pinyin_blob, initials_blob)
                 VALUES
-                    (@server_id, @type, @text, @image_path, @image_ref, @device_id, @device_name, @created_at, @origin, @starred, @content_hash, @source_app_name, @source_app_path, @source_app_icon, @remark, @html);
+                    (@server_id, @type, @text, @image_path, @image_ref, @device_id, @device_name, @created_at, @origin, @starred, @content_hash, @source_app_name, @source_app_path, @source_app_icon, @remark, @html, @file_paths, @pinyin_blob, @initials_blob);
                 SELECT CASE WHEN changes() > 0 THEN last_insert_rowid() ELSE 0 END;
                 """;
             cmd.Parameters.AddWithValue("@server_id", (object?)item.ServerId ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@type", item.Type);
             cmd.Parameters.AddWithValue("@text", (object?)item.Text ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@image_path", (object?)item.ImagePath ?? DBNull.Value);
+            // 文件条目必须保持 image_path 为 NULL:该列的语义是"本应用生成的图片缓存",
+            // 所有清理路径都会删除它指向的文件,写入用户真实文件路径会导致文件被误删。
+            cmd.Parameters.AddWithValue("@image_path", item.IsFile ? DBNull.Value : (object?)item.ImagePath ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@image_ref", (object?)item.ImageRef ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@device_id", item.DeviceId);
             cmd.Parameters.AddWithValue("@device_name", (object?)item.DeviceName ?? DBNull.Value);
@@ -330,13 +539,21 @@ public sealed class HistoryStore : IDisposable
             cmd.Parameters.AddWithValue("@source_app_icon", (object?)item.SourceAppIcon ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@remark", (object?)item.Remark ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@html", (object?)item.Html ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@file_paths", item.IsFile ? (object?)item.FilePathsJson ?? DBNull.Value : DBNull.Value);
+
+            // 拼音检索串在写入时预计算一次,查询阶段只做 LIKE 匹配。
+            // 注意写入空串而非 NULL:NULL 被用作"尚未回填"的标记,供 BackfillSearchBlobs 识别存量行。
+            var (pinyinBlob, initialsBlob) = BuildSearchBlobs(
+                BuildPinyinSource(item.Text, item.Remark, item.SourceAppName, item.DeviceName, item.Type, item.FilePathsJson));
+            cmd.Parameters.AddWithValue("@pinyin_blob", pinyinBlob);
+            cmd.Parameters.AddWithValue("@initials_blob", initialsBlob);
             var id = Convert.ToInt64(cmd.ExecuteScalar());
             if (id > 0) TrimToLimitLocked();
             return id;
         }
     }
 
-    /// <summary>调用方未显式提供时计算内容哈希(文本/图片字节)。图片文件缺失则留空。</summary>
+    /// <summary>调用方未显式提供时计算内容哈希(文本/图片字节/文件路径元数据)。图片文件缺失则留空。</summary>
     private static string? ResolveContentHash(HistoryItem item)
     {
         if (!string.IsNullOrEmpty(item.ContentHash)) return item.ContentHash;
@@ -349,6 +566,11 @@ public sealed class HistoryStore : IDisposable
             if (item.Type == "Image" && !string.IsNullOrEmpty(item.ImagePath) && File.Exists(item.ImagePath))
             {
                 return ClipboardMonitor.HashBytes(File.ReadAllBytes(item.ImagePath));
+            }
+            if (item.Type == "File" && !string.IsNullOrEmpty(item.FilePathsJson))
+            {
+                // 仅对路径元数据求哈希,不读取文件内容(文件可达数百 MB)
+                return ClipboardFileMeta.ComputeHash(ClipboardFileMeta.Parse(item.FilePathsJson));
             }
         }
         catch
@@ -418,6 +640,8 @@ public sealed class HistoryStore : IDisposable
                     // UNIQUE 冲突:忽略,保持原 server_id
                 }
             }
+            // 来源应用/设备名参与拼音检索,置顶时可能被刷新,需同步重算检索串
+            RefreshSearchBlobsLocked(id);
             return true;
         }
     }
@@ -429,7 +653,7 @@ public sealed class HistoryStore : IDisposable
         lock (_lock)
         {
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = "SELECT id, server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon, remark, html FROM entries WHERE content_hash = @hash ORDER BY created_at DESC LIMIT 1";
+            cmd.CommandText = "SELECT id, server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon, remark, html, file_paths FROM entries WHERE content_hash = @hash ORDER BY created_at DESC LIMIT 1";
             cmd.Parameters.AddWithValue("@hash", contentHash);
             using var reader = cmd.ExecuteReader();
             return reader.Read() ? ReadItem(reader) : null;
@@ -522,6 +746,8 @@ public sealed class HistoryStore : IDisposable
             cmd.Parameters.AddWithValue("@text", text);
             cmd.Parameters.AddWithValue("@id", id);
             cmd.ExecuteNonQuery();
+            // 文本是拼音检索的主要来源,改完必须重算检索串,否则新内容用拼音搜不到
+            RefreshSearchBlobsLocked(id);
         }
     }
 
@@ -536,6 +762,8 @@ public sealed class HistoryStore : IDisposable
             cmd.Parameters.AddWithValue("@remark", (object?)trimmed ?? DBNull.Value);
             cmd.Parameters.AddWithValue("@id", id);
             cmd.ExecuteNonQuery();
+            // 备注同样参与拼音检索,改完一并重算
+            RefreshSearchBlobsLocked(id);
         }
     }
 
@@ -628,6 +856,7 @@ public sealed class HistoryStore : IDisposable
         SourceAppIcon = reader.FieldCount > 14 && !reader.IsDBNull(14) ? reader.GetString(14) : null,
         Remark = reader.FieldCount > 15 && !reader.IsDBNull(15) ? reader.GetString(15) : null,
         Html = reader.FieldCount > 16 && !reader.IsDBNull(16) ? reader.GetString(16) : null,
+        FilePathsJson = reader.FieldCount > 17 && !reader.IsDBNull(17) ? reader.GetString(17) : null,
     };
 
     public void Dispose() => _conn.Dispose();

@@ -95,12 +95,18 @@ public sealed partial class TransferChatPage : UserControl
         return null;
     }
 
+    /// <summary>
+    /// 「全部设备」胶囊点击: 一键全选所有在线设备。
+    /// 选中态的写入必须走 VM(胶囊的底色/文字色都从 VM 派生), 不能依赖控件的 IsChecked——
+    /// 详见 TransferChatPage.xaml 中 FilterPillStyle 的说明。
+    /// </summary>
     private void SelectAllToggle_Click(object sender, RoutedEventArgs e)
     {
         ViewModel.ToggleSelectAll(true);
         DispatcherQueue.TryEnqueue(() => ScrollToBottom(instant: true));
     }
 
+    /// <summary>设备胶囊点击: 切换该设备自身的选中状态。选中态写入同样走 VM。</summary>
     private void DevicePill_Click(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement fe && fe.DataContext is DeviceSelectViewModel dvm)

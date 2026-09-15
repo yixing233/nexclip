@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Win32;
 
 namespace NexClip.Installer.Native.Services;
@@ -46,7 +47,7 @@ internal static class DependencyService
 
         // 单次请求不再设置总超时，改由连接超时与停滞超时精细控制，避免大文件被强行中断
         var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("NexClip-Installer/20260910.01");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("NexClip-Installer/20260915.01");
         return client;
     }
 
@@ -71,6 +72,8 @@ internal static class DependencyService
         DependencyKind.WindowsAppRuntime => IsWindowsAppSdkInstalled(
             dependency.RequiredPackageName,
             dependency.RequiredMainPackageName,
+            dependency.RequiredSingletonPackageName,
+            dependency.RequiredDdlmPackagePrefix,
             dependency.MinimumVersion),
         _ => false
     };
@@ -278,12 +281,16 @@ internal static class DependencyService
         return IsWindowsAppSdkInstalled(
             dependency.RequiredPackageName,
             dependency.RequiredMainPackageName,
+            dependency.RequiredSingletonPackageName,
+            dependency.RequiredDdlmPackagePrefix,
             dependency.MinimumVersion);
     }
 
     private static bool IsWindowsAppSdkInstalled(
         string packageName,
         string mainPackageName,
+        string singletonPackageName,
+        string ddlmPackagePrefix,
         Version? minimumVersion)
     {
         if (string.IsNullOrWhiteSpace(packageName))
@@ -297,14 +304,30 @@ internal static class DependencyService
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(mainPackageName))
+        if (!string.IsNullOrWhiteSpace(mainPackageName) &&
+            !packageNames.Any(name => IsSupportedWindowsAppRuntimePackage(name, mainPackageName, minimumVersion)))
         {
-            return true;
+            return false;
         }
 
-        // 框架包提供 WinUI 运行时，Main 包负责为非打包应用注册 DDLM；两者缺一都会导致启动失败
-        return packageNames.Any(name =>
-            IsSupportedWindowsAppRuntimePackage(name, mainPackageName, minimumVersion));
+        // Singleton 包提供跨进程单例与推送通知等运行时关键能力，全机仅存在一份且向前服务：
+        // 安装 WinAppSDK 2.x 后 Singleton 会被服务化为 8002.*，仍为 1.8 框架包提供能力
+        // （实测本机 NexClip 在该状态下正常运行），因此只要求不低于最低版本，不绑定主版本。
+        if (!string.IsNullOrWhiteSpace(singletonPackageName) &&
+            !packageNames.Any(name => IsSupportedWindowsAppRuntimePackage(name, singletonPackageName, minimumVersion)))
+        {
+            return false;
+        }
+
+        // DDLM (Dynamic Dependency Lifetime Manager) 包是非打包应用引导加载 Windows App Runtime 的绝对核心
+        // 必须存在对应架构的前缀匹配（如 Microsoft.WinAppRuntime.DDLM.8000.921.1539.0-x6_*）
+        if (!string.IsNullOrWhiteSpace(ddlmPackagePrefix) &&
+            !packageNames.Any(name => IsSupportedDdlmPackage(name, ddlmPackagePrefix, minimumVersion)))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -315,21 +338,24 @@ internal static class DependencyService
         DependencyKind.WindowsAppRuntime => IsWindowsAppSdkInstalled(
             dependency.RequiredPackageName,
             string.Empty,
+            string.Empty,
+            string.Empty,
             dependency.MinimumVersion),
         _ => IsInstalled(dependency)
     };
 
     /// <summary>
-    /// 枚举可用的 MSIX 包全名。优先当前用户已注册的包（HKCU Repository），
-    /// 机器级仓库（HKLM PackageRepository）可能残留已卸载或仅暂存的版本，因此额外要求包目录真实存在，
-    /// 避免检测通过但应用启动时解析不到运行时。
+    /// 枚举可用的 MSIX 包全名。对齐 CrabDesk 安装器“仅健康可用的包参与检测”的加固设计：
+    /// 用户级（HKCU Repository）与机器级（HKLM PackageRepository）仓库都可能残留已卸载或仅暂存的版本，
+    /// 因此统一要求包目录真实存在，避免检测通过但应用启动时解析不到运行时。
+    /// 目录校验未命中时不会误报缺失，会继续由 WindowsApps 目录清单与 PowerShell 健康查询兜底。
     /// </summary>
     private static IReadOnlyCollection<string> EnumerateInstalledAppPackageNames()
     {
         var perUser = ReadPackageRepository(
             RegistryHive.CurrentUser,
             @"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages",
-            requireExistingPayload: false);
+            requireExistingPayload: true);
         if (perUser.Count > 0)
         {
             return perUser;
@@ -345,7 +371,13 @@ internal static class DependencyService
         }
 
         var fromDisk = EnumerateWindowsAppsDirectories();
-        return fromDisk.Count > 0 ? fromDisk : QueryAppxPackageFullNamesWithPowerShell();
+        if (fromDisk.Count > 0)
+        {
+            return fromDisk;
+        }
+
+        WriteLog("注册表与 WindowsApps 目录枚举均未命中，回退 PowerShell 查询 Windows App Runtime 包。");
+        return QueryAppxPackageFullNamesWithPowerShell();
     }
 
     private static HashSet<string> ReadPackageRepository(
@@ -445,10 +477,58 @@ internal static class DependencyService
         }
 
         var parts = packageFullName.Split('_');
-        return parts.Length >= 3 &&
-            (parts[2].Equals("x64", StringComparison.OrdinalIgnoreCase) ||
-             parts[2].Equals("neutral", StringComparison.OrdinalIgnoreCase)) &&
-            IsSupportedPackageVersion(parts[1], minimumVersion);
+        if (parts.Length < 3 ||
+            (!parts[2].Equals("x64", StringComparison.OrdinalIgnoreCase) &&
+             !parts[2].Equals("neutral", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        if (!Version.TryParse(parts[1]?.Trim(), out var version))
+        {
+            return false;
+        }
+
+        return minimumVersion is null || version >= minimumVersion;
+    }
+
+    internal static bool IsSupportedDdlmPackage(
+        string packageFullName,
+        string ddlmPrefix,
+        Version? minimumVersion)
+    {
+        // DDLM 包名格式为：Microsoft.WinAppRuntime.DDLM.<Version>-<arch>_<Version>_<Arch>__8wekyb3d8bbwe
+        // 例如：Microsoft.WinAppRuntime.DDLM.8000.921.1539.0-x6_8000.921.1539.0_x64__8wekyb3d8bbwe
+        if (!packageFullName.StartsWith(ddlmPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var parts = packageFullName.Split('_');
+        if (parts.Length < 3 ||
+            (!parts[2].Equals("x64", StringComparison.OrdinalIgnoreCase) &&
+             !parts[2].Equals("neutral", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        if (!Version.TryParse(parts[1]?.Trim(), out var version))
+        {
+            return false;
+        }
+
+        if (minimumVersion is null)
+        {
+            return true;
+        }
+
+        // DDLM 与特定 Windows App SDK 大版本强绑定，主版本号必须匹配
+        if (version.Major != minimumVersion.Major)
+        {
+            return false;
+        }
+
+        return version >= minimumVersion;
     }
 
     internal static bool IsSupportedPackageVersion(string? versionText, Version? minimumVersion)
@@ -457,11 +537,71 @@ internal static class DependencyService
             (minimumVersion is null || version >= minimumVersion);
     }
 
+    /// <summary>
+    /// 对齐 CrabDesk 安装器的可用包判定：包健康状态为 Ok（或旧系统未返回状态）才视为可用，
+    /// 防止已损坏 / 被篡改（Tampered、Modified、LicenseIssue 等）的包让检测误报“已就绪”。
+    /// </summary>
+    internal static bool IsUsablePackageStatus(string? status) =>
+        string.IsNullOrWhiteSpace(status) || status.Trim().Equals("Ok", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>解析 PowerShell 查询输出的 JSON（数组或单对象），仅保留健康包的全名。</summary>
+    internal static IReadOnlyList<string> ParseUsablePackageFullNames(string output)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(
+                string.IsNullOrWhiteSpace(output) ? "[]" : output);
+            var root = document.RootElement;
+            var values = root.ValueKind == JsonValueKind.Array
+                ? root.EnumerateArray().ToList()
+                : [root];
+            var names = new List<string>();
+            foreach (var value in values)
+            {
+                if (value.ValueKind != JsonValueKind.Object ||
+                    !value.TryGetProperty("PackageFullName", out var nameElement))
+                {
+                    continue;
+                }
+
+                var fullName = nameElement.GetString();
+                if (string.IsNullOrEmpty(fullName))
+                {
+                    continue;
+                }
+
+                var status = value.TryGetProperty("Status", out var statusElement)
+                    ? statusElement.GetString()
+                    : null;
+                if (IsUsablePackageStatus(status))
+                {
+                    names.Add(fullName);
+                }
+            }
+
+            return names;
+        }
+        catch (Exception exception) when (
+            exception is JsonException or InvalidOperationException or FormatException)
+        {
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// 注册表枚举未命中时的兜底查询。包模式必须同时覆盖 Framework、Main/Singleton 与 DDLM 三类
+    /// （DDLM 的发布者前缀是 Microsoft.WinAppRuntime，不会被 MicrosoftCorporationII.WinAppRuntime.* 命中），
+    /// 并回传健康状态供“可用包”过滤。
+    /// </summary>
     private static IReadOnlyCollection<string> QueryAppxPackageFullNamesWithPowerShell()
     {
         const string command =
-            "Get-AppxPackage -Name 'Microsoft.WindowsAppRuntime.*','MicrosoftCorporationII.WinAppRuntime.*' " +
-            "-ErrorAction SilentlyContinue | Select-Object -ExpandProperty PackageFullName";
+            "$items = @(Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object { " +
+            "$_.Name -like 'Microsoft.WindowsAppRuntime.*' -or " +
+            "$_.Name -like 'MicrosoftCorporationII.WinAppRuntime.*' -or " +
+            "$_.Name -like 'Microsoft.WinAppRuntime.DDLM.*' } | ForEach-Object { [pscustomobject]@{ " +
+            "PackageFullName = $_.PackageFullName; Status = [string]$_.Status } }); " +
+            "ConvertTo-Json -InputObject $items -Compress";
         try
         {
             using var process = Process.Start(new ProcessStartInfo
@@ -487,7 +627,7 @@ internal static class DependencyService
 
             return process.ExitCode != 0
                 ? []
-                : output.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                : ParseUsablePackageFullNames(output);
         }
         catch (Exception exception) when (
             exception is InvalidOperationException or Win32Exception)

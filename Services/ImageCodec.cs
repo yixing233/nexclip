@@ -35,6 +35,16 @@ public static class ImageCodec
     public static async Task<string?> ReadClipboardTextAsync()
     {
         var content = Clipboard.GetContent();
+        return await ReadClipboardTextAsync(content);
+    }
+
+    /// <summary>
+    /// 从已取得的剪贴板视图读取文本。
+    /// Clipboard.GetContent() 是跨进程 OLE 调用,剪贴板所有者无响应时可能阻塞数百毫秒;
+    /// 一次捕获只应调用一次,后续所有读取复用同一个视图。
+    /// </summary>
+    public static async Task<string?> ReadClipboardTextAsync(DataPackageView content)
+    {
         if (!content.Contains(StandardDataFormats.Text)) return null;
         var text = await content.GetTextAsync();
         return string.IsNullOrEmpty(text) ? null : text;
@@ -48,6 +58,12 @@ public static class ImageCodec
     public static async Task<(string? Text, string? Html)> ReadClipboardRichTextAsync()
     {
         var content = Clipboard.GetContent();
+        return await ReadClipboardRichTextAsync(content);
+    }
+
+    /// <summary>从已取得的剪贴板视图读取纯文本与富文本(复用视图,避免重复 GetContent)。</summary>
+    public static async Task<(string? Text, string? Html)> ReadClipboardRichTextAsync(DataPackageView content)
+    {
         if (!content.Contains(StandardDataFormats.Text)) return (null, null);
         var text = await content.GetTextAsync();
         if (string.IsNullOrEmpty(text)) return (null, null);
@@ -95,6 +111,12 @@ public static class ImageCodec
     public static async Task<byte[]?> CaptureClipboardPngAsync()
     {
         var content = Clipboard.GetContent();
+        return await CaptureClipboardPngAsync(content);
+    }
+
+    /// <summary>从已取得的剪贴板视图读取位图并编码为 PNG(复用视图,避免重复 GetContent)。</summary>
+    public static async Task<byte[]?> CaptureClipboardPngAsync(DataPackageView content)
+    {
         if (!content.Contains(StandardDataFormats.Bitmap)) return null;
         var streamRef = await content.GetBitmapAsync();
         using var stream = await streamRef.OpenReadAsync();
@@ -111,19 +133,63 @@ public static class ImageCodec
         pkg.SetText(text);
         TrySetHtml(pkg, html);
         pkg.Properties[SelfOriginProperty] = "1";
-        Clipboard.SetContent(pkg);
-        Clipboard.Flush();
+        SetContentWithRetry(pkg, flush: true);
     }
 
     /// <summary>写图片到系统剪贴板;标有 SelfOriginProperty 避免循环触发同步。</summary>
-    public static void WriteClipboardImage(string localImagePath)
+    public static async Task WriteClipboardImageAsync(string localImagePath)
     {
-        var file = StorageFile.GetFileFromPathAsync(localImagePath).AsTask().GetAwaiter().GetResult();
+        // 原实现用 StorageFile.GetFileFromPathAsync(...).AsTask().GetAwaiter().GetResult()
+        // 在 UI 线程上同步等待异步 WinRT 调用:既会阻塞 UI 线程做磁盘 IO,也存在经典
+        // sync-over-async 死锁风险。改为正常 await。
+        var file = await StorageFile.GetFileFromPathAsync(localImagePath);
         var pkg = new DataPackage();
         pkg.SetBitmap(RandomAccessStreamReference.CreateFromFile(file));
         pkg.Properties[SelfOriginProperty] = "1";
-        Clipboard.SetContent(pkg);
-        Clipboard.Flush();
+        SetContentWithRetry(pkg, flush: true);
+    }
+
+    /// <summary>写剪贴板的最大尝试次数与递增退避基数(毫秒)。</summary>
+    private const int ClipboardWriteAttempts = 5;
+    private const int ClipboardWriteBackoffMs = 20;
+
+    /// <summary>
+    /// 带退避重试的剪贴板写入。
+    /// 剪贴板是全局单占资源:另一个进程(远程控制软件、其它剪贴板管理器、Office 等)
+    /// 短暂持有它时,单次 SetContent 会直接失败并抛出消息为空的 COM 异常(CLIPBRD_E_CANT_OPEN 一类),
+    /// 用户看到的现象就是"复制/同步没反应、内容没进剪贴板"。
+    /// 主流剪贴板管理器(如 Ditto)的通行做法是短暂退避后重试,而不是把这次复制丢掉。
+    /// 最坏情况下总退避约 200ms,仅在真正发生争用时才会付出。
+    /// 本方法对同程序集开放:文件条目写回(ClipboardFiles)复用同一套退避策略,
+    /// 避免两处各写一份重试逻辑而在后续维护中产生行为差异。
+    /// </summary>
+    internal static void SetContentWithRetry(DataPackage package, bool flush)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                Clipboard.SetContent(package);
+                if (flush)
+                {
+                    // Flush 让内容在本进程退出后仍然可用;失败只影响"退出后是否留存",不影响本次写入
+                    try
+                    {
+                        Clipboard.Flush();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Debug($"剪贴板 Flush 失败(内容已写入,本次复制不受影响): {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
+                    }
+                }
+                return;
+            }
+            catch (Exception ex) when (attempt < ClipboardWriteAttempts - 1)
+            {
+                Log.Debug($"写剪贴板失败,退避后重试(第 {attempt + 1} 次): {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
+                System.Threading.Thread.Sleep(ClipboardWriteBackoffMs * (attempt + 1));
+            }
+        }
     }
 
     private static async Task<byte[]?> CompressAndEncodePngAsync(IRandomAccessStream inStream)
@@ -179,7 +245,19 @@ public static class ImageCodec
     {
         try
         {
-            var content = Clipboard.GetContent();
+            return IsSelfWrittenClipboard(Clipboard.GetContent());
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>基于已取得的剪贴板视图判断是否由本应用写回(复用视图,避免重复 GetContent)。</summary>
+    public static bool IsSelfWrittenClipboard(DataPackageView content)
+    {
+        try
+        {
             return content.Properties.ContainsKey(SelfOriginProperty);
         }
         catch
@@ -247,7 +325,7 @@ public static class ImageCodec
         var package = new DataPackage();
         package.Properties.Add(SelfOriginProperty, true);
         package.SetBitmap(RandomAccessStreamReference.CreateFromFile(file));
-        Clipboard.SetContent(package);
+        SetContentWithRetry(package, flush: false);
     }
 
     /// <summary>把文本写入系统剪贴板。html 非空时附带写入 HTML 格式(纯文本始终写入作为兜底)。</summary>
@@ -257,7 +335,7 @@ public static class ImageCodec
         package.Properties.Add(SelfOriginProperty, true);
         package.SetText(text);
         TrySetHtml(package, html);
-        Clipboard.SetContent(package);
+        SetContentWithRetry(package, flush: false);
     }
 
     /// <summary>

@@ -7,7 +7,7 @@ using NexClip.Desktop.Services;
 
 namespace NexClip.Desktop.ViewModels;
 
-/// <summary>历史列表 VM:搜索 + 分类标签(全部/文本/图片/收藏)+ 复制/删除/收藏/清空。</summary>
+/// <summary>历史列表 VM:搜索 + 分类标签(全部/文本/图片/文件/收藏/链接)+ 复制/删除/收藏/清空。</summary>
 public partial class HistoryViewModel : ObservableObject
 {
     private readonly AppServices _svc;
@@ -16,8 +16,12 @@ public partial class HistoryViewModel : ObservableObject
     [ObservableProperty]
     private string searchText = "";
 
+    /// <summary>
+    /// 分类索引。取值与 SelectorBarItem 的 Tag 一一对应:
+    /// 0=全部 1=文本 2=图片 3=收藏 4=链接 6=文件(5 为"即时互传"页签,不落到本属性)。
+    /// </summary>
     [ObservableProperty]
-    private int filterIndex;   // 0=全部 1=文本 2=图片 3=收藏 4=链接
+    private int filterIndex;
 
     [ObservableProperty]
     private bool isBusy;
@@ -47,12 +51,24 @@ public partial class HistoryViewModel : ObservableObject
         2 => "暂无图片历史",
         3 => "暂无收藏条目",
         4 => "暂无链接历史",
+        6 => "暂无文件历史",
         _ => "暂无剪贴板历史"
     });
 
     public string EmptySubtitle => IsSearching
         ? "请尝试更换其他关键词搜索"
-        : "在任意应用按 Ctrl+C 复制文本或截图即可自动同步";
+        : FilterIndex == 6
+            ? "在资源管理器复制文件即可自动记录，文件仅保存在本地，不会同步到服务器"
+            : "在任意应用按 Ctrl+C 复制文本或截图即可自动同步";
+
+    /// <summary>分类索引到存储层 type 过滤值的映射(null 表示不过滤)。</summary>
+    private string? TypeFilter => FilterIndex switch
+    {
+        1 => "Text",
+        2 => "Image",
+        6 => "File",
+        _ => null,
+    };
 
     public IRelayCommand ClearSearchCommand { get; }
 
@@ -147,50 +163,37 @@ public partial class HistoryViewModel : ObservableObject
                 _refreshPending = false;
                 IsBusy = true;
                 _currentOffset = 0;
-                var type = FilterIndex switch { 1 => "Text", 2 => "Image", _ => null };
+                var type = TypeFilter;
                 var starred = FilterIndex == 3;
                 var urlOnly = FilterIndex == 4;
                 var search = SearchText?.Trim();
                 var items = await Task.Run(() => _engine.History.Query(search, type, starred, PageSize, urlOnly, 0));
 
-                // 平滑就地更新，不调用 Items.Clear()，杜绝列表空白与闪烁
-                var targetCount = items.Count;
-                for (var i = 0; i < targetCount; i++)
+                // 复用内容未变化的条目:按 Id 建索引,命中且展示字段一致时沿用原 VM,
+                // 从而保留其缩略图与来源图标 BitmapImage,不再重新解码。
+                var reusable = new Dictionary<long, HistoryItemViewModel>(Items.Count);
+                foreach (var vm in Items) reusable[vm.Item.Id] = vm;
+
+                var target = new List<HistoryItemViewModel>(items.Count);
+                for (var i = 0; i < items.Count; i++)
                 {
                     var raw = items[i];
                     var shortcutIndex = (i < 9) ? (i + 1) : 0;
-                    if (i < Items.Count)
+                    if (reusable.Remove(raw.Id, out var existing) && IsUnchanged(existing.Item, raw))
                     {
-                        var existing = Items[i];
-                        if (existing.Item.Id == raw.Id &&
-                            existing.Item.Text == raw.Text &&
-                            existing.Item.Starred == raw.Starred &&
-                            existing.Item.Remark == raw.Remark &&
-                            existing.Item.ImagePath == raw.ImagePath)
-                        {
-                            if (existing.IndexInList != shortcutIndex)
-                            {
-                                existing.IndexInList = shortcutIndex;
-                            }
-                            continue;
-                        }
-                        Items[i] = new HistoryItemViewModel(raw, this)
-                        {
-                            IndexInList = shortcutIndex
-                        };
+                        existing.IndexInList = shortcutIndex;
+                        target.Add(existing);
                     }
                     else
                     {
-                        Items.Add(new HistoryItemViewModel(raw, this)
+                        target.Add(new HistoryItemViewModel(raw, this)
                         {
                             IndexInList = shortcutIndex
                         });
                     }
                 }
-                while (Items.Count > targetCount)
-                {
-                    Items.RemoveAt(Items.Count - 1);
-                }
+
+                ApplyMinimalDiff(target);
 
                 _currentOffset = items.Count;
                 HasMore = items.Count >= PageSize;
@@ -202,6 +205,39 @@ public partial class HistoryViewModel : ObservableObject
             IsBusy = false;
             Interlocked.Exchange(ref _refreshing, 0);
         }
+    }
+
+    /// <summary>条目展示字段是否与已有 VM 完全一致(一致则复用原 VM,不重建缩略图)。</summary>
+    private static bool IsUnchanged(Models.HistoryItem a, Models.HistoryItem b) =>
+        a.Id == b.Id &&
+        a.Text == b.Text &&
+        a.Starred == b.Starred &&
+        a.Remark == b.Remark &&
+        a.ImagePath == b.ImagePath &&
+        a.FilePathsJson == b.FilePathsJson;
+
+    /// <summary>
+    /// 求出新旧列表的公共前缀与公共后缀,只对中间差异区间做增删。
+    /// 旧实现按下标逐项比较,列表头部插入一条新记录就会让后续每一项都判定为"已变化"而整段重建,
+    /// 每次复制都要重新构造约 50 个 ViewModel 并重新解码 50 张缩略图,既造成内存抖动也拖慢 UI。
+    /// 采用最小差异后,新增一条记录只产生 1 次 Insert。
+    /// </summary>
+    private void ApplyMinimalDiff(List<HistoryItemViewModel> target)
+    {
+        var oldCount = Items.Count;
+        var newCount = target.Count;
+
+        var prefix = 0;
+        while (prefix < oldCount && prefix < newCount && ReferenceEquals(Items[prefix], target[prefix])) prefix++;
+
+        var suffix = 0;
+        while (suffix < oldCount - prefix && suffix < newCount - prefix &&
+               ReferenceEquals(Items[oldCount - 1 - suffix], target[newCount - 1 - suffix])) suffix++;
+
+        var removeCount = oldCount - prefix - suffix;
+        for (var i = 0; i < removeCount; i++) Items.RemoveAt(prefix);
+
+        for (var i = prefix; i < newCount - suffix; i++) Items.Insert(i, target[i]);
     }
 
     public async Task LoadMoreAsync()
@@ -218,7 +254,7 @@ public partial class HistoryViewModel : ObservableObject
         IsLoadingMore = true;
         try
         {
-            var type = FilterIndex switch { 1 => "Text", 2 => "Image", _ => null };
+            var type = TypeFilter;
             var starred = FilterIndex == 3;
             var urlOnly = FilterIndex == 4;
             var search = SearchText?.Trim();

@@ -103,7 +103,7 @@ public partial class HistoryItemViewModel : ObservableObject
     public string? DomainText => _domainText;
 
     public bool IsCodeOrJson => _isCodeOrJson;
-    public bool IsNormalText => !IsImage && !_isColor && !_isCodeOrJson;
+    public bool IsNormalText => !IsImage && !IsFile && !_isColor && !_isCodeOrJson;
 
     public bool HasSmartAction => _smartAction != null;
     public string SmartPrimaryText => _smartAction?.PrimaryButtonText ?? "";
@@ -134,11 +134,72 @@ public partial class HistoryItemViewModel : ObservableObject
         }
     }
 
-    public string TypeText => Item.Type == "Image" ? "图片" : "文本";
+    public string TypeText => Item.Type switch
+    {
+        "Image" => "图片",
+        "File" => "文件",
+        _ => "文本",
+    };
 
-    public string MetaText => Item.Type == "Image"
-        ? "[图片]"
-        : $"{Item.Text?.Length ?? 0} 字符";
+    public string MetaText => Item.Type switch
+    {
+        "Image" => "[图片]",
+        "File" => FileMetaText,
+        _ => $"{Item.Text?.Length ?? 0} 字符",
+    };
+
+    // ---- 文件条目展示(仅本地记录,不参与同步) ----
+
+    /// <summary>是否为文件类型条目。</summary>
+    public bool IsFile => Item.IsFile;
+
+    private IReadOnlyList<Models.ClipboardFileInfo> FileList => Item.Files;
+
+    /// <summary>元信息行文案:单个文件显示大小("2.1 MB"),多项显示"3 个文件 · 12.4 MB"。</summary>
+    private string FileMetaText
+    {
+        get
+        {
+            var files = FileList;
+            if (files.Count == 0) return "文件";
+            var size = Models.ClipboardFileMeta.FormatSize(files.Sum(f => f.SizeBytes));
+            if (files.Count == 1)
+            {
+                return files[0].IsDirectory ? "文件夹" : size;
+            }
+            var folderCount = files.Count(f => f.IsDirectory);
+            var desc = folderCount > 0 ? $"{files.Count} 项(含 {folderCount} 个文件夹)" : $"{files.Count} 个文件";
+            return $"{desc} · {size}";
+        }
+    }
+
+    /// <summary>文件预览主标题:单个文件显示文件名,多个文件显示首个文件名。</summary>
+    public string FilePrimaryName => FileList.Count > 0 ? FileList[0].Name : "";
+
+    /// <summary>文件预览副标题:"等 4 项" / 空(仅 1 项时不展示)。</summary>
+    public string FileRestText => FileList.Count > 1 ? $"等 {FileList.Count} 项" : "";
+
+    public bool HasFileRest => FileList.Count > 1;
+
+    /// <summary>文件条目悬停提示:完整路径清单(最多 10 条,超出以省略号收尾)。</summary>
+    public string FileTooltip
+    {
+        get
+        {
+            var files = FileList;
+            if (files.Count == 0) return "";
+            var shown = files.Take(10).Select(f => f.Path);
+            var text = string.Join(Environment.NewLine, shown);
+            return files.Count > 10 ? text + Environment.NewLine + $"… 其余 {files.Count - 10} 项" : text;
+        }
+    }
+
+    /// <summary>
+    /// 首个有效文件/文件夹路径,用于"在文件夹中显示"与"用系统应用打开"。
+    /// 只在用户打开右键菜单时按需求值,不在 VM 构造时绑定,避免列表刷新时对每一项做文件系统探测。
+    /// </summary>
+    public string? FirstExistingPath =>
+        FileList.Select(f => f.Path).FirstOrDefault(p => File.Exists(p) || Directory.Exists(p));
 
     public string RelativeTime
     {
@@ -153,7 +214,8 @@ public partial class HistoryItemViewModel : ObservableObject
         }
     }
 
-    public string PreviewText => Item.Type == "Image" ? "" : (Item.Text ?? "");
+    /// <summary>预览文本。文件条目的文件名由独立的文件预览块呈现,此处返回空以免重复。</summary>
+    public string PreviewText => Item.Type is "Image" or "File" ? "" : (Item.Text ?? "");
 
     public string DeviceName => Item.DeviceName ?? "";
 
@@ -171,7 +233,7 @@ public partial class HistoryItemViewModel : ObservableObject
 
     public bool IsImage => Item.Type == "Image";
 
-    /// <summary>条目是否为 http/https 链接。</summary>
+    /// <summary>条目是否为 http/https 链接。文件条目 Text 为 null,天然返回 false。</summary>
     public bool IsLink => Services.UrlUtil.IsUrl(Item.Text);
 
     /// <summary>链接条目的展示文本(整段文本即链接时直接显示)。</summary>
@@ -193,12 +255,13 @@ public partial class HistoryItemViewModel : ObservableObject
     /// <summary>条目是否携带富文本(HTML)片段。</summary>
     public bool HasHtml => Item.HasHtml;
 
-    /// <summary>类型图标(lucide)。富文本条目用独立图标区分于纯文本。</summary>
-    public ImageSource TypeIconSource => Item.Type == "Image"
-        ? Services.Lucide.Image
-        : HasHtml
-            ? Services.Lucide.RichText
-            : Services.Lucide.FileText;
+    /// <summary>类型图标(lucide)。富文本条目用独立图标区分于纯文本;文件条目用 file 图标。</summary>
+    public ImageSource TypeIconSource => Item.Type switch
+    {
+        "Image" => Services.Lucide.Image,
+        "File" => Services.Lucide.FileIcon,
+        _ => HasHtml ? Services.Lucide.RichText : Services.Lucide.FileText,
+    };
 
     /// <summary>收藏图标(选中=琥珀色)。</summary>
     public ImageSource StarSource => Starred ? Services.Lucide.StarActive : Services.Lucide.Star;
