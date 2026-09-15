@@ -1,6 +1,7 @@
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using System.Text;
 
 namespace NexClip.Desktop.Services;
 
@@ -161,6 +162,30 @@ public class UpdateService
         new(false, false, currentVersion, "", "", "", "", null, null, null, error);
 
     /// <summary>取非空字符串字段；空串与空白视为缺失，好让平台段里的占位值自动回落。</summary>
+    /// <summary>
+    /// 从 GitHub Release 正文中提取当前平台的更新日志。
+    /// 约定以二级标题 `## Windows` 分段，只显示对应段落，找不到时回落到全文。
+    /// </summary>
+    private static string ReadPlatformReleaseNotes(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return "";
+
+        var lines = body.Replace("\r\n", "\n").Split('\n');
+        var start = Array.FindIndex(lines, line =>
+            line.TrimStart().StartsWith("## Windows", StringComparison.OrdinalIgnoreCase));
+        if (start < 0) return body;
+
+        var section = new StringBuilder();
+        for (var i = start + 1; i < lines.Length; i++)
+        {
+            if (lines[i].TrimStart().StartsWith("## ", StringComparison.Ordinal)) break;
+            section.AppendLine(lines[i]);
+        }
+
+        var notes = section.ToString().Trim();
+        return notes.Length > 0 ? notes : body;
+    }
+
     private static string? ReadString(JsonElement element, string name) =>
         element.ValueKind == JsonValueKind.Object &&
         element.TryGetProperty(name, out var value) &&
@@ -264,7 +289,7 @@ public class UpdateService
         var cleanCurrent = currentVersion.TrimStart('v', 'V').Trim();
 
         var title = ReadString(release, "name") ?? "";
-        var body = ReadString(release, "body") ?? "";
+        var body = ReadPlatformReleaseNotes(ReadString(release, "body"));
         var htmlUrl = ReadString(release, "html_url") ?? DefaultReleasesPage;
 
         string? downloadUrl = null;
