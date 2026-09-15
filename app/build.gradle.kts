@@ -12,8 +12,8 @@ android {
         applicationId = "clip.yixing.sync"
         minSdk = 33
         targetSdk = 36
-        versionCode = 9
-        versionName = "20260905.01"
+        versionCode = 10
+        versionName = "20260915.01"
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
@@ -62,6 +62,10 @@ dependencies {
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.foundation)
     implementation(libs.androidx.core.ktx)
+    // 悬浮球覆盖窗口里承载 Compose 需要自行提供 Lifecycle / ViewModelStore / SavedStateRegistry
+    implementation(libs.androidx.lifecycle.runtime)
+    implementation(libs.androidx.lifecycle.viewmodel)
+    implementation(libs.androidx.savedstate)
     implementation(libs.androidx.camera.core)
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)

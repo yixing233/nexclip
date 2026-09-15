@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    一键粘贴无障碍服务配置。
+
+    隐私边界(修改前请先读 NexClipAccessibilityService.kt 的类注释):
+    - 只订阅 typeViewFocused / typeWindowStateChanged,用来判断「有没有输入框聚焦」;
+    - 刻意不声明 canRequestFilterKeyEvents —— 本功能不需要拦截按键;
+    - 不声明 canRetrieveWindowContent 之外的任何额外能力,节点树只在用户主动点粘贴时查一次。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewFocused|typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100"
+    android:summary="@string/accessibility_service_label" />

@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import clip.yixing.sync.MainActivity
 import clip.yixing.sync.R
+import clip.yixing.sync.paste.PasteEngine
 import clip.yixing.sync.service.CapturedClip
 import clip.yixing.sync.smartaction.SmartAction
 import clip.yixing.sync.smartaction.SmartActionEngine
@@ -210,6 +211,8 @@ object SyncNotificationManager {
     ): Notification {
         val isImage = clip.isImage
         val topSmart = smartActions.firstOrNull()
+        val expandedTimeSec = SyncSettings.hyperOsIslandExpandedTime(context).coerceAtLeast(1)
+        val timeoutSec = SyncSettings.hyperOsIslandTimeout(context).coerceAtLeast(expandedTimeSec)
 
         val title = if (isImage) {
             if (isPush) "收到来自 $deviceLabel 的图片" else "已捕获图片"
@@ -237,6 +240,7 @@ object SyncNotificationManager {
             .setStyle(NotificationCompat.BigTextStyle().bigText(if (isImage) "[图片]" else clip.text))
             .setContentIntent(openAppPi)
             .setAutoCancel(true)
+            .setTimeoutAfter(timeoutSec * 1000L)
             .setOngoing(false)
             .setShowWhen(true)
             .setWhen(clip.time)
@@ -277,8 +281,7 @@ object SyncNotificationManager {
                     islandProperty = 2
                     islandPriority = 2
                     business = "copytoservice"
-                    expandedTime = 3
-                    val timeoutSec = SyncSettings.hyperOsIslandTimeout(context)
+                    expandedTime = expandedTimeSec
                     if (timeoutSec < 3600) {
                         islandTimeout = timeoutSec
                     }
@@ -321,18 +324,6 @@ object SyncNotificationManager {
                 }
 
                 // 快捷操作按钮 (优先注入智能动作)
-                val copyIntent = Intent(context, NotificationActionReceiver::class.java).apply {
-                    action = NotificationActionReceiver.ACTION_COPY_LATEST
-                    putExtra(NotificationActionReceiver.EXTRA_CLIP_TEXT, clip.text)
-                    putExtra(NotificationActionReceiver.EXTRA_IS_IMAGE, isImage)
-                    putExtra(NotificationActionReceiver.EXTRA_IMAGE_REF, clip.imageRef ?: if (isImage) clip.text else null)
-                }
-                val copyPi = PendingIntent.getBroadcast(
-                    context,
-                    201,
-                    copyIntent,
-                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-                )
                 val favIntent = Intent(context, NotificationActionReceiver::class.java).apply {
                     action = NotificationActionReceiver.ACTION_FAVORITE_LATEST
                 }
@@ -340,6 +331,15 @@ object SyncNotificationManager {
                     context,
                     202,
                     favIntent,
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                )
+                val pasteIntent = Intent(context, NotificationActionReceiver::class.java).apply {
+                    action = NotificationActionReceiver.ACTION_PASTE_LATEST
+                }
+                val pastePi = PendingIntent.getBroadcast(
+                    context,
+                    203,
+                    pasteIntent,
                     PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
                 )
 
@@ -362,8 +362,32 @@ object SyncNotificationManager {
                                 actionTitleColorDark = "#FFFFFF"
                             }
                         }
-                        val isTopCopy = topSmart.id.startsWith("code_") || topSmart.id.startsWith("color_")
-                        if (isTopCopy) {
+                        addActionInfo {
+                            val nativeAction = Notification.Action.Builder(
+                                Icon.createWithResource(context, R.drawable.ic_notification_nc),
+                                "收藏",
+                                favPi
+                            ).build()
+                            action = createAction("miui_action_fav", nativeAction)
+                            actionTitle = "收藏"
+                        }
+                    } else {
+                        val showPaste = SyncSettings.pasteNotificationAction(context) &&
+                            PasteEngine.isAvailable(context)
+                        if (showPaste) {
+                            addActionInfo {
+                                val nativeAction = Notification.Action.Builder(
+                                    Icon.createWithResource(context, R.drawable.ic_notification_nc),
+                                    "粘贴",
+                                    pastePi
+                                ).build()
+                                action = createAction("miui_action_paste", nativeAction)
+                                actionTitle = "粘贴"
+                                actionBgColor = "#006EFF"
+                                actionBgColorDark = "#006EFF"
+                                actionTitleColor = "#FFFFFF"
+                                actionTitleColorDark = "#FFFFFF"
+                            }
                             addActionInfo {
                                 val nativeAction = Notification.Action.Builder(
                                     Icon.createWithResource(context, R.drawable.ic_notification_nc),
@@ -377,35 +401,16 @@ object SyncNotificationManager {
                             addActionInfo {
                                 val nativeAction = Notification.Action.Builder(
                                     Icon.createWithResource(context, R.drawable.ic_notification_nc),
-                                    "复制",
-                                    copyPi
+                                    "收藏",
+                                    favPi
                                 ).build()
-                                action = createAction("miui_action_copy", nativeAction)
-                                actionTitle = "复制"
+                                action = createAction("miui_action_fav", nativeAction)
+                                actionTitle = "收藏"
+                                actionBgColor = "#006EFF"
+                                actionBgColorDark = "#006EFF"
+                                actionTitleColor = "#FFFFFF"
+                                actionTitleColorDark = "#FFFFFF"
                             }
-                        }
-                    } else {
-                        addActionInfo {
-                            val nativeAction = Notification.Action.Builder(
-                                Icon.createWithResource(context, R.drawable.ic_notification_nc),
-                                "复制",
-                                copyPi
-                            ).build()
-                            action = createAction("miui_action_copy", nativeAction)
-                            actionTitle = "复制"
-                            actionBgColor = "#006EFF"
-                            actionBgColorDark = "#006EFF"
-                            actionTitleColor = "#FFFFFF"
-                            actionTitleColorDark = "#FFFFFF"
-                        }
-                        addActionInfo {
-                            val nativeAction = Notification.Action.Builder(
-                                Icon.createWithResource(context, R.drawable.ic_notification_nc),
-                                "收藏",
-                                favPi
-                            ).build()
-                            action = createAction("miui_action_fav", nativeAction)
-                            actionTitle = "收藏"
                         }
                     }
                 }
@@ -580,7 +585,7 @@ object SyncNotificationManager {
     }
 
     /**
-     * 为通知添加快捷操作按钮 (支持注入智能动作 + 复制、收藏)
+     * 为通知添加快捷操作按钮 (支持注入智能动作 + 粘贴、收藏)
      */
     private fun addQuickActions(
         context: Context,
@@ -599,19 +604,18 @@ object SyncNotificationManager {
         }
 
         // 2. 补充标准快捷操作
-        val copyIntent = Intent(context, NotificationActionReceiver::class.java).apply {
-            action = NotificationActionReceiver.ACTION_COPY_LATEST
-            putExtra(NotificationActionReceiver.EXTRA_CLIP_TEXT, text)
-            putExtra(NotificationActionReceiver.EXTRA_IS_IMAGE, isImage)
-            putExtra(NotificationActionReceiver.EXTRA_IMAGE_REF, imageRef ?: if (isImage) text else null)
+        if (SyncSettings.pasteNotificationAction(context) && PasteEngine.isAvailable(context)) {
+            val pasteIntent = Intent(context, NotificationActionReceiver::class.java).apply {
+                action = NotificationActionReceiver.ACTION_PASTE_LATEST
+            }
+            val pastePi = PendingIntent.getBroadcast(
+                context,
+                100,
+                pasteIntent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            builder.addAction(0, "粘贴", pastePi)
         }
-        val copyPi = PendingIntent.getBroadcast(
-            context,
-            101,
-            copyIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        builder.addAction(0, "复制", copyPi)
 
         val favIntent = Intent(context, NotificationActionReceiver::class.java).apply {
             action = NotificationActionReceiver.ACTION_FAVORITE_LATEST

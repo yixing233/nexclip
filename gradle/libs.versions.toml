@@ -11,6 +11,7 @@ signalr = "9.0.1"
 kotlinx-coroutines = "1.10.2"
 core-ktx = "1.15.0"
 lifecycle-runtime = "2.8.7"
+savedstate = "1.2.1"
 navigationevent = "1.1.2"
 compose-icons = "2.2.1"
 camerax = "1.4.1"
@@ -32,6 +33,8 @@ androidx-compose-foundation = { group = "androidx.compose.foundation", name = "f
 
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "core-ktx" }
 androidx-lifecycle-runtime = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle-runtime" }
+androidx-lifecycle-viewmodel = { group = "androidx.lifecycle", name = "lifecycle-viewmodel", version.ref = "lifecycle-runtime" }
+androidx-savedstate = { group = "androidx.savedstate", name = "savedstate-ktx", version.ref = "savedstate" }
 androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "camerax" }
 androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
 androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }

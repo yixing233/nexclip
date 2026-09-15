@@ -479,6 +479,78 @@ object LucideIcons {
         }.build()
     }
 
+    /** Lucide ClipboardPaste 剪贴板粘贴图标 */
+    val ClipboardPaste: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.ClipboardPaste",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(9f, 2f)
+                lineTo(15f, 2f)
+                curveTo(15.6f, 2f, 16f, 2.4f, 16f, 3f)
+                lineTo(16f, 5f)
+                curveTo(16f, 5.6f, 15.6f, 6f, 15f, 6f)
+                lineTo(9f, 6f)
+                curveTo(8.4f, 6f, 8f, 5.6f, 8f, 5f)
+                lineTo(8f, 3f)
+                curveTo(8f, 2.4f, 8.4f, 2f, 9f, 2f)
+                close()
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(8f, 4f)
+                lineTo(6f, 4f)
+                curveTo(4.9f, 4f, 4f, 4.9f, 4f, 6f)
+                lineTo(4f, 20f)
+                curveTo(4f, 21.1f, 4.9f, 22f, 6f, 22f)
+                lineTo(8f, 22f)
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(16f, 4f)
+                lineTo(18f, 4f)
+                curveTo(19.1f, 4f, 20f, 4.9f, 20f, 6f)
+                lineTo(20f, 8f)
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(11f, 14f)
+                lineTo(21f, 14f)
+            }
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                moveTo(17f, 10f)
+                lineTo(21f, 14f)
+                lineTo(17f, 18f)
+            }
+        }.build()
+    }
+
     /** Lucide QrCode 二维码图标 */
     val QrCode: ImageVector by lazy {
         ImageVector.Builder(

@@ -18,5 +18,6 @@ class BootReceiver : BroadcastReceiver() {
         } else {
             context.startService(svc)
         }
+        clip.yixing.sync.paste.FloatingBubbleService.sync(context)
     }
 }

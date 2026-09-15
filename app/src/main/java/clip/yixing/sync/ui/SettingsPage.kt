@@ -155,6 +155,7 @@ enum class SettingsSubPage(val title: String) {
     Devices("设备列表与配对"),
     Filter("过滤规则"),
     SmartActions("智能动作与应用直达"),
+    Paste("一键粘贴与悬浮球"),
     About("关于")
 }
 
@@ -219,6 +220,11 @@ internal fun SettingsPage(
             glowColors.indexOfFirst { it.first.equals(SyncSettings.hyperOsGlowColor(context), ignoreCase = true) }.coerceAtLeast(0)
         )
     }
+    var islandExpandedTime by remember {
+        mutableIntStateOf(SyncSettings.hyperOsIslandExpandedTime(context))
+    }
+    var showIslandExpandedTimeDialog by remember { mutableStateOf(false) }
+    val islandExpandedTimeDialogState = remember { TextFieldState(islandExpandedTime.toString()) }
     val islandTimeoutOptions = remember { SyncSettings.ISLAND_TIMEOUT_OPTIONS }
     val islandTimeoutLabels = remember { SyncSettings.ISLAND_TIMEOUT_LABELS }
     var islandTimeoutIndex by remember {
@@ -253,6 +259,7 @@ internal fun SettingsPage(
 
     // 是否有任何弹窗、Bottom Sheet 或选择器处于打开状态
     val isAnyOverlayOpen = showNameDialog ||
+        showIslandExpandedTimeDialog ||
         showPairDialog ||
         showCodeSheet ||
         deleteTargetDevice != null ||
@@ -282,6 +289,8 @@ internal fun SettingsPage(
         } finally {
             if (showNameDialog) {
                 showNameDialog = false
+            } else if (showIslandExpandedTimeDialog) {
+                showIslandExpandedTimeDialog = false
             } else if (showPairDialog) {
                 showPairDialog = false
             } else if (showCodeSheet) {
@@ -787,6 +796,21 @@ internal fun SettingsPage(
                                             }
                                         )
                                     }
+                                    BasicComponent(
+                                        title = "大岛展开时长",
+                                        summary = "设置大岛自动收起时间",
+                                        endActions = {
+                                            Text(
+                                                text = "${islandExpandedTime} 秒",
+                                                color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.7f),
+                                                fontSize = 14.sp
+                                            )
+                                        },
+                                        onClick = {
+                                            islandExpandedTimeDialogState.setTextAndPlaceCursorAtEnd(islandExpandedTime.toString())
+                                            showIslandExpandedTimeDialog = true
+                                        }
+                                    )
                                     WindowDropdownPreference(
                                         items = islandTimeoutLabels,
                                         selectedIndex = islandTimeoutIndex,
@@ -820,6 +844,25 @@ internal fun SettingsPage(
                                     )
                                 },
                                 onClick = { openSubPage(SettingsSubPage.SmartActions) }
+                            )
+                            ArrowPreference(
+                                title = "一键粘贴与悬浮球",
+                                endActions = {
+                                    val bubbleOn = SyncSettings.floatingBubbleEnabled(context)
+                                    val isAccessOn = clip.yixing.sync.paste.NexClipAccessibilityService.isEnabledInSystem(context)
+                                    val statusText = when {
+                                        bubbleOn && isAccessOn -> "无障碍+悬浮球"
+                                        isAccessOn -> "无障碍已就绪"
+                                        bubbleOn -> "悬浮球已开启"
+                                        else -> "未开启"
+                                    }
+                                    Text(
+                                        text = statusText,
+                                        color = if (bubbleOn || isAccessOn) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.7f),
+                                        fontSize = 14.sp
+                                    )
+                                },
+                                onClick = { openSubPage(SettingsSubPage.Paste) }
                             )
                             val totalFilterRules = filterKeywords.size + filterPackages.size
                             ArrowPreference(
@@ -1568,6 +1611,14 @@ internal fun SettingsPage(
                         )
                     }
 
+                    SettingsSubPage.Paste -> {
+                        clip.yixing.sync.paste.PasteSettingsPage(
+                            bottomInnerPadding = bottomInnerPadding,
+                            snackbarHostState = snackbarHostState,
+                            onBack = { closeSubPage() }
+                        )
+                    }
+
                     SettingsSubPage.About -> {
                         // ---- 二级页面 3: 关于与开源致谢 ----
                         val openUrl: (String) -> Unit = { targetUrl ->
@@ -1877,6 +1928,56 @@ internal fun SettingsPage(
             snackbarHostState = snackbarHostState,
             onDismiss = { updateDialogInfo = null }
         )
+    }
+
+    // 大岛展开时长输入对话框
+    WindowDialog(
+        show = showIslandExpandedTimeDialog,
+        title = "大岛展开时长",
+        summary = "输入大岛自动收起的秒数",
+        onDismissRequest = { showIslandExpandedTimeDialog = false }
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+            TextField(
+                state = islandExpandedTimeDialogState,
+                label = "时长（秒）",
+                useLabelAsPlaceholder = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Button(
+                    onClick = { showIslandExpandedTimeDialog = false },
+                    colors = ButtonDefaults.buttonColors(
+                        color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                        contentColor = MiuixTheme.colorScheme.onSurface
+                    ),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("取消")
+                }
+                Button(
+                    onClick = {
+                        val seconds = islandExpandedTimeDialogState.text.toString().trim().toIntOrNull()
+                        if (seconds == null || seconds < 1) {
+                            scope.launch { snackbarHostState.showAppSnack("请输入大于 0 的秒数", SnackType.Info) }
+                        } else {
+                            islandExpandedTime = seconds
+                            SyncSettings.setHyperOsIslandExpandedTime(context, seconds)
+                            showIslandExpandedTimeDialog = false
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColorsPrimary(),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("保存")
+                }
+            }
+        }
     }
 
     // 配对对话框 (6 位纯数字配对码或扫码接入)

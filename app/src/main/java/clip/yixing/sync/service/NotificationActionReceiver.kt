@@ -6,6 +6,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import clip.yixing.sync.paste.PasteEngine
+import clip.yixing.sync.paste.PasteOutcome
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -18,6 +20,7 @@ class NotificationActionReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_COPY_LATEST = "clip.yixing.sync.ACTION_COPY_LATEST"
         const val ACTION_FAVORITE_LATEST = "clip.yixing.sync.ACTION_FAVORITE_LATEST"
+        const val ACTION_PASTE_LATEST = "clip.yixing.sync.ACTION_PASTE_LATEST"
         const val ACTION_COPY_TEXT = "clip.yixing.sync.ACTION_COPY_TEXT"
         const val ACTION_EXECUTE_INTENT = "clip.yixing.sync.ACTION_EXECUTE_INTENT"
         const val EXTRA_CLIP_TEXT = "extra_clip_text"
@@ -79,6 +82,24 @@ class NotificationActionReceiver : BroadcastReceiver() {
                     runCatching {
                         ClipboardMonitorService.copyToClipboardInternal(context, ClipData.newPlainText("NexClip", text), rawText = text)
                         Toast.makeText(context, toastMsg, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+
+            // 通知栏「粘贴」：通知收起后目标输入框才会重新拿到焦点，
+            // 重试循环放在 NexClipAccessibilityService.awaitFocusedEditable 里，这里只管调度。
+            ACTION_PASTE_LATEST -> {
+                val clip = ClipboardMonitorService.captured.value.firstOrNull()
+                if (clip != null) {
+                    val pendingResult = goAsync()
+                    CoroutineScope(Dispatchers.Main).launch {
+                        val outcome = try {
+                            PasteEngine.paste(context, clip)
+                        } catch (_: Throwable) {
+                            PasteOutcome.FAILED
+                        }
+                        Toast.makeText(context, outcome.message, Toast.LENGTH_SHORT).show()
+                        pendingResult.finish()
                     }
                 }
             }

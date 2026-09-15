@@ -29,6 +29,14 @@ object SyncSettings {
     const val KEY_MAX_HISTORY = "max_history"
     const val KEY_SEARCH_HISTORY = "search_history"
 
+    // ---- 一键粘贴与悬浮球 ----
+    const val KEY_PASTE_METHOD = "paste_method"
+    const val KEY_FLOATING_BUBBLE = "floating_bubble"
+    const val KEY_PASTE_KEEP_CLIPBOARD = "paste_keep_clipboard"
+    const val KEY_PASTE_NOTIFICATION_ACTION = "paste_notification_action"
+    const val KEY_BUBBLE_X = "bubble_x"
+    const val KEY_BUBBLE_Y = "bubble_y"
+
     const val KEY_SMART_ACTION_MASTER = "smart_action_master"
     const val KEY_SMART_ACTION_CODE = "smart_action_code"
     const val KEY_SMART_ACTION_DEEPLINK = "smart_action_deeplink"
@@ -47,6 +55,7 @@ object SyncSettings {
 
     const val KEY_HYPEROS_OUTER_GLOW = "hyperos_outer_glow"
     const val KEY_HYPEROS_GLOW_COLOR = "hyperos_glow_color"
+    const val KEY_HYPEROS_ISLAND_EXPANDED_TIME = "hyperos_island_expanded_time"
     const val KEY_HYPEROS_ISLAND_TIMEOUT = "hyperos_island_timeout"
 
     val GLOW_COLORS = listOf(
@@ -100,6 +109,54 @@ object SyncSettings {
         prefs(context).edit().putString(KEY_CAPTURE_METHOD, method.key).apply()
     }
 
+    // ---- 一键粘贴与悬浮球 ----
+
+    fun pasteMethod(context: Context): PasteMethod {
+        val key = prefs(context).getString(KEY_PASTE_METHOD, PasteMethod.AUTO.key)
+        return PasteMethod.fromKey(key)
+    }
+
+    fun setPasteMethod(context: Context, method: PasteMethod) {
+        prefs(context).edit().putString(KEY_PASTE_METHOD, method.key).apply()
+    }
+
+    /** 悬浮球开关,默认关闭(需要悬浮窗权限,不主动打扰) */
+    fun floatingBubbleEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_FLOATING_BUBBLE, false)
+
+    fun setFloatingBubbleEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_FLOATING_BUBBLE, enabled).apply()
+    }
+
+    /**
+     * 粘贴时保留用户自己的剪贴板,默认开启。
+     * 开启时优先走无障碍 ACTION_SET_TEXT 直接写进输入框,完全不动系统剪贴板。
+     */
+    fun pasteKeepClipboard(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_PASTE_KEEP_CLIPBOARD, true)
+
+    fun setPasteKeepClipboard(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_PASTE_KEEP_CLIPBOARD, enabled).apply()
+    }
+
+    /** 通知栏是否展示「粘贴」快捷按钮,默认开启 */
+    fun pasteNotificationAction(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_PASTE_NOTIFICATION_ACTION, true)
+
+    fun setPasteNotificationAction(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_PASTE_NOTIFICATION_ACTION, enabled).apply()
+    }
+
+    /** 悬浮球停靠位置(-1 表示尚未拖动过,由服务给默认值) */
+    fun bubblePosition(context: Context): Pair<Int, Int> {
+        val p = prefs(context)
+        return p.getInt(KEY_BUBBLE_X, -1) to p.getInt(KEY_BUBBLE_Y, -1)
+    }
+
+    fun setBubblePosition(context: Context, x: Int, y: Int) {
+        prefs(context).edit().putInt(KEY_BUBBLE_X, x).putInt(KEY_BUBBLE_Y, y).apply()
+    }
+
     fun isHyperOsOuterGlow(context: Context): Boolean =
         prefs(context).getBoolean(KEY_HYPEROS_OUTER_GLOW, true)
 
@@ -112,6 +169,14 @@ object SyncSettings {
 
     fun setHyperOsGlowColor(context: Context, color: String) {
         prefs(context).edit().putString(KEY_HYPEROS_GLOW_COLOR, color).apply()
+    }
+
+    /** 大岛展开态自动收起时间（秒），默认 10 秒 */
+    fun hyperOsIslandExpandedTime(context: Context): Int =
+        prefs(context).getInt(KEY_HYPEROS_ISLAND_EXPANDED_TIME, 10)
+
+    fun setHyperOsIslandExpandedTime(context: Context, expandedTimeSeconds: Int) {
+        prefs(context).edit().putInt(KEY_HYPEROS_ISLAND_EXPANDED_TIME, expandedTimeSeconds).apply()
     }
 
     /** 小岛常驻展示有效时长（秒），默认 30 秒 */
@@ -405,6 +470,23 @@ enum class CaptureMethod(val key: String, val label: String, val summary: String
 
     companion object {
         fun fromKey(key: String?): CaptureMethod =
+            entries.find { it.key == key } ?: AUTO
+    }
+}
+
+/**
+ * 一键粘贴的执行后端:
+ * - AUTO: 自动 (无障碍优先 / Shizuku 按键注入备用)
+ * - ACCESSIBILITY: 仅无障碍服务,直接把文本写进聚焦的输入框
+ * - SHIZUKU: 仅 Shizuku,写剪贴板后模拟粘贴按键
+ */
+enum class PasteMethod(val key: String, val label: String, val summary: String) {
+    AUTO("auto", "自动选择", "无障碍优先，失败退回 Shizuku 按键"),
+    ACCESSIBILITY("accessibility", "无障碍注入", "直接写入输入框，不动剪贴板"),
+    SHIZUKU("shizuku", "Shizuku 按键", "写剪贴板后模拟粘贴按键");
+
+    companion object {
+        fun fromKey(key: String?): PasteMethod =
             entries.find { it.key == key } ?: AUTO
     }
 }

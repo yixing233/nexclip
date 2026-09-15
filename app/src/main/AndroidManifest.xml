@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 悬浮球入口：在别的应用之上显示「点按即粘贴」气泡与面板 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- 应用内下载新版本后唤起系统安装器执行覆盖安装 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="moe.shizuku.privileged.api.permission.RECEIVE_STATUS" />
@@ -97,6 +99,26 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="continuously monitor clipboard changes for cross-device sync" />
         </service>
+        <!--
+            一键粘贴无障碍服务。exported=true + BIND_ACCESSIBILITY_SERVICE 是官方要求的固定组合：
+            该权限只有系统持有，所以外部应用绑不上，等价于只对系统开放。
+        -->
+        <service
+            android:name=".paste.NexClipAccessibilityService"
+            android:exported="true"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+        <!-- 悬浮球：普通 started Service，与监听服务同进程，靠 FGS 保活 -->
+        <service
+            android:name=".paste.FloatingBubbleService"
+            android:exported="false" />
         <receiver
             android:name=".receiver.BootReceiver"
             android:exported="true">
@@ -110,6 +132,7 @@
             <intent-filter>
                 <action android:name="clip.yixing.sync.ACTION_COPY_LATEST" />
                 <action android:name="clip.yixing.sync.ACTION_FAVORITE_LATEST" />
+                <action android:name="clip.yixing.sync.ACTION_PASTE_LATEST" />
             </intent-filter>
         </receiver>
 

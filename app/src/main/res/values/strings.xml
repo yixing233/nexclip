@@ -5,4 +5,6 @@
     <string name="notification_channel_name">剪贴板监听</string>
     <string name="notification_title">NexClip</string>
     <string name="notification_text">正在持续监听剪贴板变化</string>
+    <string name="accessibility_service_label">NexClip 一键粘贴</string>
+    <string name="accessibility_service_description">开启后可把同步过来的内容直接写进当前聚焦的输入框，省去长按选粘贴。NexClip 仅读取「当前应用包名」与「是否有输入框获得焦点」用于判断粘贴时机与悬浮球显隐，不会读取、保存或上传任何输入框内容。</string>
 </resources>

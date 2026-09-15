@@ -180,6 +180,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         updateRecentsVisibility(SyncSettings.isHideFromRecents(this))
+        clip.yixing.sync.paste.FloatingBubbleService.sync(this)
     }
 
     fun updateRecentsVisibility(hideFromRecents: Boolean) {
@@ -270,9 +271,9 @@ private fun MainScreen() {
                         @Suppress("DEPRECATION")
                         appContext.packageManager.getPackageInfo(appContext.packageName, 0)
                     }
-                    pInfo.versionName ?: "20260905.01"
+                    pInfo.versionName ?: "20260915.01"
                 } catch (_: Exception) {
-                    "20260905.01"
+                    "20260915.01"
                 }
                 clip.yixing.sync.util.UpdateChecker.check(
                     currentVersion = curVer,

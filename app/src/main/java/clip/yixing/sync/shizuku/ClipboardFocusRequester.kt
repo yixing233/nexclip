@@ -62,25 +62,9 @@ object ClipboardFocusRequester {
             "-f",
             Intent.FLAG_ACTIVITY_NEW_TASK.toString(),
         )
-        val command = commandParts.joinToString(" ") { shellQuote(it) }
-        return runCatching {
-            Log.d(TAG, "Shizuku start clipboard floating activity: $command")
-            val process = ShizukuProcess.start(arrayOf("sh", "-c", command)) ?: return false
-            if (!waitForExit(process)) {
-                process.destroyForcibly()
-                Log.d(TAG, "Shizuku start clipboard floating activity timeout")
-                return false
-            }
-            val exitCode = process.exitValue()
-            if (exitCode != 0) {
-                val output = process.inputStream.bufferedReader().use { it.readText() }
-                Log.d(TAG, "Shizuku start clipboard floating activity failed: ${output.take(300)}")
-            }
-            exitCode == 0
-        }.getOrElse { throwable ->
-            Log.d(TAG, "Shizuku start clipboard floating activity exception: ${throwable.message}")
-            false
-        }
+        val command = commandParts.joinToString(" ") { ShizukuProcess.shellQuote(it) }
+        Log.d(TAG, "Shizuku start clipboard floating activity: $command")
+        return ShizukuProcess.exec(command, SHIZUKU_COMMAND_TIMEOUT_MILLIS) == 0
     }
 
     private fun floatingActivityIntent(context: Context, token: String, sourcePackage: String): Intent {
@@ -97,7 +81,7 @@ object ClipboardFocusRequester {
             val process = ShizukuProcess.start(arrayOf("sh", "-c", "dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'"))
                 ?: return ""
             val output = process.inputStream.bufferedReader().use { it.readText() }
-            if (!waitForExit(process)) process.destroyForcibly()
+            if (!ShizukuProcess.waitForExit(process, SHIZUKU_COMMAND_TIMEOUT_MILLIS)) process.destroyForcibly()
             Regex("[a-zA-Z0-9_]+(?:\\.[a-zA-Z0-9_]+)+").findAll(output)
                 .map { it.value }
                 .firstOrNull { it != context.packageName && !it.startsWith("com.android.systemui") } ?: ""
@@ -105,24 +89,6 @@ object ClipboardFocusRequester {
             Log.d(TAG, "read foreground package failed: ${throwable.message}")
             ""
         }
-    }
-
-    private fun waitForExit(process: Process): Boolean {
-        val deadline = System.currentTimeMillis() + SHIZUKU_COMMAND_TIMEOUT_MILLIS
-        while (System.currentTimeMillis() < deadline) {
-            val exited = runCatching {
-                process.exitValue()
-                true
-            }.getOrDefault(false)
-            if (exited) return true
-            runCatching { Thread.sleep(50L) }
-        }
-        return false
-    }
-
-    private fun shellQuote(arg: String): String {
-        if (arg.isEmpty()) return "''"
-        return "'" + arg.replace("'", "'\\''") + "'"
     }
 
     const val EXTRA_START_TOKEN = "clip.yixing.sync.extra.FLOATING_START_TOKEN"
