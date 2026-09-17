@@ -45,6 +45,12 @@ data class SmartAction(
     val targetPackage: String? = null,
     val targetIntent: Intent? = null,
     val isBroadcast: Boolean = false,
+    /**
+     * 窄幅界面(如超级岛按钮)专用的动作文案, 不包含 title 里内嵌的具体值。
+     * 这类按钮宽度有限会被截断, 而 title 内嵌的值(验证码/号码等)一旦被截断,
+     * 显示的将是一个错误值, 用户照抄必然失败; 故按钮只表明动作, 值交由标题呈现。
+     */
+    val buttonLabel: String? = null,
     val action: (context: Context) -> Unit
 ) {
     /**

@@ -354,7 +354,9 @@ object SyncNotificationManager {
                                     smartPi
                                 ).build()
                                 action = createAction("miui_action_smart", nativeAction)
-                                actionTitle = topSmart.title.take(12)
+                                // 按钮宽度有限, 只能显示动作名; title 内嵌的值(验证码等)交由
+                                // 上方标题行呈现, 避免截断后按钮上出现一个错误的值
+                                actionTitle = topSmart.buttonLabel ?: topSmart.title.take(12)
                                 val btnColor = topSmart.hexColor ?: "#006EFF"
                                 actionBgColor = btnColor
                                 actionBgColorDark = btnColor
@@ -599,7 +601,8 @@ object SyncNotificationManager {
         smartActions.take(2).forEachIndexed { idx, action ->
             val smartPi = action.createPendingIntent(context, 300 + idx)
             if (smartPi != null) {
-                builder.addAction(0, action.title, smartPi)
+                // 按钮只呈现动作名, 内嵌的值(验证码等)由通知正文呈现, 避免按钮变窄时被截成错误值
+                builder.addAction(0, action.buttonLabel ?: action.title, smartPi)
             }
         }
 

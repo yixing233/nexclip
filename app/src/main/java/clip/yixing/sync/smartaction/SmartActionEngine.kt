@@ -153,6 +153,7 @@ object SmartActionEngine {
                     SmartAction(
                         id = "code_$codeResult",
                         title = "复制验证码: $codeResult",
+                        buttonLabel = "复制验证码",
                         summary = "提取短信纯数字验证码",
                         icon = LucideIcons.Key,
                         color = Color(0xFF10B981),
@@ -190,6 +191,7 @@ object SmartActionEngine {
                         SmartAction(
                             id = "url_$url",
                             title = if (host.isNotBlank()) "访问 $host" else "打开网页",
+                            buttonLabel = "打开链接",
                             summary = url,
                             icon = LucideIcons.ExternalLink,
                             color = Color(0xFF006EFF),
@@ -222,6 +224,7 @@ object SmartActionEngine {
                     SmartAction(
                         id = "phone_$phone",
                         title = "呼叫 $phone",
+                        buttonLabel = "呼叫",
                         icon = LucideIcons.Phone,
                         color = Color(0xFF006EFF),
                         hexColor = "#006EFF",
@@ -245,6 +248,7 @@ object SmartActionEngine {
                     SmartAction(
                         id = "email_$email",
                         title = "发邮件给 $email",
+                        buttonLabel = "发邮件",
                         icon = LucideIcons.Mail,
                         color = Color(0xFF6366F1),
                         hexColor = "#6366F1",
@@ -269,6 +273,7 @@ object SmartActionEngine {
                     SmartAction(
                         id = "express_$expressNo",
                         title = "查快递: $expressNo",
+                        buttonLabel = "查快递",
                         icon = LucideIcons.Truck,
                         color = Color(0xFFF59E0B),
                         hexColor = "#F59E0B",
@@ -295,6 +300,7 @@ object SmartActionEngine {
                     SmartAction(
                         id = "color_$colorHex",
                         title = "色值 $colorHex",
+                        buttonLabel = "复制色值",
                         icon = LucideIcons.Palette,
                         color = parsedColor,
                         hexColor = colorHex,
@@ -392,6 +398,7 @@ object SmartActionEngine {
                         SmartAction(
                             id = "custom_${rule.id}",
                             title = "${rule.name}: $group1",
+                            buttonLabel = rule.name,
                             summary = "复制提取内容",
                             icon = LucideIcons.Copy,
                             color = Color(0xFF8B5CF6),
