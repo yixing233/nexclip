@@ -20,6 +20,18 @@ import clip.yixing.sync.util.SyncSettings
 object SmartActionEngine {
 
     /**
+     * 文本扫描长度上限。所有提取器共用此上限: 若某一提取器使用更严格的上限,
+     * 长短信/长推送会在该提取器上被静默丢弃, 而调用方无法察觉。
+     */
+    private const val MAX_SCAN_LENGTH = 10000
+
+    /**
+     * 弱特征(距离启发式)路径允许的候选码与关键字最大字符距离。实测真实下发短信为 2~10,
+     * 广告类噪声数字可达 29; 取 16 可容纳真实用例并排除远距离噪声。
+     */
+    private const val MAX_DISTANCE_CANDIDATE = 16
+
+    /**
      * 应用变体定义模型 (标准版、极速版、概念版、HD版等)
      */
     data class AppVariant(
@@ -122,7 +134,7 @@ object SmartActionEngine {
      * 智能识别文本中的操作意图并生成动作列表 (结合用户开关与自定义规则)
      */
     fun detectActions(context: Context, text: String): List<SmartAction> {
-        if (text.isBlank() || text.length > 10000) return emptyList()
+        if (text.isBlank() || text.length > MAX_SCAN_LENGTH) return emptyList()
         if (!SyncSettings.isSmartActionMasterEnabled(context)) return emptyList()
 
         val actions = mutableListOf<SmartAction>()
@@ -775,15 +787,19 @@ object SmartActionEngine {
      * 判断文本是否明显属于编程代码、脚本、路径或 SQL，避免误将代码/版本号识别为短信验证码
      */
     private fun isLikelyProgrammingCode(text: String): Boolean {
+        // URL 不是编程代码: 其中的 "https://host.tld/" 会被下面的路径规则命中(域名恰好呈现为
+        // 斜杠包裹的片段), 而短信常同时携带验证码与链接, 若不剔除会整条跳过提取。故先移除 URL。
+        val scrubbed = text.replace(Regex("""(?i)\bhttps?://\S+"""), " ")
         val codePatterns = listOf(
             Regex("""(?i)::"""), // C++ / Rust / PowerShell 作用域解析符
             Regex("""(?i)\b(?:const|let|var|val|fun|def|function|class|import|package|namespace|public|private|protected)\b"""),
             Regex("""(?i)\b(?:System\.Environment|SetEnvironmentVariable|console\.log|println|return|SELECT\s+.*FROM)\b"""),
-            Regex("""[\\/][a-zA-Z0-9_.-]+[\\/]"""), // 多层文件路径
+            Regex("""(?:[\\/][a-zA-Z0-9_.-]+){2,}[\\/]?"""), // 多层文件路径(至少两级目录)
+            Regex("""(?i)\b[a-zA-Z]:[\\/]"""), // Windows 盘符路径, 如 C:\
             Regex("""(?i)\.(?:exe|dll|apk|jar|sh|bat|ps1|py|kt|java|js|ts|cpp|rs|json|xml|yaml|yml)\b"""),
             Regex("""[{}\[\];=]{3,}""") // 密集代码符号
         )
-        return codePatterns.any { it.containsMatchIn(text) }
+        return codePatterns.any { it.containsMatchIn(scrubbed) }
     }
 
     /**
@@ -791,9 +807,12 @@ object SmartActionEngine {
      */
     private fun extractVerificationCode(text: String): String? {
         val trimmed = text.trim()
-        if (trimmed.length > 500) return null
+        if (trimmed.length > MAX_SCAN_LENGTH) return null
 
         // 0. 纯数字/G-码快速提取 (如 "839201", "G-123456")
+        // 整段文本只有一个 4~8 位数字串时不存在周边上下文, isValidCodeCandidate 的判定
+        // (前缀/后缀上下文、边界字符)全部无法生效, 编程代码防御对此类输入亦恒为 false。
+        // 因此该分支不再追加过滤: 单数字串一律视为验证码, 以保住 "123456" 这类只含验证码的短信。
         val pureCodeRegex = Regex("^(?:G-)?([0-9]{4,8})$", RegexOption.IGNORE_CASE)
         pureCodeRegex.find(trimmed)?.groupValues?.getOrNull(1)?.let { return it }
 
@@ -828,23 +847,28 @@ object SmartActionEngine {
         if (!hasCodeKeyword) return null
 
         // 2. 强特征前置匹配: 关键字紧跟验证码 (如: "验证码为: 123456", "Code is 492018", "OTP: 883920")
+        // 边界断言用 (?<![0-9A-Za-z]) 而非 \b: Java/Kotlin 的 \b 基于 ASCII \w, 而中文汉字属非单词字符,
+        // 汉字与汉字之间不存在单词边界, 故 \b验证码\b 对中文文本永不匹配 —— 而中文短信正是主要场景。
+        // 分隔符里同时收 为/是 的无空格写法 (如 "验证码为550875"), 这是中文短信最常见的形式。
+        // 重复次数设上限是为封顶回溯深度: 无界量词在数千连续分隔符上会触发 StackOverflowError。
         val prefixKw = """(?:验证码|动态码|校验码|安全码|确认码|动态密码|授权码|随机码|短信验证码|verification\s*code|security\s*code|auth(?:entication)?\s*code|login\s*code|confirm(?:ation)?\s*code|access\s*code|one-time\s*(?:passcode|password|code)|passcode|otp|2fa)"""
-        val separator = """(?:\s+(?:is|was|be|为|是)|\s*[:：,\-，【\[\(（〔\)\]】])*"""
+        val separator = """(?:\s+(?:is|was|be)|\s*[为是]|\s*[:：,\-，【\[\(（〔\)\]】]){0,8}"""
         val prefixRegex = Regex(
-            """(?i)\b$prefixKw\b$separator\s*([0-9a-zA-Z]{4,8})(?![0-9a-zA-Z])"""
+            """(?i)(?<![0-9A-Za-z])$prefixKw(?![0-9A-Za-z])$separator\s*([0-9a-zA-Z]{4,8})(?![0-9a-zA-Z])"""
         )
         for (match in prefixRegex.findAll(text)) {
             val candidate = match.groupValues.getOrNull(1) ?: continue
             val start = match.range.first + match.value.lastIndexOf(candidate)
             val end = start + candidate.length
-            if (isValidCodeCandidate(text, candidate, start, end)) {
+            if (isValidCodeCandidate(text, candidate, start, end, strongMatch = true)) {
                 return candidate
             }
         }
 
         // 3. 强特征后置匹配: 验证码在关键字前面 (如: "123456 为您的登录验证码", "9527 是本次动态码")
+        // 同上, 连接词组的重复次数设上限以封顶回溯深度; 上限同样远高于真实短信用量。
         val suffixRegex = Regex(
-            """(?<![0-9a-zA-Z])([0-9a-zA-Z]{4,8})\s*(?:为|是|，|,|\s)*[（\(]?(?:您的|本次|您本次)?(?:短信)?(?:登录|注册|支付|动态|身份)?$prefixKw"""
+            """(?<![0-9a-zA-Z])([0-9a-zA-Z]{4,8})\s*(?:(?:为|是|，|,)\s*){0,16}[（\(]?(?:您的|本次|您本次)?(?:短信)?(?:登录|注册|支付|动态|身份)?$prefixKw"""
         )
         for (match in suffixRegex.findAll(text)) {
             val candidate = match.groupValues.getOrNull(1) ?: continue
@@ -892,6 +916,10 @@ object SmartActionEngine {
             val distance = keywordIndices.minOf { kwIdx ->
                 if (start >= kwIdx) start - kwIdx else kwIdx - end
             }
+            // 距离上限: 本分支纯靠"离关键字近"推断, 无相邻性证据。实测真实下发短信的码与关键字
+            // 距离为 2~10 字符; 而广告类文本(如"前1000名...验证码戳")的噪声数字距离可达 29。
+            // 不设上限会把这类无关数字当成验证码, 因此限定为紧邻窗口内的候选。
+            if (distance > MAX_DISTANCE_CANDIDATE) continue
             if (distance < minDistance) {
                 minDistance = distance
                 bestCandidate = candidate
@@ -903,8 +931,19 @@ object SmartActionEngine {
 
     /**
      * 校验候选验证码是否有效（过滤常见干扰场景：版本号、变量标识符、文件路径、金额、时间、卡号）
+     *
+     * @param strongMatch 候选是否来自「关键字在前、码紧随其后」的前置强特征分支。该分支下码与
+     *   关键字相邻本身就是下发证据, 故不再套用身份类过滤: 真实短信常写成「您正在进行账号注册，
+     *   验证码为550875」, 码前 12 字窗口内含「账号」等词, 但码确实由关键字直接引出, 属正常下发,
+     *   若一并无差别过滤会漏报。身份类过滤仅用于弱特征与后缀分支, 防止误取尾号/卡号等数字。
      */
-    private fun isValidCodeCandidate(fullText: String, candidate: String, startIndex: Int, endIndex: Int): Boolean {
+    private fun isValidCodeCandidate(
+        fullText: String,
+        candidate: String,
+        startIndex: Int,
+        endIndex: Int,
+        strongMatch: Boolean = false
+    ): Boolean {
         if (candidate.all { it.isLetter() }) return false
 
         // 边界字符校验：避免作为版本号(如 26.820.7780.0)、变量标识符、路径的一部分
@@ -920,14 +959,21 @@ object SmartActionEngine {
         val prefixContext = fullText.substring(maxOf(0, startIndex - 12), startIndex)
         val suffixContext = fullText.substring(minOf(fullText.length, endIndex + 1), minOf(fullText.length, endIndex + 12))
 
-        if (prefixContext.contains("尾号") || prefixContext.contains("卡号") || prefixContext.contains("账号") || prefixContext.contains("户名")) {
-            return false
+        if (!strongMatch) {
+            if (prefixContext.contains("尾号") || prefixContext.contains("卡号") || prefixContext.contains("账号") || prefixContext.contains("户名")) {
+                return false
+            }
         }
         if (prefixContext.contains("致电") || prefixContext.contains("客服") || prefixContext.contains("电话") || prefixContext.contains("热线") || prefixContext.contains("拨打")) {
             return false
         }
-        if (suffixContext.startsWith("年") || suffixContext.startsWith("月") || suffixContext.startsWith("日") ||
-            suffixContext.startsWith("点") || suffixContext.startsWith("时") || suffixContext.startsWith("分") || suffixContext.startsWith("秒")) {
+        // 日期单位可跟 4 位年份(2024年), 故 年月日 对任意长度都要判; 而 点/时/分/秒 只能跟在
+        // 1~2 位时刻后(20点/9时), 不可能跟在 4~8 位验证码后, 其检查对本候选范围无意义, 反而会
+        // 误杀 点击/点评/分钟/分秒 等复合词开头的正常短信。故时刻类单位仅对短候选生效。
+        val suffixStartsDateUnit = suffixContext.startsWith("年") || suffixContext.startsWith("月") || suffixContext.startsWith("日")
+        val suffixStartsClockUnit = suffixContext.startsWith("点") || suffixContext.startsWith("时") ||
+            suffixContext.startsWith("分") || suffixContext.startsWith("秒")
+        if (suffixStartsDateUnit || (suffixStartsClockUnit && candidate.length <= 2)) {
             return false
         }
         if (prefixContext.endsWith("年") || prefixContext.endsWith("月") || prefixContext.endsWith("日") ||
