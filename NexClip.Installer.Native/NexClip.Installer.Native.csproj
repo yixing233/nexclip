@@ -9,10 +9,10 @@
     <AssemblyName>NexClip_Setup</AssemblyName>
     <RootNamespace>NexClip.Installer.Native</RootNamespace>
     <ApplicationIcon>..\Assets\icon.ico</ApplicationIcon>
-    <Version>20260915.02</Version>
-    <AssemblyVersion>2026.9.15.2</AssemblyVersion>
-    <FileVersion>2026.9.15.2</FileVersion>
-    <InformationalVersion>20260915.02</InformationalVersion>
+    <Version>20260917.01</Version>
+    <AssemblyVersion>2026.9.17.1</AssemblyVersion>
+    <FileVersion>2026.9.17.1</FileVersion>
+    <InformationalVersion>20260917.01</InformationalVersion>
     
     <!-- Native AOT 纯机器码编译 -->
     <PublishAot>true</PublishAot>
