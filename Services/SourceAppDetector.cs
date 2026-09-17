@@ -55,6 +55,57 @@ public static class SourceAppDetector
     private const uint ProcessQueryLimitedInformation = 0x1000;
 
     /// <summary>
+    /// 取剪贴板数据所有者窗口的进程名。仅 Win32 查询 + 一次进程路径读取,
+    /// 无 PE 版本信息解析(磁盘 IO)、无图标提取(GDI),可在 UI 线程即时执行。
+    /// 取不到返回 null。
+    ///
+    /// 用途:在发起任何跨进程剪贴板读取之前做来源过滤。剪贴板所有者若为无响应的远控程序,
+    /// 读取会连同本进程一起挂起且无法超时中断,因此过滤必须发生在此之前。
+    ///
+    /// 刻意不使用 <see cref="CaptureOwnerHandle"/> 的前台窗口兜底:那个兜底对"识别来源应用"
+    /// 是合理的,但用于"是否跳过读取"会拿前台窗口冒充剪贴板所有者,既可能误过滤正常复制,
+    /// 也可能漏掉真正的风险来源。此处只认 GetClipboardOwner,取不到即视为未知并放行。
+    /// </summary>
+    public static string? TryGetClipboardOwnerProcessName()
+    {
+        try
+        {
+            var hwnd = GetClipboardOwner();
+            if (hwnd == IntPtr.Zero || !NativeMethods.IsWindow(hwnd)) return null;
+
+            GetWindowThreadProcessId(hwnd, out uint pid);
+            if (pid == 0 || pid == (uint)Environment.ProcessId) return null;
+
+            var path = QueryProcessImagePath(pid);
+            return string.IsNullOrEmpty(path) ? null : Path.GetFileNameWithoutExtension(path);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 按 PID 直接取映像路径:单次 OpenProcess + QueryFullProcessImageName,不构造 Process 对象。
+    /// 权限不足(提升进程)或进程已退出时返回 null,由调用方按"未知"放行。
+    /// </summary>
+    private static string? QueryProcessImagePath(uint pid)
+    {
+        var hProcess = OpenProcess(ProcessQueryLimitedInformation, false, pid);
+        if (hProcess == IntPtr.Zero) return null;
+        try
+        {
+            var sb = new StringBuilder(1024);
+            int size = sb.Capacity;
+            return QueryFullProcessImageName(hProcess, 0, sb, ref size) ? sb.ToString() : null;
+        }
+        finally
+        {
+            CloseHandle(hProcess);
+        }
+    }
+
+    /// <summary>
     /// 判断剪贴板当前所有者是否为本进程自身
     /// </summary>
     public static bool IsClipboardOwnedByCurrentProcess()

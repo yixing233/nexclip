@@ -870,6 +870,27 @@ public sealed partial class SettingsPage : Page
         }
     }
 
+    private async void ExportDiagnosticsButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var picker = new FileSavePicker();
+            picker.SuggestedStartLocation = PickerLocationId.DocumentsLibrary;
+            picker.FileTypeChoices.Add("文本文件", new List<string> { ".txt" });
+            picker.SuggestedFileName = $"NexClip-诊断报告-{DateTime.Now:yyyyMMdd-HHmm}";
+            InitializePicker(picker);
+            var file = await picker.PickSaveFileAsync();
+            if (file is null) return;
+            await DiagnosticsService.ExportAsync(file.Path, App.Services);
+            _vm.ShowMessage($"诊断报告已导出：{file.Path}", InfoBarSeverity.Success);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("导出诊断报告失败", ex);
+            _vm.ShowMessage($"导出诊断报告失败：{ServerApi.DescribeException(ex, "请检查文件路径和磁盘空间。")}", InfoBarSeverity.Error);
+        }
+    }
+
     private async void ImportButton_Click(object sender, RoutedEventArgs e)
     {
         try

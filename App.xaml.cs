@@ -98,7 +98,15 @@ public partial class App : Application
     }
 
     /// <summary>打开"复制的网址/直达动作":优先执行当前浮窗主动作，否则取当前剪贴板或最近一条历史。</summary>
-    public static void OpenCopiedUrl()
+    public static void OpenCopiedUrl() => _ = OpenCopiedUrlAsync();
+
+    /// <summary>
+    /// 异步实现。原实现在 UI 线程上对剪贴板做 sync-over-async
+    /// (GetTextAsync().AsTask().GetAwaiter().GetResult()):剪贴板所有者无响应时,
+    /// 这个等待无法取消,会把 UI 线程(进而整个应用)一起挂死。
+    /// 改为正常 await 后 UI 线程不再被占用,跨进程读取即使不返回也只会让本次动作作废。
+    /// </summary>
+    private static async Task OpenCopiedUrlAsync()
     {
         try
         {
@@ -109,16 +117,24 @@ public partial class App : Application
             }
 
             var text = "";
-            try
+            // 先做本地探针再读取:被无响应进程独占时,跨进程读取会在调用返回之前一直等待且无法取消。
+            if (NativeMethods.TryProbeClipboard())
             {
-                if (global::Windows.ApplicationModel.DataTransfer.Clipboard.GetContent()
-                    is { } content && content.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text))
+                try
                 {
-                    text = global::Windows.ApplicationModel.DataTransfer.Clipboard.GetContent()
-                        ?.GetTextAsync()?.AsTask()?.GetAwaiter().GetResult() ?? "";
+                    var content = global::Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
+                    if (content is not null &&
+                        content.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.Text))
+                    {
+                        text = await content.GetTextAsync() ?? "";
+                    }
                 }
+                catch { text = ""; }
             }
-            catch { text = ""; }
+            else
+            {
+                Log.Warn("打开链接:剪贴板当前不可打开,改用最近一条链接历史");
+            }
 
             if (SmartActionService.Detect(text) is { } action)
             {
@@ -284,6 +300,17 @@ public partial class App : Application
         Services.SettingsVm.RefreshHotkeyStatus();
 
         Services.Engine.Start();
+        Services.Engine.Monitor!.WatchdogRecovered += seconds =>
+            Services.Tray?.Notify("NexClip", $"检测到剪贴板读取异常，已自动恢复（{seconds} 秒）");
+        Services.Engine.Monitor!.ClipboardBlocked += owner =>
+        {
+            // 剪贴板锁在其它进程手里,本进程无法代为解开;唯一有用的是把真实原因告诉用户,
+            // 否则用户只会看到"复制粘贴突然不工作"而无从下手。
+            var who = string.IsNullOrEmpty(owner) ? "某个程序" : owner;
+            Log.Warn($"剪贴板被 {who} 持续独占,已暂停读取");
+            Services.Tray?.Notify("剪贴板暂时不可用",
+                $"{who} 正在占用系统剪贴板，复制粘贴可能失效。退出该程序即可恢复。");
+        };
 
         // 启动时后台自动检查更新 (延时 3 秒避免影响冷启动性能)
         if (Services.Settings.AutoCheckUpdate)

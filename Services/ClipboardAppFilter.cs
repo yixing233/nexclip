@@ -17,6 +17,7 @@ public static class ClipboardAppFilter
         "Chrome Remote Desktop", "mstsc", "远程桌面", "Parsec", "Splashtop",
         "UltraViewer", "RealVNC", "VNC Viewer", "Remote Utilities", "HopToDesk",
         "Supremo", "AeroAdmin", "Radmin", "DWService",
+        "网易UU远程", "UU远程", "GameViewer", "UU加速器",
     };
 
     private static readonly string[] ProcessTokens =
@@ -25,6 +26,7 @@ public static class ClipboardAppFilter
         "chrome-remote-desktop-host", "mstsc", "remotedesktop", "parsec", "splashtop",
         "ultraviewer", "vncviewer", "winvnc", "tvnserver", "remoteutilities", "hoptodesk",
         "supremo", "aeroadmin", "radmin", "dwagent", "dwservice", "remotepc", "ammyy",
+        "gameviewer", "uuremote", "neteaseuu",
     };
 
     /// <summary>返回是否应阻止该来源应用的自动采集。无法检测来源时默认允许。</summary>
@@ -40,6 +42,20 @@ public static class ClipboardAppFilter
             if (customProcesses?.Any(rule => RuleMatches(rule, normalized, fileName)) == true) return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// 仅凭剪贴板所有者进程名判断是否应跳过采集(不做 PE 版本读取与图标提取,可安全前置)。
+    /// 供 <c>ClipboardMonitor</c> 在发起跨进程剪贴板读取之前调用:被无响应远控独占时,
+    /// 读取会连本进程一起挂死且无法超时中断,必须在读取前先把这类来源挡掉。
+    /// 进程名未知(权限不足/已退出)时返回 false 放行。
+    /// </summary>
+    public static bool ShouldSkipByProcessName(string? processName, bool enabled, IEnumerable<string>? customProcesses = null)
+    {
+        if (!enabled || string.IsNullOrWhiteSpace(processName)) return false;
+        var name = processName.Trim();
+        if (Matches(name)) return true;
+        return customProcesses?.Any(rule => RuleMatches(rule, name, name)) == true;
     }
 
     public static IReadOnlyList<RunningProcessOption> GetRunningProcesses()

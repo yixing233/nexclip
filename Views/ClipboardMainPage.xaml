@@ -90,6 +90,9 @@
                     </Button>
                 </Grid>
                 <StackPanel x:Name="TopButtons" Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                    <Button Command="{Binding ToggleMultiSelectCommand}" Width="32" Height="32" Padding="0" Background="Transparent" BorderThickness="0" CornerRadius="4" ToolTipService.ToolTip="批量选择">
+                        <Image Source="{x:Bind services:Lucide.ListChecks}" Width="16" Height="16" />
+                    </Button>
                     <Button x:Name="ClearHistoryButton" Click="ClearHistoryButton_Click" Width="32" Height="32" Padding="0" Background="Transparent" BorderThickness="0" CornerRadius="4" ToolTipService.ToolTip="清空记录">
                         <Button.Resources>
                             <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="Transparent" />
@@ -135,10 +138,28 @@
             <Grid.RenderTransform>
                 <TranslateTransform x:Name="ListTranslateTransform" />
             </Grid.RenderTransform>
+            <Border
+                VerticalAlignment="Top"
+                Margin="16,2,16,6"
+                Padding="10,7"
+                CornerRadius="8"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                Visibility="{Binding IsMultiSelectMode, Converter={StaticResource BoolToVis}}">
+                <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                    <TextBlock Text="批量选择" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <TextBlock Text="已选" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding BatchSelectedCount}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                    <Button Command="{Binding BatchStarCommand}" Padding="7,3" Content="收藏" />
+                    <Button Command="{Binding BatchUnstarCommand}" Padding="7,3" Content="取消收藏" />
+                    <Button Command="{Binding BatchDeleteCommand}" Padding="7,3" Content="删除" />
+                </StackPanel>
+            </Border>
             <ListView
                 x:Name="EntryList"
                 ItemsSource="{Binding Items}"
-                SelectionMode="Single"
+                SelectionMode="Extended"
                 SelectionChanged="EntryList_SelectionChanged"
                 KeyDown="EntryList_KeyDown"
                 Background="Transparent">
@@ -184,8 +205,8 @@
                             DoubleTapped="Item_DoubleTapped"
                             RightTapped="Item_RightTapped"
                             ToolTipService.ToolTip="双击粘贴"
-                            BorderThickness="{x:Bind BorderThicknessFor(IsSelected, IsHovered), Mode=OneWay}"
-                            BorderBrush="{x:Bind BorderBrushFor(IsSelected, IsHovered), Mode=OneWay}"
+                            BorderThickness="{x:Bind BorderThicknessForBatch, Mode=OneWay}"
+                            BorderBrush="{x:Bind BorderBrushForBatch, Mode=OneWay}"
                             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
                             <Border.ContextFlyout>
                                 <MenuFlyout Opening="EntryMenu_Opening">

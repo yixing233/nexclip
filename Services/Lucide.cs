@@ -119,6 +119,7 @@ public static class Lucide
     public static ImageSource Settings => Get("settings", "primary");
     public static ImageSource Search => Get("search", "secondary");
     public static ImageSource ListFilter => Get("list-filter", "secondary");
+    public static ImageSource ListChecks => Get("list-checks", "secondary");
     public static ImageSource Plus => Get("plus", "secondary");
     public static ImageSource RefreshCw => Get("refresh-cw", "primary");
     public static ImageSource RotateCw => Get("rotate-cw", "secondary");

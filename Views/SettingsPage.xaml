@@ -1169,6 +1169,12 @@
                                             <TextBlock Text="导入数据" />
                                         </StackPanel>
                                     </Button>
+                                    <Button Click="ExportDiagnosticsButton_Click">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Image Source="{x:Bind services:Lucide.FileText}" Width="14" Height="14" />
+                                            <TextBlock Text="导出诊断报告" />
+                                        </StackPanel>
+                                    </Button>
                                     <ProgressRing IsActive="{Binding IsDataBusy}" Width="16" Height="16" VerticalAlignment="Center" />
                                 </StackPanel>
 

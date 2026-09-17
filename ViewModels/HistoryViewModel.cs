@@ -72,10 +72,26 @@ public partial class HistoryViewModel : ObservableObject
 
     public IRelayCommand ClearSearchCommand { get; }
 
+    /// <summary>是否处于批量选择模式。</summary>
+    [ObservableProperty]
+    private bool isMultiSelectMode;
+
+    public int BatchSelectedCount => Items.Count(x => x.IsBatchSelected);
+    public bool HasBatchSelection => BatchSelectedCount > 0;
+
+    public IRelayCommand ToggleMultiSelectCommand { get; }
+    public IRelayCommand BatchStarCommand { get; }
+    public IRelayCommand BatchUnstarCommand { get; }
+    public IRelayCommand BatchDeleteCommand { get; }
+
     public HistoryViewModel(AppServices svc)
     {
         _svc = svc;
         ClearSearchCommand = new RelayCommand(() => SearchText = "");
+        ToggleMultiSelectCommand = new RelayCommand(ToggleMultiSelect);
+        BatchStarCommand = new AsyncRelayCommand(() => ApplyBatchStarAsync(true));
+        BatchUnstarCommand = new AsyncRelayCommand(() => ApplyBatchStarAsync(false));
+        BatchDeleteCommand = new AsyncRelayCommand(BatchDeleteAsync);
         Items.CollectionChanged += (_, _) => NotifyStateChanged();
     }
 
@@ -291,6 +307,75 @@ public partial class HistoryViewModel : ObservableObject
         for (var i = 0; i < Items.Count; i++)
         {
             Items[i].IndexInList = (i < 9) ? (i + 1) : 0;
+        }
+    }
+
+    private void ToggleMultiSelect()
+    {
+        IsMultiSelectMode = !IsMultiSelectMode;
+        if (!IsMultiSelectMode)
+        {
+            foreach (var item in Items) item.IsBatchSelected = false;
+        }
+        NotifyBatchStateChanged();
+    }
+
+    public void ToggleBatchSelection(HistoryItemViewModel item)
+    {
+        if (!IsMultiSelectMode) return;
+        item.IsBatchSelected = !item.IsBatchSelected;
+        NotifyBatchStateChanged();
+    }
+
+    private void NotifyBatchStateChanged()
+    {
+        OnPropertyChanged(nameof(BatchSelectedCount));
+        OnPropertyChanged(nameof(HasBatchSelection));
+    }
+
+    private async Task ApplyBatchStarAsync(bool starred)
+    {
+        if (_engine is null) return;
+        var selected = Items.Where(x => x.IsBatchSelected).ToList();
+        if (selected.Count == 0) return;
+        foreach (var item in selected)
+        {
+            item.Starred = starred;
+            item.Item.Starred = starred;
+            _engine.History.ToggleStar(item.Item.Id, starred);
+        }
+        await SyncBatchMetadataAsync(starred ? "star" : "unstar", selected);
+        NotifyBatchStateChanged();
+    }
+
+    private async Task BatchDeleteAsync()
+    {
+        if (_engine is null) return;
+        var selected = Items.Where(x => x.IsBatchSelected).ToList();
+        if (selected.Count == 0) return;
+        foreach (var item in selected)
+        {
+            _engine.History.Delete(item.Item.Id);
+            Items.Remove(item);
+        }
+        await SyncBatchMetadataAsync("delete", selected);
+        UpdateShortcutIndices();
+        NotifyBatchStateChanged();
+    }
+
+    private async Task SyncBatchMetadataAsync(string action, IReadOnlyList<HistoryItemViewModel> items)
+    {
+        var s = _svc.Settings;
+        if (!s.IsPaired || string.IsNullOrWhiteSpace(s.ServerUrl)) return;
+        var ids = items.Where(x => x.Item.ServerId is > 0).Select(x => x.Item.ServerId!.Value).ToArray();
+        if (ids.Length == 0) return;
+        try
+        {
+            await _svc.Api.BatchUpdateEntriesAsync(s.ServerUrl, s.DeviceId, s.AuthToken, action, ids);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"批量同步远端元数据失败: {ex.Message}");
         }
     }
 

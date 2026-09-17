@@ -205,6 +205,44 @@ public sealed class ServerApi
         return await SendAsync<ClipboardEntry>(request, deviceId, token, ct);
     }
 
+    /// <summary>GET /api/clipboard/history:读取同一用户组的远端历史(不含图片字节)。</summary>
+    public async Task<List<ClipboardEntry>> GetRemoteHistoryAsync(
+        string serverUrl, string deviceId, string token, int offset = 0, int limit = 50, string? query = null, CancellationToken ct = default)
+    {
+        var path = $"/api/clipboard/history?offset={offset}&limit={limit}";
+        if (!string.IsNullOrWhiteSpace(query)) path += "&q=" + Uri.EscapeDataString(query.Trim());
+        using var request = new HttpRequestMessage(HttpMethod.Get, Endpoint(serverUrl, path));
+        var json = await SendAsync<JsonElement>(request, deviceId, token, ct);
+        if (json.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array)
+        {
+            return items.Deserialize<List<ClipboardEntry>>(new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? new();
+        }
+        return new List<ClipboardEntry>();
+    }
+
+    /// <summary>PUT /api/clipboard/{id}:更新收藏/备注(同一用户组共享)。</summary>
+    public async Task UpdateEntryMetadataAsync(
+        string serverUrl, string deviceId, string token, long id, bool starred, string? remark, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Put, Endpoint(serverUrl, $"/api/clipboard/{id}"))
+        {
+            Content = JsonContent.Create(new { starred, remark }),
+        };
+        await SendNoContentAsync(request, deviceId, token, ct);
+    }
+
+    /// <summary>POST /api/clipboard/batch:批量收藏/取消收藏/删除。</summary>
+    public async Task<int> BatchUpdateEntriesAsync(
+        string serverUrl, string deviceId, string token, string action, IEnumerable<long> ids, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(serverUrl, "/api/clipboard/batch"))
+        {
+            Content = JsonContent.Create(new { action, ids = ids.ToArray() }),
+        };
+        var json = await SendAsync<JsonElement>(request, deviceId, token, ct);
+        return json.TryGetProperty("changed", out var changed) && changed.TryGetInt32(out var value) ? value : 0;
+    }
+
     /// <summary>GET /api/images/{ref}:下载图片字节。404 返回 null。</summary>
     public async Task<byte[]?> DownloadImageAsync(
         string serverUrl, string deviceId, string token, string imageRef, CancellationToken ct = default)

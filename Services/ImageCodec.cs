@@ -34,6 +34,8 @@ public static class ImageCodec
     /// <summary>读取剪贴板文本;无文本返回 null。</summary>
     public static async Task<string?> ReadClipboardTextAsync()
     {
+        // 无参入口自行打开剪贴板:所有者无响应时跨进程读取无法取消,先探针确认可安全打开。
+        if (!NativeMethods.TryProbeClipboard()) return null;
         var content = Clipboard.GetContent();
         return await ReadClipboardTextAsync(content);
     }
@@ -57,6 +59,7 @@ public static class ImageCodec
     /// </summary>
     public static async Task<(string? Text, string? Html)> ReadClipboardRichTextAsync()
     {
+        if (!NativeMethods.TryProbeClipboard()) return (null, null);
         var content = Clipboard.GetContent();
         return await ReadClipboardRichTextAsync(content);
     }
@@ -110,6 +113,7 @@ public static class ImageCodec
     /// <summary>从剪贴板读取位图并编码为 PNG 字节;无位图返回 null;超 10MB 返回 null(调用方提示)。</summary>
     public static async Task<byte[]?> CaptureClipboardPngAsync()
     {
+        if (!NativeMethods.TryProbeClipboard()) return null;
         var content = Clipboard.GetContent();
         return await CaptureClipboardPngAsync(content);
     }
@@ -239,19 +243,6 @@ public static class ImageCodec
     }
 
     public const string SelfOriginProperty = "NexClip_Self";
-
-    /// <summary>检查当前剪贴板是否由本应用自身写回(远端同步/历史列表复制)。</summary>
-    public static bool IsSelfWrittenClipboard()
-    {
-        try
-        {
-            return IsSelfWrittenClipboard(Clipboard.GetContent());
-        }
-        catch
-        {
-            return false;
-        }
-    }
 
     /// <summary>基于已取得的剪贴板视图判断是否由本应用写回(复用视图,避免重复 GetContent)。</summary>
     public static bool IsSelfWrittenClipboard(DataPackageView content)

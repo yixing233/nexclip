@@ -1315,6 +1315,11 @@ public sealed partial class ClipboardMainPage : Page
         if (IsOverButton(e.OriginalSource)) return;
         if ((sender as FrameworkElement)?.DataContext is HistoryItemViewModel vm)
         {
+            if (_history.IsMultiSelectMode)
+            {
+                _history.ToggleBatchSelection(vm);
+                return;
+            }
             var isShift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
                 .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
             Log.Debug($"双击粘贴:id={vm.Item.Id}, plainText={isShift}, type={vm.Item.Type}, text={vm.Item.Text?.Substring(0, Math.Min(20, vm.Item.Text?.Length ?? 0))}");
@@ -1327,6 +1332,12 @@ public sealed partial class ClipboardMainPage : Page
     {
         if (e.Key == VirtualKey.Enter && EntryList.SelectedItem is HistoryItemViewModel vm)
         {
+            if (_history.IsMultiSelectMode)
+            {
+                e.Handled = true;
+                _history.ToggleBatchSelection(vm);
+                return;
+            }
             e.Handled = true;
             var isShift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
                 .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
@@ -1351,6 +1362,7 @@ public sealed partial class ClipboardMainPage : Page
             foreach (var item in e.RemovedItems)
             {
                 if (item is HistoryItemViewModel vm) vm.IsSelected = false;
+                if (item is HistoryItemViewModel removed && _history.IsMultiSelectMode) removed.IsBatchSelected = false;
             }
         }
         if (e.AddedItems.Count > 0)
@@ -1358,6 +1370,7 @@ public sealed partial class ClipboardMainPage : Page
             foreach (var item in e.AddedItems)
             {
                 if (item is HistoryItemViewModel vm) vm.IsSelected = true;
+                if (item is HistoryItemViewModel added && _history.IsMultiSelectMode) added.IsBatchSelected = true;
             }
         }
     }

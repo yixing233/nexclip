@@ -21,6 +21,16 @@ public partial class HistoryItemViewModel : ObservableObject
     [ObservableProperty]
     private bool isSelected;
 
+    /// <summary>批量选择模式下的选择状态;与右键/键盘单选态分离,避免互相污染。</summary>
+    [ObservableProperty]
+    private bool isBatchSelected;
+
+    partial void OnIsBatchSelectedChanged(bool value) => OnPropertyChanged(nameof(BorderBrushForBatch));
+
+    /// <summary>批量选择线框色。</summary>
+    public Brush BorderBrushForBatch => IsBatchSelected ? SelectedBrush : BorderBrushFor(IsSelected, IsHovered);
+    public Thickness BorderThicknessForBatch => new(IsBatchSelected ? 2 : 1);
+
     [ObservableProperty]
     private bool isHovered;
 

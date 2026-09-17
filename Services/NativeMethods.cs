@@ -74,6 +74,27 @@ internal static class NativeMethods
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     internal static extern uint GetClipboardSequenceNumber();
 
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    private static extern bool OpenClipboard(IntPtr hWndNewOwner);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    private static extern bool CloseClipboard();
+
+    /// <summary>
+    /// 探测剪贴板当前能否被打开。返回 false 表示剪贴板正被某个窗口独占(未调用 CloseClipboard)。
+    ///
+    /// 该调用是"剪贴板是否已经卡死"的低成本探针:被独占时 OpenClipboard 会立即返回
+    /// ERROR_ACCESS_DENIED,绝不阻塞;而一旦读取剪贴板的跨进程 OLE 调用被挂起,
+    /// 客户端侧没有任何超时手段可以打断,只能在发起之前先确认剪贴板可打开。
+    /// 仅探测不写入:不调用 EmptyClipboard,不影响剪贴板内容与序列号。
+    /// </summary>
+    internal static bool TryProbeClipboard()
+    {
+        if (!OpenClipboard(IntPtr.Zero)) return false;
+        CloseClipboard();
+        return true;
+    }
+
     /// <summary>
     /// 将进程工作集中的可分页内存换出:窗口隐藏到托盘后调用,
     /// 可把已释放但仍驻留物理内存的页归还系统,显著降低任务管理器显示的内存占用。

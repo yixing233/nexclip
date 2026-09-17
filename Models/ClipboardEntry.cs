@@ -4,6 +4,9 @@
 public sealed class ClipboardEntry
 {
     public long Id { get; set; }
+    /// <summary>服务端收藏/备注元数据(跨设备共享)。</summary>
+    public bool Starred { get; set; }
+    public string? Remark { get; set; }
     public string Type { get; set; } = "Text";       // Text | Image(文件条目仅存于本地,不经过服务端)
     public string? Text { get; set; }
     public string? Html { get; set; }                // 富文本 HTML 片段(可选;老服务端不返回该字段时为 null)

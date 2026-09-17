@@ -48,6 +48,8 @@ public sealed class SyncEngine : IDisposable
     public event Action? SyncError;
 
     public ConnState State => _state;
+    /// <summary>剪贴板监听器实例(诊断与状态展示用)。</summary>
+    public ClipboardMonitor? Monitor => _monitor;
     public bool IsPaused { get; private set; }
     public bool IsRunning => !IsPaused;
 
