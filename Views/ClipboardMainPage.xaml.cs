@@ -787,9 +787,9 @@ public sealed partial class ClipboardMainPage : Page
         if (_contextItem is { } vm) _ = _history.CopyAsync(vm);
     }
 
-    private void StarMenuItem_Click(object sender, RoutedEventArgs e)
+    private async void StarMenuItem_Click(object sender, RoutedEventArgs e)
     {
-        if (_contextItem is { } vm) _history.ToggleStarAsync(vm);
+        if (_contextItem is { } vm) await _history.ToggleStarAsync(vm);
     }
 
     private async void PastePlainTextMenuItem_Click(object sender, RoutedEventArgs e)
@@ -1307,18 +1307,18 @@ public sealed partial class ClipboardMainPage : Page
             {
                 e.Handled = true;
                 dialog.Hide();
-                _history.UpdateRemark(vm, box.Text);
+                _ = _history.UpdateRemarkAsync(vm, box.Text);
             }
         };
 
         var result = await dialog.ShowAsync();
         if (result == ContentDialogResult.Primary)
         {
-            _history.UpdateRemark(vm, box.Text);
+            await _history.UpdateRemarkAsync(vm, box.Text);
         }
         else if (result == ContentDialogResult.Secondary)
         {
-            _history.UpdateRemark(vm, null);
+            await _history.UpdateRemarkAsync(vm, null);
         }
     }
 

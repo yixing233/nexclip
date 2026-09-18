@@ -377,6 +377,31 @@ public partial class HistoryViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// 同步单条条目的收藏/备注到服务端,只提交显式指定的字段。
+    /// 只改了本地库不上报的话,服务端仍认为该条未收藏,一旦服务端到历史上限就会把这条最旧的
+    /// 记录连同图片一起淘汰,表现为"收藏过的条目自己消失了"。
+    /// 上报失败只记日志:本地已生效,不应因为一次网络抖动回滚用户刚做的操作。
+    /// </summary>
+    private async Task SyncEntryMetadataAsync(HistoryItemViewModel item, bool sendStar, bool sendRemark)
+    {
+        var s = _svc.Settings;
+        if (!s.IsPaired || string.IsNullOrWhiteSpace(s.ServerUrl)) return;
+        if (item.Item.ServerId is not > 0) return;
+        try
+        {
+            await _svc.Api.UpdateEntryMetadataAsync(
+                s.ServerUrl, s.DeviceId, s.AuthToken, item.Item.ServerId.Value,
+                sendStar ? item.Starred : null,
+                item.Remark,
+                sendRemark);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"同步远端条目元数据失败: {ex.Message}");
+        }
+    }
+
     [RelayCommand]
     public async Task CopyAsync(HistoryItemViewModel item)
     {
@@ -393,12 +418,14 @@ public partial class HistoryViewModel : ObservableObject
     }
 
     [RelayCommand]
-    public void ToggleStarAsync(HistoryItemViewModel item)
+    public async Task ToggleStarAsync(HistoryItemViewModel item)
     {
         if (_engine is null) return;
         item.Starred = !item.Starred;
         _engine.History.ToggleStar(item.Item.Id, item.Starred);
         item.Item.Starred = item.Starred;
+        // 只上报 star:本地不缓存服务端备注,一并提交会把别的设备写的备注清掉
+        await SyncEntryMetadataAsync(item, sendStar: true, sendRemark: false);
     }
 
     public void UpdateText(HistoryItemViewModel item, string text)
@@ -411,23 +438,25 @@ public partial class HistoryViewModel : ObservableObject
     }
 
     /// <summary>更新条目备注。若输入了有效非空备注，则自动收藏该条目。</summary>
-    public void UpdateRemark(HistoryItemViewModel item, string? remark)
+    public async Task UpdateRemarkAsync(HistoryItemViewModel item, string? remark)
     {
         if (_engine is null) return;
         var trimmed = string.IsNullOrWhiteSpace(remark) ? null : remark.Trim();
         _engine.History.UpdateRemark(item.Item.Id, trimmed);
         item.ApplyRemark(trimmed);
 
-        if (!string.IsNullOrEmpty(trimmed))
+        var autoStarred = false;
+        if (!string.IsNullOrEmpty(trimmed) && !item.Starred)
         {
             // 增加备注后自动收藏
-            if (!item.Starred)
-            {
-                item.Starred = true;
-                item.Item.Starred = true;
-                _engine.History.ToggleStar(item.Item.Id, true);
-            }
+            item.Starred = true;
+            item.Item.Starred = true;
+            _engine.History.ToggleStar(item.Item.Id, true);
+            autoStarred = true;
         }
+
+        // 备注是本次操作的显式目标,必须上报;收藏只在因备注而新变化时才随带上报
+        await SyncEntryMetadataAsync(item, sendStar: autoStarred, sendRemark: true);
     }
 
     [RelayCommand]

@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using NexClip.Desktop.Models;
 
 namespace NexClip.Desktop.Services;
@@ -220,13 +222,22 @@ public sealed class ServerApi
         return new List<ClipboardEntry>();
     }
 
-    /// <summary>PUT /api/clipboard/{id}:更新收藏/备注(同一用户组共享)。</summary>
+    /// <summary>
+    /// PUT /api/clipboard/{id}:更新收藏/备注(同一用户组共享)。
+    /// 只把显式传入的字段放进请求体:服务端按字段局部更新,未被提及的字段保持原值。
+    /// 收藏开关不知道服务端备注(本地不缓存远端备注),若一并发送 null 会把别的设备写的备注清掉。
+    /// <paramref name="sendRemark"/> 为 true 时才提交 remark(含提交 null 以清除备注)。
+    /// </summary>
     public async Task UpdateEntryMetadataAsync(
-        string serverUrl, string deviceId, string token, long id, bool starred, string? remark, CancellationToken ct = default)
+        string serverUrl, string deviceId, string token, long id,
+        bool? starred = null, string? remark = null, bool sendRemark = false, CancellationToken ct = default)
     {
+        var payload = new JsonObject();
+        if (starred is not null) payload["starred"] = starred.Value;
+        if (sendRemark) payload["remark"] = remark;
         using var request = new HttpRequestMessage(HttpMethod.Put, Endpoint(serverUrl, $"/api/clipboard/{id}"))
         {
-            Content = JsonContent.Create(new { starred, remark }),
+            Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json"),
         };
         await SendNoContentAsync(request, deviceId, token, ct);
     }

@@ -95,7 +95,7 @@ public partial class HistoryItemViewModel : ObservableObject
         RefreshFormatAnalysis();
         CopyCommand = new RelayCommand(async () => await parent.CopyAsync(this));
         DeleteCommand = new RelayCommand(() => parent.DeleteAsync(this));
-        ToggleStarCommand = new RelayCommand(() => parent.ToggleStarAsync(this));
+        ToggleStarCommand = new AsyncRelayCommand(() => parent.ToggleStarAsync(this));
         SmartPrimaryCommand = new RelayCommand(() => _smartAction?.PrimaryAction());
         SmartSecondaryCommand = new RelayCommand(() => _smartAction?.SecondaryAction?.Invoke());
     }
