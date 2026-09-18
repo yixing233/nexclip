@@ -797,6 +797,25 @@ public sealed class SyncEngine : IDisposable
         }
     }
 
+    /// <summary>
+    /// 把已经合并好的文本写入剪贴板(批量粘贴用),并抑制回环上传。
+    /// 复用单条复制的回环抑制方式:哈希必须与真正写进剪贴板的内容一致,否则
+    /// 下次捕获会把它当成新内容再次上传。
+    /// </summary>
+    public void WriteMergedTextToClipboard(string text)
+    {
+        try
+        {
+            using var _ = _monitor?.PauseCapture();
+            ImageCodec.WriteClipboardText(text);
+            _monitor?.RecordLastSeen(ClipboardMonitor.HashText(text));
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"批量粘贴写入剪贴板失败:{ex.Message}");
+        }
+    }
+
     /// <summary>手动推送单条历史记录到所有设备。文件条目按设计不支持推送,直接返回 false。</summary>
     public async Task<bool> PushHistoryItemAsync(Models.HistoryItem item)
     {

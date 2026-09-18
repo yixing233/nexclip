@@ -733,53 +733,7 @@ public sealed partial class ClipboardWindow : Window
             var automationFocus = GetPasteAutomationFocus();
             Log.Debug($"粘贴开始:id={vm.Item.Id}, plainText={plainText}, target={target}, focus={focus}, uia={automationFocus is not null}");
             await engine.CopyHistoryItemAsync(vm.Item, plainText: plainText);
-            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-            NativeMethods.AllKeysUp();
-            if (target == IntPtr.Zero || !NativeMethods.IsWindow(target))
-            {
-                Log.Warn($"粘贴:呼出前窗口已失效 target={target}");
-                return;
-            }
-
-            // PastePaw 的可靠路径:先隐藏选择窗,让 Windows 按原激活顺序自然恢复目标窗口及其内部焦点。
-            // 对 Chromium/Electron 尤其重要:仅 SetForegroundWindow 能恢复顶层窗口,不能保证 DOM 输入框回焦。
-            AppWindow.Hide();
-            NativeMethods.ShowWindow(hwnd, 0 /* SW_HIDE */);
-            _hidePending = false;
-            var restoredNaturally = await WaitForForegroundAsync(target, 300);
-
-            // 自然恢复失败时再使用 Ditto 的显式激活方案。
-            var activated = false;
-            if (!restoredNaturally)
-            {
-                activated = NativeMethods.ActivateWindow(target);
-                await WaitForForegroundAsync(target, 700);
-            }
-
-            // 焦点已经自然回到呼出前的输入框时,绝对不要再强设一次:强设焦点会让目标应用的
-            // TSF 焦点文档与 Win32 焦点脱节,之后打字候选栏会跳到屏幕左上角
-            // (详见 IsPasteFocusIntact / NativeMethods.SetFocusTo 注释)。只在没回焦时兜底。
-            var focusIntact = IsPasteFocusIntact(target, focus, automationFocus);
-            var focusRestored = focusIntact || TryRestorePasteFocus(target, focus, automationFocus);
-            await WaitForForegroundAsync(target, 300);
-            await Task.Delay(100);
-            var foregroundAtInject = NativeMethods.GetForegroundWindow();
-            if (!NativeMethods.IsSameRootWindow(foregroundAtInject, target))
-            {
-                Log.Warn($"粘贴:目标未成为前台,取消按键注入 target={target}, fg={foregroundAtInject}");
-                return;
-            }
-
-            // 成熟剪贴板管理器会按目标应用选择粘贴键。Chromium/Electron 的
-            // contenteditable/ProseMirror 对 Ctrl+V 更可靠,不能套用全局 Shift+Insert。
-            var forceCtrlV = NativeMethods.IsChromiumWindow(target);
-            var useCtrlV = forceCtrlV || App.Services.Settings.PasteKey == "CtrlV";
-            var keyName = useCtrlV ? "Ctrl+V" : "Shift+Insert";
-            var strategy = forceCtrlV ? "chromium" : "configured";
-            var injected = useCtrlV
-                ? NativeMethods.SendInputCtrlV()
-                : NativeMethods.SendInputShiftInsert();
-            Log.Debug($"粘贴:SendInput {keyName} (strategy={strategy}, natural={restoredNaturally}, activated={activated}, focusIntact={focusIntact}, focusRestored={focusRestored}, injected={injected})");
+            await HideAndInjectPasteAsync(target, focus, automationFocus, $"id={vm.Item.Id}");
         }
         catch (Exception ex)
         {
@@ -789,6 +743,95 @@ public sealed partial class ClipboardWindow : Window
         {
             _isPasting = false;
         }
+    }
+
+    /// <summary>
+    /// 批量粘贴:把调用方合并好的文本写入剪贴板,并粘贴到呼出前的窗口。
+    /// 合并结果统一按纯文本写入——多条富文本条目的 HTML 各自是完整文档片段,
+    /// 硬拼会产生非法嵌套,纯文本是唯一可预期的结果。
+    /// </summary>
+    public async Task PasteMergedTextAsync(string text)
+    {
+        if (_isPasting) return;
+        _isPasting = true;
+        try
+        {
+            var engine = App.Services.Engine;
+            if (engine is null) return;
+            _hideTimer?.Stop();
+            var target = _pasteTarget;
+            var focus = _pasteFocus;
+            var automationFocus = GetPasteAutomationFocus();
+            Log.Debug($"批量粘贴开始:chars={text.Length}, target={target}, focus={focus}, uia={automationFocus is not null}");
+            engine.WriteMergedTextToClipboard(text);
+            await HideAndInjectPasteAsync(target, focus, automationFocus, $"merged({text.Length}字符)");
+        }
+        catch (Exception ex)
+        {
+            Log.Error("批量粘贴失败", ex);
+        }
+        finally
+        {
+            _isPasting = false;
+        }
+    }
+
+    /// <summary>
+    /// 隐藏选择窗 → 等目标窗口与输入焦点自然回归 → 注入粘贴键。
+    /// 单条粘贴与批量粘贴共用,保证两条路径的回焦行为完全一致。
+    /// </summary>
+    /// <returns>是否真正注入了粘贴键(目标失效或未抢到前台时为 false)。</returns>
+    private async Task<bool> HideAndInjectPasteAsync(
+        IntPtr target, IntPtr focus, AutomationElement? automationFocus, string context)
+    {
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+        NativeMethods.AllKeysUp();
+        if (target == IntPtr.Zero || !NativeMethods.IsWindow(target))
+        {
+            Log.Warn($"粘贴:呼出前窗口已失效 target={target} ({context})");
+            return false;
+        }
+
+        // PastePaw 的可靠路径:先隐藏选择窗,让 Windows 按原激活顺序自然恢复目标窗口及其内部焦点。
+        // 对 Chromium/Electron 尤其重要:仅 SetForegroundWindow 能恢复顶层窗口,不能保证 DOM 输入框回焦。
+        AppWindow.Hide();
+        NativeMethods.ShowWindow(hwnd, 0 /* SW_HIDE */);
+        _hidePending = false;
+        var restoredNaturally = await WaitForForegroundAsync(target, 300);
+
+        // 自然恢复失败时再使用 Ditto 的显式激活方案。
+        var activated = false;
+        if (!restoredNaturally)
+        {
+            activated = NativeMethods.ActivateWindow(target);
+            await WaitForForegroundAsync(target, 700);
+        }
+
+        // 焦点已经自然回到呼出前的输入框时,绝对不要再强设一次:强设焦点会让目标应用的
+        // TSF 焦点文档与 Win32 焦点脱节,之后打字候选栏会跳到屏幕左上角
+        // (详见 IsPasteFocusIntact / NativeMethods.SetFocusTo 注释)。只在没回焦时兜底。
+        var focusIntact = IsPasteFocusIntact(target, focus, automationFocus);
+        var focusRestored = focusIntact || TryRestorePasteFocus(target, focus, automationFocus);
+        await WaitForForegroundAsync(target, 300);
+        await Task.Delay(100);
+        var foregroundAtInject = NativeMethods.GetForegroundWindow();
+        if (!NativeMethods.IsSameRootWindow(foregroundAtInject, target))
+        {
+            Log.Warn($"粘贴:目标未成为前台,取消按键注入 target={target}, fg={foregroundAtInject} ({context})");
+            return false;
+        }
+
+        // 成熟剪贴板管理器会按目标应用选择粘贴键。Chromium/Electron 的
+        // contenteditable/ProseMirror 对 Ctrl+V 更可靠,不能套用全局 Shift+Insert。
+        var forceCtrlV = NativeMethods.IsChromiumWindow(target);
+        var useCtrlV = forceCtrlV || App.Services.Settings.PasteKey == "CtrlV";
+        var keyName = useCtrlV ? "Ctrl+V" : "Shift+Insert";
+        var strategy = forceCtrlV ? "chromium" : "configured";
+        var injected = useCtrlV
+            ? NativeMethods.SendInputCtrlV()
+            : NativeMethods.SendInputShiftInsert();
+        Log.Debug($"粘贴:SendInput {keyName} (strategy={strategy}, natural={restoredNaturally}, activated={activated}, focusIntact={focusIntact}, focusRestored={focusRestored}, injected={injected}, {context})");
+        return true;
     }
 
     private static async Task<bool> WaitForForegroundAsync(IntPtr target, int timeoutMilliseconds)

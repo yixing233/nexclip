@@ -66,6 +66,13 @@ public sealed partial class ClipboardMainPage : Page
                 ApplySelectionModeForBatch();
             }
         };
+
+        // 批量粘贴由窗口执行"写剪贴板 → 隐藏 → 回焦 → 注入粘贴键",与单条粘贴同一套时序
+        _history.BatchPasteRequested += text =>
+        {
+            if (App.ClipboardWindow is { } win) _ = win.PasteMergedTextAsync(text);
+        };
+
         TransferChatHost.ImagePreviewRequested += (path, thumb) =>
         {
             OpenImageViewer(path, thumb, "互传图片预览");

@@ -188,6 +188,19 @@
 
                     <!-- 批量操作按钮:未选中任何条目时禁用,避免点了没反应 -->
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                        <!-- 批量粘贴为主操作,排在最前:合并所选文本一次粘贴到呼出前的窗口 -->
+                        <Button
+                            Command="{Binding BatchPasteCommand}"
+                            IsEnabled="{Binding HasBatchSelection}"
+                            Padding="6,3"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            ToolTipService.ToolTip="把所选文本合并后粘贴到呼出前的窗口">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <Image Source="{x:Bind services:Lucide.Clipboard}" Width="14" Height="14" />
+                                <TextBlock Text="粘贴" FontSize="12" />
+                            </StackPanel>
+                        </Button>
                         <Button
                             Command="{Binding BatchStarCommand}"
                             IsEnabled="{Binding HasBatchSelection}"

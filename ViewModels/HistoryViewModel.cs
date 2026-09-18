@@ -83,6 +83,7 @@ public partial class HistoryViewModel : ObservableObject
     public IRelayCommand BatchStarCommand { get; }
     public IRelayCommand BatchUnstarCommand { get; }
     public IRelayCommand BatchDeleteCommand { get; }
+    public IRelayCommand BatchPasteCommand { get; }
 
     public HistoryViewModel(AppServices svc)
     {
@@ -92,6 +93,7 @@ public partial class HistoryViewModel : ObservableObject
         BatchStarCommand = new AsyncRelayCommand(() => ApplyBatchStarAsync(true));
         BatchUnstarCommand = new AsyncRelayCommand(() => ApplyBatchStarAsync(false));
         BatchDeleteCommand = new AsyncRelayCommand(BatchDeleteAsync);
+        BatchPasteCommand = new RelayCommand(BatchPaste);
         Items.CollectionChanged += (_, _) => NotifyStateChanged();
     }
 
@@ -359,6 +361,52 @@ public partial class HistoryViewModel : ObservableObject
         await SyncBatchMetadataAsync("delete", selected);
         UpdateShortcutIndices();
         NotifyBatchStateChanged();
+    }
+
+    /// <summary>
+    /// 批量粘贴请求:合并好的文本交给窗口执行"写剪贴板 → 隐藏 → 回焦 → 注入粘贴键"。
+    /// 经事件转发而非直接调用窗口,保持本类不依赖具体窗口(与现有 ViewModel 一致)。
+    /// </summary>
+    public event Action<string>? BatchPasteRequested;
+
+    /// <summary>
+    /// 批量粘贴:把所选条目中可合并的文本拼接成一段,一次写入剪贴板并粘贴一次。
+    /// 采用一次注入而非逐条注入:回焦时序很敏感,逐条注入容易丢条或乱序。
+    ///
+    /// 合并顺序按时间升序(旧 → 新):列表本身是倒序显示,但拼接结果是被当作一段内容阅读的,
+    /// 按事件发生顺序排列更自然。
+    ///
+    /// 图片与文件条目的内容无法与文本拼成同一段,一律跳过并提示,
+    /// 避免用户误以为"选的都粘上了"。
+    /// </summary>
+    private void BatchPaste()
+    {
+        var selected = Items.Where(x => x.IsBatchSelected).ToList();
+        if (selected.Count == 0) return;
+
+        var texts = selected
+            .Select(x => x.Item)
+            .Where(i => i.Type == "Text" && !string.IsNullOrEmpty(i.Text))
+            .OrderBy(i => i.CreatedAt)
+            .Select(i => i.Text!.TrimEnd())
+            .ToList();
+        var skipped = selected.Count - texts.Count;
+
+        if (texts.Count == 0)
+        {
+            _svc.Tray?.Notify("NexClip 批量粘贴", "所选条目没有可粘贴的文本内容");
+            return;
+        }
+
+        BatchPasteRequested?.Invoke(string.Join(Environment.NewLine, texts));
+
+        // 跳过情况必须说清楚:混合选中时用户只会看到少了内容,不知道是图片/文件被刻意跳过。
+        // 这里只陈述"合并了几条、跳过几条"这一已知事实,不声称粘贴成功——能否落到目标窗口
+        // 取决于目标是否还存在,失败情形由窗口侧记日志(与单条粘贴一致,不弹提示)。
+        if (skipped > 0)
+        {
+            _svc.Tray?.Notify("NexClip 批量粘贴", $"已合并 {texts.Count} 条文本，跳过 {skipped} 条非文本条目");
+        }
     }
 
     private async Task SyncBatchMetadataAsync(string action, IReadOnlyList<HistoryItemViewModel> items)
