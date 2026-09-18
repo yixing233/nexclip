@@ -145,26 +145,103 @@
             <Grid.RenderTransform>
                 <TranslateTransform x:Name="ListTranslateTransform" />
             </Grid.RenderTransform>
+            <Grid.RowDefinitions>
+                <!-- 批量选择操作栏独立占一行:此前与 ListView 同处一个隐式单元格,
+                     靠 VerticalAlignment=Top 浮在列表上方,会压住第一条卡片。 -->
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <!-- 批量选择操作栏 -->
             <Border
-                VerticalAlignment="Top"
+                Grid.Row="0"
                 Margin="16,2,16,6"
-                Padding="10,7"
+                Padding="10,8"
                 CornerRadius="8"
                 Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                 BorderThickness="1"
                 Visibility="{Binding IsMultiSelectMode, Converter={StaticResource BoolToVis}}">
-                <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                    <TextBlock Text="批量选择" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
-                    <TextBlock Text="已选" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
-                    <TextBlock Text="{Binding BatchSelectedCount}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
-                    <Button Command="{Binding BatchStarCommand}" Padding="7,3" Content="收藏" />
-                    <Button Command="{Binding BatchUnstarCommand}" Padding="7,3" Content="取消收藏" />
-                    <Button Command="{Binding BatchDeleteCommand}" Padding="7,3" Content="删除" />
-                </StackPanel>
+                <Grid ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- 标题与已选计数(计数做成小胶囊,避免与标题糊成一片) -->
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                        <Image Source="{x:Bind services:Lucide.ListChecks}" Width="14" Height="14" VerticalAlignment="Center" />
+                        <TextBlock Text="批量选择" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Border
+                            Padding="6,1"
+                            CornerRadius="9"
+                            Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                            VerticalAlignment="Center">
+                            <TextBlock
+                                Text="{Binding BatchSelectedCount}"
+                                FontSize="11"
+                                FontWeight="SemiBold"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                        </Border>
+                    </StackPanel>
+
+                    <!-- 批量操作按钮:未选中任何条目时禁用,避免点了没反应 -->
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                        <Button
+                            Command="{Binding BatchStarCommand}"
+                            IsEnabled="{Binding HasBatchSelection}"
+                            Padding="6,3"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            ToolTipService.ToolTip="收藏所选条目">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <Image Source="{x:Bind services:Lucide.Star}" Width="14" Height="14" />
+                                <TextBlock Text="收藏" FontSize="12" />
+                            </StackPanel>
+                        </Button>
+                        <Button
+                            Command="{Binding BatchUnstarCommand}"
+                            IsEnabled="{Binding HasBatchSelection}"
+                            Padding="6,3"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            ToolTipService.ToolTip="取消收藏所选条目">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <Image Source="{x:Bind services:Lucide.StarActive}" Width="14" Height="14" />
+                                <TextBlock Text="取消收藏" FontSize="12" />
+                            </StackPanel>
+                        </Button>
+                        <Button
+                            Command="{Binding BatchDeleteCommand}"
+                            IsEnabled="{Binding HasBatchSelection}"
+                            Padding="6,3"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            ToolTipService.ToolTip="删除所选条目">
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <Image Source="{x:Bind services:Lucide.TrashCritical}" Width="14" Height="14" />
+                                <TextBlock Text="删除" FontSize="12" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                            </StackPanel>
+                        </Button>
+                        <Button
+                            Command="{Binding ToggleMultiSelectCommand}"
+                            Padding="4"
+                            Width="26"
+                            Height="26"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            CornerRadius="13"
+                            ToolTipService.ToolTip="退出批量选择">
+                            <Image Source="{x:Bind services:Lucide.X}" Width="12" Height="12" />
+                        </Button>
+                    </StackPanel>
+                </Grid>
             </Border>
+
             <ListView
                 x:Name="EntryList"
+                Grid.Row="1"
                 ItemsSource="{Binding Items}"
                 SelectionMode="Extended"
                 SelectionChanged="EntryList_SelectionChanged"

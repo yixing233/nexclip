@@ -107,6 +107,8 @@ public static class Lucide
     public static ImageSource Star => Get("star", "secondary");
     public static ImageSource StarActive => Get("star-filled", "amber");
     public static ImageSource Trash => Get("trash-2", "secondary");
+    /// <summary>危险操作(删除)图标,取 WinUI SystemFillColorCritical 的明暗两套取值。</summary>
+    public static ImageSource TrashCritical => Get("trash-2", IsDarkTheme ? "#FF99A4" : "#C42B1C");
     public static ImageSource FileText => Get("file-text", "secondary");
     /// <summary>
     /// 文件类型条目图标(lucide 官方 file 图标),与 file-text 区分:file 表示"复制的文件"。
