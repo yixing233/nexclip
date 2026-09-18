@@ -61,16 +61,23 @@
                         Height="32"
                         VerticalAlignment="Center">
                         <TextBox.Resources>
-                            <!-- 使用外层 Lucide 清除按钮,用空模板收掉 TextBox 自带的同名按钮,避免两个清除入口重叠。 -->
-                            <Style x:Key="DeleteButtonStyle" TargetType="Button">
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="Button">
-                                            <Grid />
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
-                            </Style>
+                            <!--
+                              收掉 TextBox 模板自带的清除按钮(模板内 x:Name="DeleteButton",清晰图标 E894)。
+                              它的样式定义在 DefaultTextBoxStyle 模板内部的 Grid.Resources 里(见 WinUI
+                              generic.xaml),模板内的 {StaticResource DeleteButtonStyle} 只会在那里命中,
+                              写在本处的同名样式永远轮不到,两个清除图标会一直并存。
+                              改为把它实际消费的 ThemeResource 画刷全部置透明:资源查找会走到本字典,
+                              与本项目在 Button.Resources 里覆盖 ButtonBackgroundPointerOver 同理。
+                            -->
+                            <SolidColorBrush x:Key="TextControlButtonBackground" Color="Transparent" />
+                            <SolidColorBrush x:Key="TextControlButtonBackgroundPointerOver" Color="Transparent" />
+                            <SolidColorBrush x:Key="TextControlButtonBackgroundPressed" Color="Transparent" />
+                            <SolidColorBrush x:Key="TextControlButtonBorderBrush" Color="Transparent" />
+                            <SolidColorBrush x:Key="TextControlButtonBorderBrushPointerOver" Color="Transparent" />
+                            <SolidColorBrush x:Key="TextControlButtonBorderBrushPressed" Color="Transparent" />
+                            <SolidColorBrush x:Key="TextControlButtonForeground" Color="Transparent" />
+                            <SolidColorBrush x:Key="TextControlButtonForegroundPointerOver" Color="Transparent" />
+                            <SolidColorBrush x:Key="TextControlButtonForegroundPressed" Color="Transparent" />
                         </TextBox.Resources>
                     </TextBox>
                     <Button
