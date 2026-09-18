@@ -1107,7 +1107,7 @@ export default function LandingPage({ isDark, onToggleTheme, c }: LandingPagePro
           </span>
         </div>
         <div style={{ fontSize: 12, lineHeight: 1.6 }}>
-          NexClip · Next-Generation Cross-Platform Clipboard Sync System · MIT Licensed
+          NexClip · Next-Generation Cross-Platform Clipboard Sync System · GPL-3.0 Licensed
         </div>
       </footer>
     </div>
