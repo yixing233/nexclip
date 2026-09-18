@@ -320,14 +320,12 @@ public partial class HistoryViewModel : ObservableObject
         NotifyBatchStateChanged();
     }
 
-    public void ToggleBatchSelection(HistoryItemViewModel item)
-    {
-        if (!IsMultiSelectMode) return;
-        item.IsBatchSelected = !item.IsBatchSelected;
-        NotifyBatchStateChanged();
-    }
-
-    private void NotifyBatchStateChanged()
+    /// <summary>
+    /// 通知批量选择计数变化。批量模式的勾选由列表控件自身的选中语义驱动
+    /// (见 ClipboardMainPage.ApplySelectionModeForBatch):EntryList_SelectionChanged
+    /// 会直接改写条目的 IsBatchSelected,不经过本类,必须由调用方显式调用本方法刷新计数与按钮可用态。
+    /// </summary>
+    public void NotifyBatchStateChanged()
     {
         OnPropertyChanged(nameof(BatchSelectedCount));
         OnPropertyChanged(nameof(HasBatchSelection));

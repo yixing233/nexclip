@@ -58,6 +58,14 @@ public sealed partial class ClipboardMainPage : Page
         // 列表模板应用后挂接内部 ScrollViewer,跟踪滚动位置
         EntryList.Loaded += (_, _) => AttachScroller();
 
+        // 批量模式与普通模式的选中语义不同,需随模式切换(见 ApplySelectionModeForBatch)
+        _history.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(HistoryViewModel.IsMultiSelectMode))
+            {
+                ApplySelectionModeForBatch();
+            }
+        };
         TransferChatHost.ImagePreviewRequested += (path, thumb) =>
         {
             OpenImageViewer(path, thumb, "互传图片预览");
@@ -297,7 +305,9 @@ public sealed partial class ClipboardMainPage : Page
     private void FocusEntryList()
     {
         var rememberPos = App.Services?.Settings?.RememberScrollPosition ?? false;
-        if (EntryList.Items.Count > 0)
+        // 批量模式下不改动选中:Multiple 语义下 SelectedIndex 就是"勾选",呼出时自动选中首项
+        // 会凭空多勾一条,而用户此时看到的只是窗口重新出现。
+        if (!_history.IsMultiSelectMode && EntryList.Items.Count > 0)
         {
             if (!rememberPos)
             {
@@ -742,6 +752,9 @@ public sealed partial class ClipboardMainPage : Page
         if ((sender as FrameworkElement)?.DataContext is HistoryItemViewModel vm)
         {
             _contextItem = vm;
+            // 批量模式下不接管选中:Multiple 语义下 SelectedItem 就是勾选状态,
+            // 改它会让右键顺手勾上/取消一条,与用户右键"只想看菜单"的意图不符。
+            if (_history.IsMultiSelectMode) return;
             // 同步 ListView 选中项:SelectionChanged 会负责清除旧条目选中态,
             // 否则菜单关闭后切换选中时,该条目永远不会被 SelectionChanged 清理,选中样式残留。
             EntryList.SelectedItem = vm;
@@ -1315,11 +1328,9 @@ public sealed partial class ClipboardMainPage : Page
         if (IsOverButton(e.OriginalSource)) return;
         if ((sender as FrameworkElement)?.DataContext is HistoryItemViewModel vm)
         {
-            if (_history.IsMultiSelectMode)
-            {
-                _history.ToggleBatchSelection(vm);
-                return;
-            }
+            // 批量模式下不接管双击:ListView 处于 Multiple 语义,单击已由它切换勾选,
+            // 这里再切换一次会让"双击选中"变成"选中又取消"。
+            if (_history.IsMultiSelectMode) return;
             var isShift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
                 .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
             Log.Debug($"双击粘贴:id={vm.Item.Id}, plainText={isShift}, type={vm.Item.Type}, text={vm.Item.Text?.Substring(0, Math.Min(20, vm.Item.Text?.Length ?? 0))}");
@@ -1330,14 +1341,10 @@ public sealed partial class ClipboardMainPage : Page
     /// <summary>回车 → 粘贴选中条目(按住 Shift 时触发纯文本粘贴);方向键由 ListView 原生支持(候选移动)。</summary>
     private async void EntryList_KeyDown(object sender, KeyRoutedEventArgs e)
     {
+        // 批量模式下回车不粘贴(同上,选择语义已由 Multiple 接管)
+        if (_history.IsMultiSelectMode) return;
         if (e.Key == VirtualKey.Enter && EntryList.SelectedItem is HistoryItemViewModel vm)
         {
-            if (_history.IsMultiSelectMode)
-            {
-                e.Handled = true;
-                _history.ToggleBatchSelection(vm);
-                return;
-            }
             e.Handled = true;
             var isShift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
                 .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
@@ -1353,6 +1360,26 @@ public sealed partial class ClipboardMainPage : Page
             if (d is Button) return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// 按当前是否处于批量模式切换列表的选中语义。
+    ///
+    /// 普通模式必须用 Extended:单击即单选,SelectionChanged 同步 IsSelected,
+    /// Ctrl+1~9 快速粘贴、空格预览大图、回车粘贴都依赖 EntryList.SelectedItem。
+    /// 批量模式改用 Multiple:单击直接切换该条的勾选,无需按 Ctrl 累加
+    /// —— Extended 下单击会清掉上一次的选择,表现为"必须按住 Ctrl 才能多选"。
+    ///
+    /// 切换时必须清空既有选中:两种语义共用 SelectionChanged 改写条目的
+    /// IsSelected/IsBatchSelected,残留的选中项会带着旧状态的勾选与高亮进入新模式。
+    /// 清空会反过来触发一次 SelectionChanged 把标记复位,所以只能放在 SelectionMode 之后。
+    /// </summary>
+    private void ApplySelectionModeForBatch()
+    {
+        EntryList.SelectionMode = _history.IsMultiSelectMode
+            ? ListViewSelectionMode.Multiple
+            : ListViewSelectionMode.Extended;
+        EntryList.SelectedItems?.Clear();
     }
 
     private void EntryList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1373,6 +1400,9 @@ public sealed partial class ClipboardMainPage : Page
                 if (item is HistoryItemViewModel added && _history.IsMultiSelectMode) added.IsBatchSelected = true;
             }
         }
+        // 上面直接改写了条目的 IsBatchSelected,绕过了 ViewModel 的批量选择入口,
+        // 需显式刷新"已选 N"计数与批量按钮的可用状态。
+        if (_history.IsMultiSelectMode) _history.NotifyBatchStateChanged();
     }
 
     /// <summary>页面级快捷键拦截:为前 9 项历史记录提供 Ctrl+1~9 快速选定并直接粘贴(按住 Shift 为纯文本); 空格键快速预览/关闭大图。</summary>
@@ -1389,7 +1419,9 @@ public sealed partial class ClipboardMainPage : Page
                 CloseImageViewer();
                 return;
             }
-            else if (EntryList.SelectedItem is HistoryItemViewModel { IsImage: true } selectedImageVm)
+            // 批量模式下 SelectedItem 是"勾选"而非"当前光标条目",不据此弹大图
+            else if (!_history.IsMultiSelectMode &&
+                     EntryList.SelectedItem is HistoryItemViewModel { IsImage: true } selectedImageVm)
             {
                 e.Handled = true;
                 OpenImageViewer(selectedImageVm);
@@ -1399,6 +1431,10 @@ public sealed partial class ClipboardMainPage : Page
 
         // 若大图查看器处于激活态，不拦截数字键
         if (ImageViewerOverlay.Visibility == Visibility.Visible) return;
+
+        // 批量模式下不接管 Ctrl+1~9:该模式的正事是勾选与批量操作,
+        // 顺手粘贴会把勾选状态一起改掉,用户难以预料。
+        if (_history.IsMultiSelectMode) return;
 
         var isCtrl = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control)
             .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
