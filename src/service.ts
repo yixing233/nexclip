@@ -313,14 +313,23 @@ export class SyncService {
     this.hub.broadcastCleared();
   }
 
-  /** 超上限删除最旧条目(含图片文件) */
+  /**
+   * 超上限删除最旧条目(含图片文件)。
+   *
+   * 收藏条目不参与淘汰:上限只按未收藏条目计算,与客户端 HistoryStore 的
+   * `WHERE starred = 0 ... OFFSET @limit` 保持一致。否则收藏只是本地标记,
+   * 服务端一旦到量就会把最旧的收藏连同图片一起删掉,用户看到的是"收藏的条目自己消失了"。
+   */
   private trimHistory(): void {
-    const total = Number((this.db.prepare('SELECT COUNT(*) AS c FROM "Entries"').get() as { c: number }).c);
-    if (total <= this.maxHistoryCount) return;
-    const overflow = this.db.prepare('SELECT * FROM "Entries" ORDER BY "Id" ASC LIMIT ?')
-      .all(total - this.maxHistoryCount) as unknown as EntryRow[];
+    const overflow = this.db.prepare(
+      'SELECT * FROM "Entries" WHERE COALESCE("Starred", 0) = 0 ORDER BY "Id" DESC LIMIT -1 OFFSET ?')
+      .all(this.maxHistoryCount) as unknown as EntryRow[];
+    if (overflow.length === 0) return;
     for (const e of overflow) if (e.ImageRef) this.tryDeleteImage(e.ImageRef);
-    for (const e of overflow) this.db.prepare('DELETE FROM "Entries" WHERE "Id" = ?').run(e.Id);
+    // 删除语句再带一次收藏条件:即便上方查询与删除之间条目被收藏,也不会误删
+    for (const e of overflow) {
+      this.db.prepare('DELETE FROM "Entries" WHERE "Id" = ? AND COALESCE("Starred", 0) = 0').run(e.Id);
+    }
   }
 
   private tryDeleteImage(rel: string): void {
