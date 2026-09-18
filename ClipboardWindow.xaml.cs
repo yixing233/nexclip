@@ -40,6 +40,8 @@ public sealed partial class ClipboardWindow : Window
     private readonly object _automationFocusSync = new();
     private AutomationElement? _lastExternalAutomationFocus;
     private IntPtr _lastExternalAutomationRoot;
+    /// <summary>UIA 全局焦点事件是否已注册成功(1=已注册)。后台注册线程写,看门狗与诊断读。</summary>
+    private int _uiaTrackingReady;
 
     private bool _isPasting;
 
@@ -147,8 +149,57 @@ public sealed partial class ClipboardWindow : Window
             root.Loaded += (_, _) => SetupDragRegions();
         }
 
-        Automation.AddAutomationFocusChangedEventHandler(TrackExternalAutomationFocus);
-        TryTrackCurrentAutomationFocus();
+        // UIA 全局焦点事件的注册是一次跨进程调用:它会连接当前所有顶层窗口的 UIA 提供者,
+        // 只要系统里存在任何一个不响应消息的窗口(explorer 的 XAML 岛、输入法辅助窗口、
+        // 已卡住的第三方应用都算),这个调用就会无限期阻塞,且客户端侧没有任何超时/取消能打断它。
+        // 它此前直接写在构造函数里,等于把 UI 线程连同其后的托盘、热键、剪贴板监听一起拖死
+        // (表现为日志停在"亚克力不透明度已应用",之后既无 NotifyIcon 也无任何捕获记录)。
+        // 因此改到后台线程注册:注册不上只损失"热键呼出前缓存焦点"这一优化,
+        // 粘贴路径本身仍会实时解析焦点,功能不受影响。
+        StartAutomationFocusTracking();
+    }
+
+    /// <summary>
+    /// 在后台线程注册 UIA 全局焦点监听。
+    ///
+    /// 该注册必须离开 UI 线程:它是无超时的跨进程调用,踩到无响应窗口就会永久阻塞。
+    /// 注册成功前 <see cref="TryGetTrackedAutomationFocus"/> 一律返回 false,
+    /// 调用方会自动退回实时解析焦点,因此本方法只影响优化、不影响正确性。
+    /// </summary>
+    private void StartAutomationFocusTracking()
+    {
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                Automation.AddAutomationFocusChangedEventHandler(TrackExternalAutomationFocus);
+                Volatile.Write(ref _uiaTrackingReady, 1);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"UIA 焦点监听注册失败,粘贴回焦退回实时解析: {ex.Message}");
+                return;
+            }
+            TryTrackCurrentAutomationFocus();
+        })
+        {
+            // 该线程可能永远卡在注册调用上,必须是后台线程,否则会拖住进程退出
+            IsBackground = true,
+            Name = "NexClip.UiaFocusTracking",
+        };
+        thread.SetApartmentState(ApartmentState.MTA);
+        thread.Start();
+
+        // 注册线程自己无法报告"我正在被阻塞",只能由外部定时观察:
+        // 这条日志是排查"启动后无响应"的关键线索,缺失它会让人误判为托盘/热键故障。
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromSeconds(20));
+            if (Volatile.Read(ref _uiaTrackingReady) == 0)
+            {
+                Log.Warn("UIA 焦点监听注册 20 秒未完成(系统内存在不响应消息的窗口),已放弃等待;粘贴回焦退回实时解析");
+            }
+        });
     }
 
     // ---- 禁用标题栏双击最大化(ExtendsContentIntoTitleBar 的系统默认行为) ----
@@ -380,24 +431,148 @@ public sealed partial class ClipboardWindow : Window
 
         _pasteTarget = target;
         _pasteFocus = NativeMethods.GetFocusedControl();
-        _pasteAutomationFocus = null;
-        try
-        {
-            var capturedFocus = CaptureAutomationFocus(target);
-            if (IsTransientBrowserHotkeyFocus(capturedFocus) &&
-                TryGetTrackedAutomationFocus(target, out var trackedFocus))
-            {
-                capturedFocus = trackedFocus;
-                Log.Debug($"粘贴目标:使用热键前缓存焦点 {DescribeAutomationElement(capturedFocus)}");
-            }
-            _pasteAutomationFocus = capturedFocus;
-        }
-        catch (Exception ex)
-        {
-            Log.Debug($"捕获 UIA 焦点失败:{ex.Message}");
-        }
+        // UIA 焦点在后台线程异步补齐:它与 _pasteFocus(纯 Win32,已完成)是互补的两条回焦路径,
+        // 用户从呼出到双击粘贴之间通常有数百毫秒,足够它返回;没返回就只用 Win32 路径。
+        StartAutomationFocusCapture(target);
 
-        Log.Debug($"粘贴目标已捕获:target={_pasteTarget}, focus={_pasteFocus}, uia={DescribeAutomationElement(_pasteAutomationFocus)}");
+        Log.Debug($"粘贴目标已捕获:target={_pasteTarget}, focus={_pasteFocus}, uia=待解析");
+    }
+
+    /// <summary>UIA 焦点解析超过该耗时即记日志(仅用于诊断,不阻塞任何调用方)。</summary>
+    private const int AutomationFocusSlowMs = 500;
+
+    /// <summary>解析持续超过该耗时即判定为"卡在跨进程调用里"并告警(毫秒)。</summary>
+    private const int UiaCaptureStuckMs = 3000;
+
+    private readonly SemaphoreSlim _uiaCaptureSignal = new(0);
+    private Thread? _uiaCaptureWorker;
+    private IntPtr _uiaCaptureRequestTarget;
+    private long _uiaCaptureRequestSeq;
+    private bool _uiaCaptureWorkerBusy;
+    /// <summary>工作线程开始本次解析的时刻(TickCount64);空闲时为 0。</summary>
+    private long _uiaCaptureBusySinceTicks;
+    /// <summary>已投递但尚未被工作线程取走的请求(1=有);合并连续呼出,避免信号量积压。</summary>
+    private bool _uiaCapturePending;
+    private bool _uiaCaptureStuckLogged;
+
+    /// <summary>
+    /// 异步解析呼出前的 UIA 焦点,刻意不阻塞 UI 线程。
+    ///
+    /// <see cref="CaptureAutomationFocus"/> 是一次跨进程 UIA 调用:目标窗口不响应消息时会永久阻塞,
+    /// 且没有可控的超时/取消。此前它同步跑在 UI 线程上,等于把"Alt+V 呼出"以及其后的剪贴板监听、
+    /// 托盘、热键一起交给目标窗口的心情(资源管理器窗口卡住就足以触发)。
+    /// 现在改为投递给单一常驻工作线程:UI 线程立即返回,拿到结果就填 <see cref="_pasteAutomationFocus"/>,
+    /// 拿不到(或对方卡住)时该字段保持 null,粘贴自动退回 Win32 焦点路径,功能不受影响。
+    ///
+    /// 复用同一个线程而不是每次新建:UIA 调用一旦卡死,该线程会永久阻塞,
+    /// 每次呼出都新建等于每次按键泄漏一个线程。
+    /// </summary>
+    private void StartAutomationFocusCapture(IntPtr target)
+    {
+        EnsureUiaCaptureWorker();
+        var needRelease = false;
+        lock (_automationFocusSync)
+        {
+            if (_uiaCaptureWorkerBusy && !_uiaCaptureStuckLogged && _uiaCaptureBusySinceTicks != 0 &&
+                Environment.TickCount64 - _uiaCaptureBusySinceTicks >= UiaCaptureStuckMs)
+            {
+                // 上一次解析迟迟不返回,说明它已卡在跨进程调用里;这条日志是排查"呼出后无响应"的线索。
+                // 用时间阈值而不是"一忙就报":连续快速按两次 Alt+V 也会撞上 busy,那属于正常节奏。
+                _uiaCaptureStuckLogged = true;
+                Log.Warn($"UIA 焦点解析已持续 {UiaCaptureStuckMs}ms 未返回(目标窗口未响应消息),本次呼出不再等待");
+            }
+            // 每次呼出都覆盖请求内容(最新目标永远优先),但只投递一次信号:
+            // 否则工作线程卡住期间每按一次 Alt+V 就攒一个信号,它一旦解卡会连做几十次无效查询。
+            var alreadyPending = _uiaCapturePending;
+            _uiaCapturePending = true;
+            _uiaCaptureRequestTarget = target;
+            _uiaCaptureRequestSeq++;
+            // 清掉上一轮的解析结果:新目标尚未解析完,旧元素属于别的窗口,不能拿来回焦
+            _pasteAutomationFocus = null;
+            if (!alreadyPending) needRelease = true;
+        }
+        if (needRelease) _uiaCaptureSignal.Release();
+    }
+
+    private void EnsureUiaCaptureWorker()
+    {
+        lock (_automationFocusSync)
+        {
+            if (_uiaCaptureWorker is not null) return;
+            var worker = new Thread(UiaCaptureLoop)
+            {
+                // 该线程可能永久卡在跨进程调用上,必须后台化,否则会拖住进程退出
+                IsBackground = true,
+                Name = "NexClip.UiaFocusProbe",
+            };
+            worker.SetApartmentState(ApartmentState.MTA);
+            _uiaCaptureWorker = worker;
+            worker.Start();
+        }
+    }
+
+    private void UiaCaptureLoop()
+    {
+        while (true)
+        {
+            _uiaCaptureSignal.Wait();
+            IntPtr target;
+            long seq;
+            lock (_automationFocusSync)
+            {
+                // 请求已在手,清掉待处理标记:此后新的呼出才会再次投递信号
+                _uiaCapturePending = false;
+                target = _uiaCaptureRequestTarget;
+                seq = _uiaCaptureRequestSeq;
+                _uiaCaptureWorkerBusy = true;
+                _uiaCaptureBusySinceTicks = Environment.TickCount64;
+            }
+
+            var started = Environment.TickCount64;
+            AutomationElement? focus = null;
+            try
+            {
+                focus = CaptureAutomationFocus(target);
+                if (IsTransientBrowserHotkeyFocus(focus) &&
+                    TryGetTrackedAutomationFocus(target, out var trackedFocus))
+                {
+                    focus = trackedFocus;
+                }
+            }
+            catch
+            {
+                // 元素随目标应用导航/退出失效:保持 null,让粘贴退回 Win32 回焦
+            }
+
+            var elapsed = Environment.TickCount64 - started;
+            lock (_automationFocusSync)
+            {
+                _uiaCaptureWorkerBusy = false;
+                _uiaCaptureBusySinceTicks = 0;
+                _uiaCaptureStuckLogged = false;
+                // 过期请求丢弃:期间用户已再次呼出,结果属于更早的目标窗口
+                if (seq == _uiaCaptureRequestSeq && _pasteTarget == target)
+                {
+                    _pasteAutomationFocus = focus;
+                }
+            }
+            if (elapsed >= AutomationFocusSlowMs)
+            {
+                Log.Debug($"UIA 焦点解析耗时 {elapsed}ms(目标未响应时会拖慢回焦精度): {DescribeAutomationElement(focus)}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// 取当前有效的 UIA 焦点快照(可能为 null:尚未解析完、解析失败或已过期)。
+    /// 与后台解析线程共用同一把锁,避免读到写了一半的状态。
+    /// </summary>
+    private AutomationElement? GetPasteAutomationFocus()
+    {
+        lock (_automationFocusSync)
+        {
+            return _pasteAutomationFocus;
+        }
     }
 
     private static AutomationElement? CaptureAutomationFocus(IntPtr target)
@@ -528,8 +703,9 @@ public sealed partial class ClipboardWindow : Window
                 NativeMethods.ActivateWindow(target);
             }
             await WaitForForegroundAsync(target, 300);
-            if (IsPasteFocusIntact(target, _pasteFocus, _pasteAutomationFocus)) return;
-            TryRestorePasteFocus(target, _pasteFocus, _pasteAutomationFocus);
+            var automationFocus = GetPasteAutomationFocus();
+            if (IsPasteFocusIntact(target, _pasteFocus, automationFocus)) return;
+            TryRestorePasteFocus(target, _pasteFocus, automationFocus);
         }
         catch (Exception ex)
         {
@@ -554,7 +730,7 @@ public sealed partial class ClipboardWindow : Window
             _hideTimer?.Stop();
             var target = _pasteTarget;
             var focus = _pasteFocus;
-            var automationFocus = _pasteAutomationFocus;
+            var automationFocus = GetPasteAutomationFocus();
             Log.Debug($"粘贴开始:id={vm.Item.Id}, plainText={plainText}, target={target}, focus={focus}, uia={automationFocus is not null}");
             await engine.CopyHistoryItemAsync(vm.Item, plainText: plainText);
             var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
