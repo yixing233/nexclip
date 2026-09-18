@@ -84,4 +84,12 @@ dotnet run --configuration Release
 
 ## 开源协议
 
-本项目采用 [MIT License](LICENSE) 开源协议。
+本项目采用 [GNU General Public License v3.0](LICENSE) 开源协议。
+
+Copyright (C) 2026 yixing233
+
+NexClip 是自由软件：你可以依据自由软件基金会发布的 GNU 通用公共许可证（第 3 版或你选择的任何更新版本）条款，重新发布和/或修改它。
+
+NexClip 的分发是希望它有用，但不提供任何担保，甚至不包含适销性或特定用途适用性的默示担保。详见 GNU 通用公共许可证。
+
+这意味着：你可以自由使用、修改和分发本项目，但**分发衍生作品时必须同样以 GPLv3 开源并提供完整源码**，不得闭源分发。
