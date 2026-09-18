@@ -4,6 +4,7 @@ import type { AppConfig } from './config.js';
 export interface EntryRow {
   Id: number; Type: string; Text: string | null; Html: string | null; ImageRef: string | null;
   ContentHash: string; DeviceId: string; DeviceName: string | null; IsManual?: number | null; CreatedAt: string;
+  Starred?: number | null; Remark?: string | null;
 }
 export interface DeviceRow {
   Id: string; Name: string; Platform: string; Ip: string | null; Version: string | null;
@@ -43,6 +44,8 @@ CREATE TABLE IF NOT EXISTS "Entries" (
   "DeviceName" TEXT NULL,
   "IsManual" INTEGER NULL DEFAULT 0,
   "CreatedAt" TEXT NOT NULL
+  ,"Starred" INTEGER NULL DEFAULT 0
+  ,"Remark" TEXT NULL
 );
 CREATE INDEX IF NOT EXISTS "IX_Entries_CreatedAt" ON "Entries" ("CreatedAt");
 CREATE INDEX IF NOT EXISTS "IX_Entries_ContentHash" ON "Entries" ("ContentHash");
@@ -98,6 +101,8 @@ CREATE TABLE IF NOT EXISTS "Settings" (
   const entryCols = new Set((db.prepare('PRAGMA table_info("Entries")').all() as { name: string }[]).map(c => c.name));
   if (!entryCols.has('IsManual')) db.exec('ALTER TABLE "Entries" ADD COLUMN "IsManual" INTEGER NULL DEFAULT 0');
   if (!entryCols.has('Html')) db.exec('ALTER TABLE "Entries" ADD COLUMN "Html" TEXT NULL');
+  if (!entryCols.has('Starred')) db.exec('ALTER TABLE "Entries" ADD COLUMN "Starred" INTEGER NULL DEFAULT 0');
+  if (!entryCols.has('Remark')) db.exec('ALTER TABLE "Entries" ADD COLUMN "Remark" TEXT NULL');
 
   // Devices 增量加列(老库兼容):设备专属 Token 哈希 + 配对时间
   const devCols = new Set((db.prepare('PRAGMA table_info("Devices")').all() as { name: string }[]).map(c => c.name));

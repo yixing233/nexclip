@@ -267,9 +267,56 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     return true;
   }
 
+  if (p === '/api/clipboard/batch' && method === 'POST') {
+    if (!requireDeviceOrSession()) return true;
+    const body = await readBody(req, 64 * 1024);
+    let json: Record<string, unknown>;
+    try { json = JSON.parse(body.toString('utf8')); } catch { sendJson(res, 400, { error: '无效的 JSON' }); return true; }
+    const action = typeof json.action === 'string' ? json.action : '';
+    const rawIds = Array.isArray(json.ids) ? json.ids : [];
+    const ids = [...new Set(rawIds.filter((x): x is number => Number.isInteger(x) && x > 0))];
+    if (action === 'star' || action === 'unstar') {
+      const starred = action === 'star';
+      let changed = 0;
+      for (const id of ids) {
+        if (!svc.getById(id)) continue;
+        svc.updateEntryMetadata(id, { starred });
+        changed++;
+      }
+      sendJson(res, 200, { changed });
+      return true;
+    }
+    if (action === 'delete') {
+      let changed = 0;
+      for (const id of ids) {
+        if (!svc.getById(id)) continue;
+        svc.deleteEntry(id);
+        changed++;
+      }
+      sendJson(res, 200, { changed });
+      return true;
+    }
+    sendJson(res, 400, { error: '不支持的批量操作' });
+    return true;
+  }
+
   const mEntry = /^\/api\/clipboard\/(\d+)$/.exec(p);
   if (mEntry) {
     const id = Number(mEntry[1]);
+    if (method === 'PUT') {
+      if (!requireDeviceOrSession()) return true;
+      const body = await readBody(req, 32 * 1024);
+      let json: Record<string, unknown> = {};
+      try { json = JSON.parse(body.toString('utf8')); } catch { sendJson(res, 400, { error: '无效的 JSON' }); return true; }
+      // 只更新请求体里出现的字段:客户端收藏开关不带 remark,不能借机把它清空
+      const patch: { starred?: boolean; remark?: string | null } = {};
+      if ('starred' in json) patch.starred = Boolean(json.starred);
+      if ('remark' in json) patch.remark = typeof json.remark === 'string' ? json.remark.slice(0, 4096) : null;
+      const updated = svc.updateEntryMetadata(id, patch);
+      if (!updated) { sendApiError(res, 404, '条目不存在'); return true; }
+      sendJson(res, 200, updated);
+      return true;
+    }
     if (method === 'GET') {
       if (!requireDeviceOrSession()) return true;
       const e = svc.getById(id);
@@ -627,9 +674,13 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
 }
 
 function toEntryDto(svc: SyncService, e: { Id: number; Type: string; Text: string | null; Html?: string | null; ImageRef: string | null; DeviceId: string; DeviceName: string | null; CreatedAt: string }) {
+  const row = e as { Starred?: number | null; Remark?: string | null };
   return {
     id: e.Id, type: e.Type, text: e.Text, html: e.Html ?? null, imageRef: e.ImageRef,
     deviceId: e.DeviceId, deviceName: e.DeviceName, createdAt: toIsoStr(e.CreatedAt),
+    // 与 PUT /api/clipboard/{id}、/api/clipboard/history 的条目结构保持一致,
+    // 否则客户端从单条接口读到的条目会缺少收藏/备注字段
+    starred: Boolean(row.Starred), remark: row.Remark ?? null,
   };
 }
 

@@ -9,6 +9,7 @@ import type { SignalRHub } from './signalr.js';
 export interface EntryDto {
   id: number; type: string; text: string | null; html: string | null; imageRef: string | null;
   deviceId: string; deviceName: string | null; isManual: boolean; createdAt: string;
+  starred: boolean; remark: string | null;
 }
 
 /** 配对业务错误(status + 中文提示,与设计文档错误码一致) */
@@ -113,6 +114,7 @@ export class SyncService {
     return {
       id: e.Id, type: e.Type, text: e.Text, html: e.Html ?? null, imageRef: e.ImageRef,
       deviceId: e.DeviceId, deviceName: e.DeviceName, isManual: Boolean(e.IsManual), createdAt: toIso(e.CreatedAt),
+      starred: Boolean(e.Starred), remark: e.Remark ?? null,
     };
   }
 
@@ -255,6 +257,36 @@ export class SyncService {
   }
 
   // ---------- 删除 ----------
+  /**
+   * 收藏/备注属于同一用户组的轻量元数据,按字段局部更新:patch 里没出现的字段保持原值。
+   *
+   * 客户端收藏开关只会带上自己知道的备注,而本地拉到的远端条目并不缓存服务端备注,
+   * 若这里做整体覆盖,在 A 设备收藏一条 B 设备加过备注的记录会把备注清掉。
+   *
+   * 刻意不广播 ClipboardUpdated:该事件在客户端一律按"来了新的剪贴板内容"处理
+   * (桌面端写入剪贴板并对 5 分钟内的条目自动粘贴,Android 端无条件 setPrimaryClip 并弹推送,
+   * Web 端弹"收到新剪贴板推送"),于是收藏一条最近的记录会在同组其它设备上凭空粘贴一次。
+   * 各端收藏/备注都只读本地库,没有客户端消费广播里的该字段,静默写库即可。
+   */
+  updateEntryMetadata(id: number, patch: { starred?: boolean; remark?: string | null }): EntryDto | null {
+    const existing = this.getById(id);
+    if (!existing) return null;
+    const sets: string[] = [];
+    const args: Array<string | number | null> = [];
+    if (patch.starred !== undefined) {
+      sets.push('"Starred" = ?');
+      args.push(patch.starred ? 1 : 0);
+    }
+    if (patch.remark !== undefined) {
+      sets.push('"Remark" = ?');
+      args.push(patch.remark && patch.remark.trim() ? patch.remark.trim() : null);
+    }
+    if (sets.length > 0) {
+      this.db.prepare(`UPDATE "Entries" SET ${sets.join(', ')} WHERE "Id" = ?`).run(...args, id);
+    }
+    return this.toDto(this.getById(id)!);
+  }
+
   deleteEntry(id: number): void {
     const e = this.db.prepare('SELECT * FROM "Entries" WHERE "Id" = ?').get(id) as unknown as EntryRow | null;
     if (!e) return;
