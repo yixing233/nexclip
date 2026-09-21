@@ -811,8 +811,11 @@ object SmartActionEngine {
 
     /**
      * 工业级短信验证码智能提取引擎
+     *
+     * 除剪贴板文本路径外, 短信接收路径也直接调用本方法 (见 sms/SmsCodeHandler),
+     * 两处共用同一套判定, 避免出现「剪贴板能提取、短信不能」这类规则漂移。
      */
-    private fun extractVerificationCode(text: String): String? {
+    internal fun extractVerificationCode(text: String): String? {
         val trimmed = text.trim()
         if (trimmed.length > MAX_SCAN_LENGTH) return null
 

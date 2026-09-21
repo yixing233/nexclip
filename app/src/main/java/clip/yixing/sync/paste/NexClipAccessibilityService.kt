@@ -20,7 +20,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
  * 隐私边界(实现与后续修改都必须守住):
  * - [onAccessibilityEvent] 只记录「当前前台包名」与「当前是否有可编辑控件聚焦」两个值,
  *   绝不读取、缓存或上报任何输入框内容;
- * - 只有用户主动点击粘贴时才 [findFocus] 查询节点树,平时不遍历窗口。
+ * - 只有用户主动点击粘贴、或用户开启短信验证码自动填入后, 才 [findFocus] 查询节点树,
+ *   平时不遍历窗口;
+ * - [injectTextIfTargetEmpty] 为判断目标框是否为空会读取一次节点文本, 但仅取布尔结果,
+ *   不缓存、不写日志、不外传, 详见该方法注释。
  */
 class NexClipAccessibilityService : AccessibilityService() {
 
@@ -127,6 +130,36 @@ class NexClipAccessibilityService : AccessibilityService() {
             ok
         } catch (t: Throwable) {
             Log.d(TAG, "performPasteAction failed: ${t.message}")
+            false
+        }
+    }
+
+    /**
+     * 仅在聚焦输入框**为空**时写入 [text], 供短信验证码自动填入使用。
+     *
+     * 与 [injectText] 的区别是这里不做合并: 自动填入没有用户确认这一环, 若目标框里已有
+     * 内容(多半是账号、金额等无关字段), 追加验证码会破坏用户已输入的内容, 因此宁可放弃。
+     *
+     * 隐私说明: 为判断是否为空需要读取一次节点文本, 但仅取 `isEmpty()` 这一布尔结果,
+     * 内容既不缓存也不写日志 —— 这是自动填入在「不误改用户输入」与「不读输入内容」
+     * 之间的必要取舍, 且只在用户开启自动填入开关后才会走到。
+     */
+    suspend fun injectTextIfTargetEmpty(text: String): Boolean {
+        if (text.isEmpty()) return false
+        val node = awaitFocusedEditable() ?: return false
+        return try {
+            if (!node.text.isNullOrEmpty()) {
+                Log.d(TAG, "auto-fill skipped: target field is not empty")
+                return false
+            }
+            val args = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+            }
+            val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            Log.d(TAG, "injectTextIfTargetEmpty result=$ok")
+            ok
+        } catch (t: Throwable) {
+            Log.d(TAG, "injectTextIfTargetEmpty failed: ${t.message}")
             false
         }
     }

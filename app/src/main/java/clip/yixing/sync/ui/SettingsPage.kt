@@ -156,6 +156,7 @@ enum class SettingsSubPage(val title: String) {
     Devices("设备列表与配对"),
     Filter("过滤规则"),
     SmartActions("智能动作与应用直达"),
+    SmsCode("短信验证码"),
     Paste("一键粘贴与悬浮球"),
     About("关于")
 }
@@ -847,6 +848,24 @@ internal fun SettingsPage(
                                     )
                                 },
                                 onClick = { openSubPage(SettingsSubPage.SmartActions) }
+                            )
+                            ArrowPreference(
+                                title = "短信验证码",
+                                endActions = {
+                                    val smsOn = SyncSettings.smsCodeEnabled(context)
+                                    val autofillOn = SyncSettings.smsCodeAutofill(context)
+                                    val statusText = when {
+                                        smsOn && autofillOn -> "提取+自动填入"
+                                        smsOn -> "已开启提取"
+                                        else -> "未开启"
+                                    }
+                                    Text(
+                                        text = statusText,
+                                        color = if (smsOn) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.7f),
+                                        fontSize = 14.sp
+                                    )
+                                },
+                                onClick = { openSubPage(SettingsSubPage.SmsCode) }
                             )
                             ArrowPreference(
                                 title = "一键粘贴与悬浮球",
@@ -1608,6 +1627,14 @@ internal fun SettingsPage(
 
                     SettingsSubPage.SmartActions -> {
                         SmartActionSettingsPage(
+                            bottomInnerPadding = bottomInnerPadding,
+                            snackbarHostState = snackbarHostState,
+                            onBack = { closeSubPage() }
+                        )
+                    }
+
+                    SettingsSubPage.SmsCode -> {
+                        clip.yixing.sync.sms.SmsCodeSettingsPage(
                             bottomInnerPadding = bottomInnerPadding,
                             snackbarHostState = snackbarHostState,
                             onBack = { closeSubPage() }

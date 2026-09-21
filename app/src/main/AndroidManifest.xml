@@ -11,6 +11,12 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!--
+        短信验证码：只申请接收权限，不申请 READ_SMS。
+        接收权限已足够拿到新到短信的正文，且权限面更小；正文不落盘、不上报，
+        仅提取其中的验证码（见 sms/SmsCodeHandler.kt 的隐私边界说明）。
+    -->
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
     <!-- 悬浮球入口：在别的应用之上显示「点按即粘贴」气泡与面板 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- 应用内下载新版本后唤起系统安装器执行覆盖安装 -->
@@ -124,6 +130,18 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+        <!--
+            短信验证码接收。SMS_RECEIVED 由系统发出，接收器必须 exported=true 才能收到；
+            该广播受 RECEIVE_SMS 权限保护，只有系统能投递，因此外部应用无法伪造。
+        -->
+        <receiver
+            android:name=".sms.SmsCodeReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
             </intent-filter>
         </receiver>
         <receiver

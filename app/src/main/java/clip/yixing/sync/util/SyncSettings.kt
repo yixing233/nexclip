@@ -58,6 +58,12 @@ object SyncSettings {
     const val KEY_HYPEROS_ISLAND_EXPANDED_TIME = "hyperos_island_expanded_time"
     const val KEY_HYPEROS_ISLAND_TIMEOUT = "hyperos_island_timeout"
 
+    // ---- 短信验证码 ----
+    // 与 KEY_SMART_ACTION_CODE 区分: 后者管的是「剪贴板文本里识别验证码」,
+    // 这里管的是「接收短信并提取」, 两者独立开关, 改动其一不影响既有的用户设置。
+    const val KEY_SMS_CODE_ENABLED = "sms_code_enabled"
+    const val KEY_SMS_CODE_AUTOFILL = "sms_code_autofill"
+
     val GLOW_COLORS = listOf(
         "#006EFF" to "经典科技蓝",
         "#10B981" to "灵动翡翠绿",
@@ -185,6 +191,34 @@ object SyncSettings {
 
     fun setHyperOsIslandTimeout(context: Context, timeoutSeconds: Int) {
         prefs(context).edit().putInt(KEY_HYPEROS_ISLAND_TIMEOUT, timeoutSeconds).apply()
+    }
+
+    // ---- 短信验证码 ----
+
+    /**
+     * 是否接收短信并提取验证码, 默认关闭。
+     *
+     * 默认关闭是刻意的: 开启需要短信权限, 属于高敏感权限, 应由用户明确授予,
+     * 而不是装上应用就默认索取。
+     */
+    fun smsCodeEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SMS_CODE_ENABLED, false)
+
+    fun setSmsCodeEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_SMS_CODE_ENABLED, enabled).apply()
+    }
+
+    /**
+     * 收到验证码后是否直接填入当前输入框, 默认关闭。
+     *
+     * 开启后仍需无障碍服务就绪; 且仅在目标输入框为空时才会填入,
+     * 避免把验证码追加到用户已输入的账号、金额等内容后面。
+     */
+    fun smsCodeAutofill(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SMS_CODE_AUTOFILL, false)
+
+    fun setSmsCodeAutofill(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_SMS_CODE_AUTOFILL, enabled).apply()
     }
 
     fun prefs(context: Context): SharedPreferences =
