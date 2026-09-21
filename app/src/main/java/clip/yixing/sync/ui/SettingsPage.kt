@@ -44,6 +44,7 @@ import kotlinx.coroutines.CancellationException
 import clip.yixing.sync.util.AppSourceHelper
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -256,6 +257,8 @@ internal fun SettingsPage(
     var isDropdownExpanded by remember { mutableStateOf(false) }
     var checkingUpdate by remember { mutableStateOf(false) }
     var updateDialogInfo by remember { mutableStateOf<clip.yixing.sync.util.UpdateInfo?>(null) }
+    // 许可证全文弹窗(GPLv3 要求分发时随附许可证副本, 全文打包在 assets/LICENSE.txt)
+    var showLicenseDialog by remember { mutableStateOf(false) }
 
     // 是否有任何弹窗、Bottom Sheet 或选择器处于打开状态
     val isAnyOverlayOpen = showNameDialog ||
@@ -1841,12 +1844,22 @@ internal fun SettingsPage(
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
+                                                .clickable { showLicenseDialog = true }
                                                 .padding(horizontal = 16.dp, vertical = 12.dp),
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text("开源许可证", fontSize = 15.sp, color = MiuixTheme.colorScheme.onSurface)
-                                            Text("MIT License", fontSize = 13.sp, color = MiuixTheme.colorScheme.onBackgroundVariant)
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text("GPL-3.0", fontSize = 13.sp, color = MiuixTheme.colorScheme.onBackgroundVariant)
+                                                Spacer(Modifier.width(6.dp))
+                                                Icon(
+                                                    imageVector = LucideIcons.ExternalLink,
+                                                    contentDescription = "查看许可证全文",
+                                                    tint = MiuixTheme.colorScheme.primary.copy(alpha = 0.6f),
+                                                    modifier = Modifier.size(13.dp)
+                                                )
+                                            }
                                         }
                                         Row(
                                             modifier = Modifier
@@ -1928,6 +1941,33 @@ internal fun SettingsPage(
             snackbarHostState = snackbarHostState,
             onDismiss = { updateDialogInfo = null }
         )
+    }
+
+    // 许可证全文弹窗: GPLv3 要求分发时随附许可证副本, 正文打包在 assets/LICENSE.txt
+    WindowDialog(
+        show = showLicenseDialog,
+        title = "GNU General Public License v3.0",
+        summary = "NexClip 依据 GPLv3 发布，以下为许可证全文。分发衍生作品时须同样以 GPLv3 开源并提供完整源码。",
+        onDismissRequest = { showLicenseDialog = false }
+    ) {
+        val licenseText = remember {
+            runCatching {
+                context.assets.open("LICENSE.txt").bufferedReader().use { it.readText() }
+            }.getOrDefault("无法读取许可证文件")
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 420.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            Text(
+                text = licenseText,
+                fontSize = 11.sp,
+                color = MiuixTheme.colorScheme.onBackgroundVariant,
+                lineHeight = 15.sp
+            )
+        }
     }
 
     // 大岛展开时长输入对话框
