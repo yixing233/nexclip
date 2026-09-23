@@ -522,7 +522,7 @@ internal fun RecordsPage(
         }
         try {
             progress.collect { event ->
-                val p = FastOutSlowInEasing.transform(event.progress)
+                val p = FastOutSlowInEasing.transform(SyncSettings.mapPredictiveBackProgress(context, event.progress))
                 detailPageAnimProgress.snapTo(p)
             }
             detailPageAnimProgress.animateTo(1f, animationSpec = tween(200, easing = LinearOutSlowInEasing))
@@ -534,6 +534,7 @@ internal fun RecordsPage(
     }
 
     val baseProgress = detailPageAnimProgress.value
+    val screenCornerRadius = rememberScreenCornerRadius()
 
     Box(modifier = Modifier.fillMaxSize()) {
         // ---- 1. 底层：一级记录主页（包含 PageShell） ----
@@ -547,6 +548,8 @@ internal fun RecordsPage(
                         scaleX = s
                         scaleY = s
                         alpha = 0.82f + 0.18f * baseProgress
+                        clip = true
+                        shape = RoundedCornerShape(screenCornerRadius)
                     }
                 }
         ) {
@@ -1188,8 +1191,8 @@ internal fun RecordsPage(
                         scaleX = s
                         scaleY = s
                         transformOrigin = TransformOrigin(0f, 0.5f)
-                        this.clip = true
-                        shape = RoundedCornerShape((p * 24).dp)
+                        clip = true
+                        shape = RoundedCornerShape(screenCornerRadius + (p * 4).dp)
                         shadowElevation = (1f - p) * 24f
                     }
                     .background(MiuixTheme.colorScheme.background)
@@ -2167,7 +2170,7 @@ internal fun SearchPage(
         try {
             isSearchBackActive = true
             progress.collect { event ->
-                searchBackProgress = event.progress
+                searchBackProgress = SyncSettings.mapPredictiveBackProgress(context, event.progress)
                 searchBackEdge = event.swipeEdge
             }
             onClose()

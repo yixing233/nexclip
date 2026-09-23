@@ -62,6 +62,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.windowInsetsBottomHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -95,6 +96,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
@@ -118,6 +121,7 @@ import clip.yixing.sync.util.SyncSettings
 import clip.yixing.sync.smartaction.SmartActionSettingsPage
 import kotlinx.coroutines.isActive
 import top.yukonga.miuix.kmp.basic.ScrollBehavior
+import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
@@ -126,10 +130,12 @@ import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.SnackbarHostState
 import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
 import top.yukonga.miuix.kmp.window.WindowDialog
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.WindowDropdownPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
+import top.yukonga.miuix.kmp.preference.SliderPreference
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.ChevronForward
@@ -148,15 +154,22 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * 设置二级页面枚举
  */
 enum class SettingsSubPage(val title: String) {
+    Basic("基础与界面"),
+    Sync("同步服务"),
+    Notifications("通知与隐私"),
+    Storage("数据与存储"),
+    Permissions("权限与保活"),
     Devices("设备列表与配对"),
     Filter("过滤规则"),
     SmartActions("智能动作与应用直达"),
     SmsCode("短信验证码"),
+    SmsCodeRecords("短信记录"),
     Paste("一键粘贴与悬浮球"),
     About("关于")
 }
@@ -178,9 +191,11 @@ internal fun SettingsPage(
     // 当前所处二级子页面（null 为一级设置主页）
     var currentSubPage by remember { mutableStateOf<SettingsSubPage?>(null) }
     var displayedSubPage by remember { mutableStateOf<SettingsSubPage?>(null) }
+    var parentSubPage by remember { mutableStateOf<SettingsSubPage?>(null) }
     val subPageAnimProgress = remember { Animatable(1f) } // 0f: 完全展开展示, 1f: 退出到屏幕右侧
 
     fun openSubPage(page: SettingsSubPage) {
+        parentSubPage = currentSubPage
         displayedSubPage = page
         currentSubPage = page
         scope.launch {
@@ -192,14 +207,26 @@ internal fun SettingsPage(
     fun closeSubPage() {
         scope.launch {
             subPageAnimProgress.animateTo(1f, animationSpec = tween(240, easing = FastOutSlowInEasing))
-            currentSubPage = null
-            displayedSubPage = null
+            val returnPage = parentSubPage
+            currentSubPage = returnPage
+            parentSubPage = null
+            if (returnPage != null) {
+                displayedSubPage = returnPage
+                subPageAnimProgress.snapTo(1f)
+                subPageAnimProgress.animateTo(0f, animationSpec = tween(280, easing = FastOutSlowInEasing))
+            } else {
+                displayedSubPage = null
+            }
         }
     }
 
     var predictiveBackEnabled by remember { mutableStateOf(SyncSettings.predictiveBackEnabled(context)) }
+    var predictiveBackMaxProgressPercent by remember {
+        mutableIntStateOf(SyncSettings.predictiveBackMaxProgressPercent(context))
+    }
     var hideFromRecents by remember { mutableStateOf(SyncSettings.isHideFromRecents(context)) }
-    var notificationEnabled by remember { mutableStateOf(SyncSettings.notificationEnabled(context)) }
+    var syncNotificationEnabled by remember { mutableStateOf(SyncSettings.syncNotificationEnabled(context)) }
+    var captureNotificationEnabled by remember { mutableStateOf(SyncSettings.captureNotificationEnabled(context)) }
 
     // ---- 1. 基础设置与设备状态 ----
     var deviceName by remember { mutableStateOf(SyncSettings.deviceName(context)) }
@@ -225,15 +252,7 @@ internal fun SettingsPage(
     var islandExpandedTime by remember {
         mutableIntStateOf(SyncSettings.hyperOsIslandExpandedTime(context))
     }
-    var showIslandExpandedTimeDialog by remember { mutableStateOf(false) }
-    val islandExpandedTimeDialogState = remember { TextFieldState(islandExpandedTime.toString()) }
-    val islandTimeoutOptions = remember { SyncSettings.ISLAND_TIMEOUT_OPTIONS }
-    val islandTimeoutLabels = remember { SyncSettings.ISLAND_TIMEOUT_LABELS }
-    var islandTimeoutIndex by remember {
-        mutableStateOf(
-            islandTimeoutOptions.indexOf(SyncSettings.hyperOsIslandTimeout(context)).let { if (it >= 0) it else 1 }
-        )
-    }
+    var islandTimeout by remember { mutableIntStateOf(SyncSettings.hyperOsIslandTimeout(context)) }
     val historyOptions = SyncSettings.MAX_HISTORY_OPTIONS.toList()
     val historyLabels = historyOptions.map { "$it 条" }
     var historyIndex by remember {
@@ -263,7 +282,6 @@ internal fun SettingsPage(
 
     // 是否有任何弹窗、Bottom Sheet 或选择器处于打开状态
     val isAnyOverlayOpen = showNameDialog ||
-        showIslandExpandedTimeDialog ||
         showPairDialog ||
         showCodeSheet ||
         deleteTargetDevice != null ||
@@ -293,8 +311,6 @@ internal fun SettingsPage(
         } finally {
             if (showNameDialog) {
                 showNameDialog = false
-            } else if (showIslandExpandedTimeDialog) {
-                showIslandExpandedTimeDialog = false
             } else if (showPairDialog) {
                 showPairDialog = false
             } else if (showCodeSheet) {
@@ -315,13 +331,21 @@ internal fun SettingsPage(
         }
         try {
             progress.collect { event ->
-                val p = FastOutSlowInEasing.transform(event.progress)
+                val p = FastOutSlowInEasing.transform(SyncSettings.mapPredictiveBackProgress(context, event.progress))
                 subPageAnimProgress.snapTo(p)
             }
             // 手势正常完成（松手）：从当前手势位移继续平滑滑动退出
             subPageAnimProgress.animateTo(1f, animationSpec = tween(200, easing = LinearOutSlowInEasing))
-            currentSubPage = null
-            displayedSubPage = null
+            val returnPage = parentSubPage
+            currentSubPage = returnPage
+            parentSubPage = null
+            if (returnPage != null) {
+                displayedSubPage = returnPage
+                subPageAnimProgress.snapTo(1f)
+                subPageAnimProgress.animateTo(0f, animationSpec = tween(280, easing = FastOutSlowInEasing))
+            } else {
+                displayedSubPage = null
+            }
         } catch (e: CancellationException) {
             // 用户取消手势（滑回边缘）：从当前位置平滑弹回复原
             subPageAnimProgress.animateTo(0f, animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
@@ -608,8 +632,71 @@ internal fun SettingsPage(
                     ),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // 1. 基础与界面
                     item {
+                        SectionBlock(title = "设置分类", insideMargin = PaddingValues()) {
+                            ArrowPreference(title = "基础与界面", onClick = { openSubPage(SettingsSubPage.Basic) })
+                            ArrowPreference(title = "同步服务", onClick = { openSubPage(SettingsSubPage.Sync) })
+                            ArrowPreference(title = "通知与隐私", onClick = { openSubPage(SettingsSubPage.Notifications) })
+                            ArrowPreference(title = "数据与存储", onClick = { openSubPage(SettingsSubPage.Storage) })
+                            ArrowPreference(title = "权限与保活", onClick = { openSubPage(SettingsSubPage.Permissions) })
+                            ArrowPreference(title = "关于", onClick = { openSubPage(SettingsSubPage.About) })
+                        }
+                    }
+
+                    // 底部避让已由 contentPadding.bottom 承担,勿再追加尾部 Spacer(会重复计一份 bottomInnerPadding)
+                }
+            }
+
+            // 黑色半透明遮罩层（视差下沉感）
+            if (displayedSubPage != null && (1f - baseProgress) > 0.001f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = (1f - baseProgress) * 0.2f))
+                )
+            }
+        }
+
+        // ---- 2. 顶层：当前激活的二级子页面 ----
+        displayedSubPage?.let { subPage ->
+            val p = subPageAnimProgress.value // 0f (显示) -> 1f (退出到右侧)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        translationX = p * size.width
+                        val s = 1f - p * 0.05f
+                        scaleX = s
+                        scaleY = s
+                        transformOrigin = TransformOrigin(0f, 0.5f)
+                        clip = true
+                        val corner = screenCornerRadius + (p * 4).dp
+                        shape = RoundedCornerShape(corner)
+                        shadowElevation = (1f - p) * 24f
+                    }
+            ) {
+                when (subPage) {
+                    SettingsSubPage.Basic,
+                    SettingsSubPage.Sync,
+                    SettingsSubPage.Notifications,
+                    SettingsSubPage.Storage,
+                    SettingsSubPage.Permissions -> {
+                        PageShell(
+                            title = subPage.title,
+                            bottomInnerPadding = bottomInnerPadding,
+                            navigationIcon = {
+                                IconButton(onClick = { closeSubPage() }) {
+                                    Icon(imageVector = MiuixIcons.Normal.Back, contentDescription = "返回")
+                                }
+                            }
+                        ) { scrollBehavior, topPadding ->
+                            LazyColumn(
+                                modifier = Modifier.fillMaxSize().overScrollVertical().nestedScroll(scrollBehavior.nestedScrollConnection),
+                                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = topPadding + 8.dp, bottom = bottomInnerPadding + 16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                // 基础与界面
+                    if (subPage == SettingsSubPage.Basic) item {
                         SectionBlock(title = "基础与界面", insideMargin = PaddingValues()) {
                             ArrowPreference(
                                 title = "设备名称",
@@ -666,6 +753,45 @@ internal fun SettingsPage(
                                 },
                                 title = "预测返回手势"
                             )
+                            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "预测返回最大进度",
+                                            style = MiuixTheme.textStyles.body1,
+                                            color = MiuixTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "松手确认后仍会完整退出",
+                                            style = MiuixTheme.textStyles.body2,
+                                            color = MiuixTheme.colorScheme.onBackgroundVariant
+                                        )
+                                    }
+                                    Text(
+                                        text = "$predictiveBackMaxProgressPercent%",
+                                        style = MiuixTheme.textStyles.body2,
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant
+                                    )
+                                }
+                                Slider(
+                                    value = predictiveBackMaxProgressPercent.toFloat(),
+                                    onValueChange = { value -> predictiveBackMaxProgressPercent = value.roundToInt() },
+                                    onValueChangeFinished = {
+                                        SyncSettings.setPredictiveBackMaxProgressPercent(context, predictiveBackMaxProgressPercent)
+                                    },
+                                    valueRange = 10f..100f,
+                                    steps = 89,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .pointerInput(Unit) {
+                                            detectTapGestures { position ->
+                                                val fraction = (position.x / size.width).coerceIn(0f, 1f)
+                                                predictiveBackMaxProgressPercent = (10f + fraction * 90f).roundToInt()
+                                                SyncSettings.setPredictiveBackMaxProgressPercent(context, predictiveBackMaxProgressPercent)
+                                            }
+                                        }
+                                )
+                            }
                             SwitchPreference(
                                 checked = hideFromRecents,
                                 onCheckedChange = { checked ->
@@ -678,8 +804,8 @@ internal fun SettingsPage(
                         }
                     }
 
-                    // 2. 同步服务
-                    item {
+                    // 同步服务
+                    if (subPage == SettingsSubPage.Sync) item {
                         SectionBlock(title = "同步服务") {
                             TextField(
                                 state = urlState,
@@ -737,35 +863,131 @@ internal fun SettingsPage(
                                 title = "扫码加入设备组",
                                 onClick = onOpenQrScanner
                             )
-                            ArrowPreference(
-                                title = "设备列表与配对",
-                                endActions = {
-                                    Text(
-                                        text = if (!SyncSettings.isPaired(context) || SyncSettings.deviceToken(context).isBlank()) "未加入"
-                                        else if (devicesLoading && devices.isEmpty()) "加载中…"
-                                        else "${devices.count { it.online }} / ${devices.size} 在线",
-                                        color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.7f),
-                                        fontSize = 14.sp
-                                    )
-                                },
-                                onClick = { openSubPage(SettingsSubPage.Devices) }
-                            )
                         }
                     }
 
-                    // 3. 通知与隐私
-                    item {
+                    if (subPage == SettingsSubPage.Sync) item {
+                        SectionBlock(title = "配对管理") {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        val url = urlState.text.toString().trim().ifEmpty { SyncSettings.serverUrl(context) }
+                                        if (url.isEmpty()) {
+                                            scope.launch { snackbarHostState.showAppSnack("请先填写服务器地址", SnackType.Info) }
+                                            return@Button
+                                        }
+                                        generatingCode = true
+                                        val genDeviceId = SyncSettings.ensureDeviceId(context)
+                                        val api = SyncApi(url, genDeviceId, SyncSettings.deviceToken(context))
+                                        scope.launch {
+                                            val result = withContext(Dispatchers.IO) {
+                                                runCatching { api.createPairingCode(genDeviceId, SyncSettings.deviceName(context)) }
+                                            }
+                                            generatingCode = false
+                                            result.onSuccess { code ->
+                                                code.deviceToken?.let { token ->
+                                                    SyncSettings.setDeviceToken(context, token)
+                                                    SyncSettings.setPaired(context, true)
+                                                }
+                                                generatedCode = code
+                                                showCodeSheet = true
+                                                snackbarHostState.showAppSnack("配对码已生成", SnackType.Success)
+                                            }.onFailure { error ->
+                                                snackbarHostState.showAppSnack(error.message ?: "生成失败", SnackType.Error)
+                                            }
+                                        }
+                                    },
+                                    enabled = !generatingCode,
+                                    colors = ButtonDefaults.buttonColors(
+                                        color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                                        contentColor = MiuixTheme.colorScheme.onSurface
+                                    ),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(if (generatingCode) "生成中…" else "生成配对码")
+                                }
+                                Button(
+                                    onClick = { showPairDialog = true },
+                                    enabled = !pairing,
+                                    colors = ButtonDefaults.buttonColorsPrimary(),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(if (pairing) "配对中…" else "输入配对码")
+                                }
+                            }
+                            if (pairing) {
+                                Spacer(Modifier.height(6.dp))
+                                Text("等待对方确认…", fontSize = 13.sp, color = MiuixTheme.colorScheme.onBackgroundVariant)
+                            }
+                        }
+                    }
+
+                    if (subPage == SettingsSubPage.Sync) item {
+                        SectionBlock(
+                            title = "设备列表",
+                            trailing = {
+                                if (SyncSettings.isPaired(context) && SyncSettings.deviceToken(context).isNotBlank()) {
+                                    Text(
+                                        text = if (devicesLoading && devices.isEmpty()) "加载中…" else "${devices.count { it.online }} / ${devices.size} 在线",
+                                        fontSize = 13.sp,
+                                        color = MiuixTheme.colorScheme.onBackgroundVariant
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    IconButton(onClick = { devicesManual = true; devicesReload++ }) {
+                                        Icon(imageVector = LucideIcons.RefreshCw, contentDescription = "刷新", modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                            }
+                        ) {
+                            if (!SyncSettings.isPaired(context) || SyncSettings.deviceToken(context).isBlank()) {
+                                Text("当前未加入任何设备组。可在上方生成配对码或输入其他设备的配对码接入。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onBackgroundVariant)
+                            } else if (devices.isEmpty() && !devicesLoading && devicesError == null) {
+                                Text("设备组中暂无其他设备。", fontSize = 13.sp, color = MiuixTheme.colorScheme.onBackgroundVariant)
+                            }
+                            val sortedDevices = remember(devices, selfDeviceId) {
+                                devices.sortedWith(compareByDescending<DeviceInfo> { it.id == selfDeviceId }.thenByDescending { it.online }.thenByDescending { it.lastSeenAt })
+                            }
+                            sortedDevices.forEach { device ->
+                                Spacer(Modifier.height(10.dp))
+                                DeviceCard(
+                                    device = device,
+                                    isSelf = device.id == selfDeviceId,
+                                    isServerConnected = isServerConnected,
+                                    onDeleteClick = { deleteTargetDevice = it },
+                                    onCopyId = { id ->
+                                        copyPairingCode(context, id)
+                                        scope.launch { snackbarHostState.showAppSnack("设备 ID 已复制", SnackType.Success) }
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    // 通知与隐私
+                    if (subPage == SettingsSubPage.Notifications) item {
                         SectionBlock(title = "通知与隐私", insideMargin = PaddingValues()) {
                             SwitchPreference(
-                                checked = notificationEnabled,
+                                checked = syncNotificationEnabled,
                                 onCheckedChange = { checked ->
-                                    notificationEnabled = checked
-                                    SyncSettings.setNotificationEnabled(context, checked)
-                                    ClipboardMonitorService.updateNotification(context)
+                                    syncNotificationEnabled = checked
+                                    SyncSettings.setSyncNotificationEnabled(context, checked)
                                 },
-                                title = "同步与捕获通知"
+                                title = "同步通知",
+                                summary = "收到其他设备同步内容时显示通知"
                             )
-                            if (notificationEnabled) {
+                            SwitchPreference(
+                                checked = captureNotificationEnabled,
+                                onCheckedChange = { checked ->
+                                    captureNotificationEnabled = checked
+                                    SyncSettings.setCaptureNotificationEnabled(context, checked)
+                                },
+                                title = "捕获通知",
+                                summary = "本机捕获到新剪贴板内容时显示通知"
+                            )
+                            if (syncNotificationEnabled || captureNotificationEnabled) {
                                 val notificationStyleIndex = notificationStyles.indexOf(notificationStyle).coerceAtLeast(0)
                                 WindowDropdownPreference(
                                     items = notificationStyleLabels,
@@ -800,32 +1022,25 @@ internal fun SettingsPage(
                                             }
                                         )
                                     }
-                                    BasicComponent(
-                                        title = "大岛展开时长",
-                                        summary = "设置大岛自动收起时间",
-                                        endActions = {
-                                            Text(
-                                                text = "${islandExpandedTime} 秒",
-                                                color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.7f),
-                                                fontSize = 14.sp
-                                            )
-                                        },
-                                        onClick = {
-                                            islandExpandedTimeDialogState.setTextAndPlaceCursorAtEnd(islandExpandedTime.toString())
-                                            showIslandExpandedTimeDialog = true
+                                    DurationInputPreference(
+                                        title = "大岛显示时长",
+                                        summary = "大岛展开后的显示时长",
+                                        seconds = islandExpandedTime,
+                                        onSecondsChange = {
+                                            islandExpandedTime = it
+                                            SyncSettings.setHyperOsIslandExpandedTime(context, it)
+                                            ClipboardMonitorService.updateNotification(context)
                                         }
                                     )
-                                    WindowDropdownPreference(
-                                        items = islandTimeoutLabels,
-                                        selectedIndex = islandTimeoutIndex,
-                                        onSelectedIndexChange = { index ->
-                                            islandTimeoutIndex = index
-                                            val timeoutSec = islandTimeoutOptions[index]
-                                            SyncSettings.setHyperOsIslandTimeout(context, timeoutSec)
+                                    DurationInputPreference(
+                                        title = "小岛显示时长",
+                                        summary = "通知小岛的显示时长",
+                                        seconds = islandTimeout,
+                                        onSecondsChange = {
+                                            islandTimeout = it
+                                            SyncSettings.setHyperOsIslandTimeout(context, it)
                                             ClipboardMonitorService.updateNotification(context)
-                                        },
-                                        onExpandedChange = { isDropdownExpanded = it },
-                                        title = "小岛常驻有效时长"
+                                        }
                                     )
                                 }
                             }
@@ -901,8 +1116,8 @@ internal fun SettingsPage(
                         }
                     }
 
-                    // 4. 数据与存储
-                    item {
+                    // 数据与存储
+                    if (subPage == SettingsSubPage.Storage) item {
                         SectionBlock(title = "数据与存储", insideMargin = PaddingValues()) {
                             WindowDropdownPreference(
                                 items = historyLabels,
@@ -966,8 +1181,8 @@ internal fun SettingsPage(
                         }
                     }
 
-                    // 5. 权限与保活
-                    item {
+                    // 权限与保活
+                    if (subPage == SettingsSubPage.Permissions) item {
                         val moduleStatus by ModuleStatusStore.moduleStatus.collectAsState()
                         val isModuleActivated = moduleStatus.activated
                         val shizukuStatus by ShizukuClipboardManager.status.collectAsState()
@@ -1144,55 +1359,10 @@ internal fun SettingsPage(
                         }
                     }
 
-                    // 6. 关于
-                    item {
-                        SectionBlock(title = "关于", insideMargin = PaddingValues()) {
-                            ArrowPreference(
-                                title = "关于 NexClip",
-                                endActions = {
-                                    Text(
-                                        text = "v" + appVersion(context),
-                                        color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.7f),
-                                        fontSize = 14.sp
-                                    )
-                                },
-                                onClick = { openSubPage(SettingsSubPage.About) }
-                            )
+                            }
                         }
                     }
-                    // 底部避让已由 contentPadding.bottom 承担,勿再追加尾部 Spacer(会重复计一份 bottomInnerPadding)
-                }
-            }
 
-            // 黑色半透明遮罩层（视差下沉感）
-            if (displayedSubPage != null && (1f - baseProgress) > 0.001f) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = (1f - baseProgress) * 0.2f))
-                )
-            }
-        }
-
-        // ---- 2. 顶层：当前激活的二级子页面 ----
-        displayedSubPage?.let { subPage ->
-            val p = subPageAnimProgress.value // 0f (显示) -> 1f (退出到右侧)
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        translationX = p * size.width
-                        val s = 1f - p * 0.05f
-                        scaleX = s
-                        scaleY = s
-                        transformOrigin = TransformOrigin(0f, 0.5f)
-                        clip = true
-                        val corner = screenCornerRadius + (p * 4).dp
-                        shape = RoundedCornerShape(corner)
-                        shadowElevation = (1f - p) * 24f
-                    }
-            ) {
-                when (subPage) {
                     SettingsSubPage.Devices -> {
                         // ---- 二级页面 1: 设备列表与配对 ----
                         PageShell(
@@ -1637,6 +1807,14 @@ internal fun SettingsPage(
                         clip.yixing.sync.sms.SmsCodeSettingsPage(
                             bottomInnerPadding = bottomInnerPadding,
                             snackbarHostState = snackbarHostState,
+                            onBack = { closeSubPage() },
+                            onOpenRecords = { openSubPage(SettingsSubPage.SmsCodeRecords) }
+                        )
+                    }
+
+                    SettingsSubPage.SmsCodeRecords -> {
+                        clip.yixing.sync.sms.SmsCodeRecordsPage(
+                            bottomInnerPadding = bottomInnerPadding,
                             onBack = { closeSubPage() }
                         )
                     }
@@ -1997,56 +2175,6 @@ internal fun SettingsPage(
         }
     }
 
-    // 大岛展开时长输入对话框
-    WindowDialog(
-        show = showIslandExpandedTimeDialog,
-        title = "大岛展开时长",
-        summary = "输入大岛自动收起的秒数",
-        onDismissRequest = { showIslandExpandedTimeDialog = false }
-    ) {
-        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
-            TextField(
-                state = islandExpandedTimeDialogState,
-                label = "时长（秒）",
-                useLabelAsPlaceholder = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(16.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Button(
-                    onClick = { showIslandExpandedTimeDialog = false },
-                    colors = ButtonDefaults.buttonColors(
-                        color = MiuixTheme.colorScheme.surfaceContainerHigh,
-                        contentColor = MiuixTheme.colorScheme.onSurface
-                    ),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("取消")
-                }
-                Button(
-                    onClick = {
-                        val seconds = islandExpandedTimeDialogState.text.toString().trim().toIntOrNull()
-                        if (seconds == null || seconds < 1) {
-                            scope.launch { snackbarHostState.showAppSnack("请输入大于 0 的秒数", SnackType.Info) }
-                        } else {
-                            islandExpandedTime = seconds
-                            SyncSettings.setHyperOsIslandExpandedTime(context, seconds)
-                            showIslandExpandedTimeDialog = false
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColorsPrimary(),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("保存")
-                }
-            }
-        }
-    }
-
     // 配对对话框 (6 位纯数字配对码或扫码接入)
     WindowDialog(
         show = showPairDialog,
@@ -2379,6 +2507,104 @@ internal fun SettingsPage(
         },
         onDismissRequest = { showAppPickerDialog = false }
     )
+}
+
+@Composable
+private fun DurationInputPreference(
+    title: String,
+    summary: String,
+    seconds: Int,
+    onSecondsChange: (Int) -> Unit
+) {
+    var showDialog by remember { mutableStateOf(false) }
+    var invalidInput by remember { mutableStateOf(false) }
+    val inputState = remember { TextFieldState(seconds.toString()) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable {
+                inputState.setTextAndPlaceCursorAtEnd(seconds.toString())
+                invalidInput = false
+                showDialog = true
+            }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MiuixTheme.textStyles.body1, color = MiuixTheme.colorScheme.onSurface)
+            Text(summary, style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onBackgroundVariant)
+        }
+        Text(formatDuration(seconds), style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onBackgroundVariant)
+    }
+
+    WindowDialog(
+        show = showDialog,
+        title = title,
+        summary = "请输入秒数，范围为 1–3600 秒。",
+        onDismissRequest = { showDialog = false }
+    ) {
+        TextField(
+            state = inputState,
+            label = "秒数",
+            useLabelAsPlaceholder = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth()
+        )
+        if (invalidInput) {
+            Text(
+                text = "请输入 1 至 3600 之间的整数。",
+                fontSize = 12.sp,
+                color = MiuixTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                onClick = { showDialog = false },
+                colors = ButtonDefaults.buttonColors(
+                    color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                    contentColor = MiuixTheme.colorScheme.onSurface
+                ),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("取消")
+            }
+            Button(
+                onClick = {
+                    val value = inputState.text.toString().trim().toIntOrNull()
+                    if (value == null || value !in 1..3600) {
+                        invalidInput = true
+                    } else {
+                        onSecondsChange(value)
+                        showDialog = false
+                    }
+                },
+                colors = ButtonDefaults.buttonColorsPrimary(),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("确定")
+            }
+        }
+    }
+}
+
+private fun formatDuration(seconds: Int): String {
+    val safeSeconds = seconds.coerceAtLeast(1)
+    val hours = safeSeconds / 3600
+    val minutes = (safeSeconds % 3600) / 60
+    val remainder = safeSeconds % 60
+    return when {
+        hours > 0 && minutes > 0 -> "$hours 小时 $minutes 分"
+        hours > 0 -> "$hours 小时"
+        minutes > 0 && remainder > 0 -> "$minutes 分 $remainder 秒"
+        minutes > 0 -> "$minutes 分钟"
+        else -> "$remainder 秒"
+    }
 }
 
 private fun platformIcon(name: String, platform: String): androidx.compose.ui.graphics.vector.ImageVector {
@@ -2942,10 +3168,11 @@ private fun InstalledAppPickerDialog(
         }
     }
 
-    WindowDialog(
+    OverlayBottomSheet(
         show = show,
         title = "选择要忽略的应用",
-        onDismissRequest = onDismissRequest
+        onDismissRequest = onDismissRequest,
+        renderInRootScaffold = true
     ) {
         Column(
             modifier = Modifier
@@ -2953,7 +3180,7 @@ private fun InstalledAppPickerDialog(
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
             Text(
-                text = "已勾选的应用在产生剪贴板复制时，将被自动跳过捕获与多端同步。",
+                text = "已选择 ${blacklistedPackages.size} 个应用",
                 fontSize = 12.sp,
                 color = MiuixTheme.colorScheme.onBackgroundVariant,
                 lineHeight = 16.sp
@@ -3096,6 +3323,7 @@ private fun InstalledAppPickerDialog(
             ) {
                 Text("完成")
             }
+            Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
         }
     }
 }

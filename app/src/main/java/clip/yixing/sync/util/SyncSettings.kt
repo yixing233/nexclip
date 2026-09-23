@@ -22,8 +22,11 @@ object SyncSettings {
     const val UPDATE_SOURCE_DIRECT = 1
     const val KEY_FLOATING_BOTTOM_BAR = "floating_bottom_bar"
     const val KEY_PREDICTIVE_BACK = "predictive_back"
+    const val KEY_PREDICTIVE_BACK_MAX_PROGRESS = "predictive_back_max_progress"
     const val KEY_HIDE_FROM_RECENTS = "hide_from_recents"
-    const val KEY_NOTIFICATION_ENABLED = "notification_enabled"
+    const val KEY_NOTIFICATION_ENABLED = "notification_enabled" // legacy shared setting
+    const val KEY_SYNC_NOTIFICATION_ENABLED = "sync_notification_enabled"
+    const val KEY_CAPTURE_NOTIFICATION_ENABLED = "capture_notification_enabled"
     const val KEY_NOTIFICATION_STYLE = "notification_style"
     const val KEY_CAPTURE_METHOD = "capture_method"
     const val KEY_MAX_HISTORY = "max_history"
@@ -325,6 +328,20 @@ object SyncSettings {
         prefs(context).edit().putBoolean(KEY_PREDICTIVE_BACK, enabled).apply()
     }
 
+    /** 预测返回手势拖动阶段可达到的最大动画进度，默认 100%。 */
+    fun predictiveBackMaxProgressPercent(context: Context): Int =
+        prefs(context).getInt(KEY_PREDICTIVE_BACK_MAX_PROGRESS, 40).coerceIn(10, 100)
+
+    fun setPredictiveBackMaxProgressPercent(context: Context, percent: Int) {
+        prefs(context).edit()
+            .putInt(KEY_PREDICTIVE_BACK_MAX_PROGRESS, percent.coerceIn(10, 100))
+            .apply()
+    }
+
+    /** 将系统手势进度映射到应用设置的动画进度上限。 */
+    fun mapPredictiveBackProgress(context: Context, progress: Float): Float =
+        progress.coerceIn(0f, 1f) * predictiveBackMaxProgressPercent(context) / 100f
+
     /** 从最近任务列表隐藏开关, 默认关闭 */
     fun isHideFromRecents(context: Context): Boolean =
         prefs(context).getBoolean(KEY_HIDE_FROM_RECENTS, false)
@@ -343,12 +360,34 @@ object SyncSettings {
         }
     }
 
-    /** 同步与捕获通知展示开关,默认开启 */
+    /** 兼容旧版的同步与捕获通知总开关，未迁移的设备继续沿用旧值。 */
     fun notificationEnabled(context: Context): Boolean =
         prefs(context).getBoolean(KEY_NOTIFICATION_ENABLED, true)
 
+    fun syncNotificationEnabled(context: Context): Boolean {
+        val preferences = prefs(context)
+        return preferences.getBoolean(KEY_SYNC_NOTIFICATION_ENABLED, notificationEnabled(context))
+    }
+
+    fun captureNotificationEnabled(context: Context): Boolean {
+        val preferences = prefs(context)
+        return preferences.getBoolean(KEY_CAPTURE_NOTIFICATION_ENABLED, notificationEnabled(context))
+    }
+
+    fun setSyncNotificationEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_SYNC_NOTIFICATION_ENABLED, enabled).apply()
+    }
+
+    fun setCaptureNotificationEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_CAPTURE_NOTIFICATION_ENABLED, enabled).apply()
+    }
+
     fun setNotificationEnabled(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_NOTIFICATION_ENABLED, enabled).apply()
+        prefs(context).edit()
+            .putBoolean(KEY_NOTIFICATION_ENABLED, enabled)
+            .putBoolean(KEY_SYNC_NOTIFICATION_ENABLED, enabled)
+            .putBoolean(KEY_CAPTURE_NOTIFICATION_ENABLED, enabled)
+            .apply()
     }
 
     fun maxHistory(context: Context): Int =

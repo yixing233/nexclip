@@ -53,7 +53,8 @@ import top.yukonga.miuix.kmp.preference.SwitchPreference
 fun SmsCodeSettingsPage(
     bottomInnerPadding: Dp,
     snackbarHostState: SnackbarHostState,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onOpenRecords: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -164,6 +165,17 @@ fun SmsCodeSettingsPage(
                             autofillEnabled = checked
                             SyncSettings.setSmsCodeAutofill(context, checked)
                         }
+                    )
+                }
+            }
+
+            item {
+                Spacer(Modifier.height(16.dp))
+                SectionBlock(title = "短信记录", insideMargin = PaddingValues()) {
+                    ArrowPreference(
+                        title = "查看短信识别记录",
+                        summary = "确认短信接收与验证码提取是否正常",
+                        onClick = onOpenRecords
                     )
                 }
             }

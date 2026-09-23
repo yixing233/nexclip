@@ -22,6 +22,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -58,7 +59,6 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.background
 import androidx.compose.ui.graphics.Shape
@@ -338,7 +338,7 @@ private fun MainScreen() {
         }
         try {
             progress.collect { event ->
-                val p = FastOutSlowInEasing.transform(event.progress)
+                val p = FastOutSlowInEasing.transform(SyncSettings.mapPredictiveBackProgress(appContext, event.progress))
                 scanAnimProgress.snapTo(p)
             }
             scanAnimProgress.animateTo(1f, animationSpec = tween(200, easing = LinearOutSlowInEasing))
@@ -356,7 +356,7 @@ private fun MainScreen() {
         }
         try {
             progress.collect { event ->
-                val p = FastOutSlowInEasing.transform(event.progress)
+                val p = FastOutSlowInEasing.transform(SyncSettings.mapPredictiveBackProgress(appContext, event.progress))
                 manualPushAnimProgress.snapTo(p)
             }
             manualPushAnimProgress.animateTo(1f, animationSpec = tween(200, easing = LinearOutSlowInEasing))
@@ -629,7 +629,7 @@ private fun MainScreen() {
                     val s = 1f - p * 0.05f
                     scaleX = s
                     scaleY = s
-                    alpha = 1f - p * 0.3f
+                    transformOrigin = TransformOrigin(0f, 0.5f)
                     clip = true
                     val corner = screenCornerRadius + (p * 4).dp
                     shape = RoundedCornerShape(corner)
@@ -659,7 +659,7 @@ private fun MainScreen() {
                     val s = 1f - p * 0.05f
                     scaleX = s
                     scaleY = s
-                    alpha = 1f - p * 0.3f
+                    transformOrigin = TransformOrigin(0f, 0.5f)
                     clip = true
                     val corner = screenCornerRadius + (p * 4).dp
                     shape = RoundedCornerShape(corner)

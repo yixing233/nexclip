@@ -435,8 +435,13 @@ object SyncNotificationManager {
         sourceDevice: String?,
         isPush: Boolean
     ) {
-        if (!SyncSettings.notificationEnabled(context)) {
-            android.util.Log.w("SyncNotification", "notifyNewClip: notification is disabled in settings")
+        val notificationEnabled = if (isPush) {
+            SyncSettings.syncNotificationEnabled(context)
+        } else {
+            SyncSettings.captureNotificationEnabled(context)
+        }
+        if (!notificationEnabled) {
+            android.util.Log.w("SyncNotification", "notifyNewClip: notification is disabled for isPush=$isPush")
             return
         }
         if (Build.VERSION.SDK_INT >= 33 &&

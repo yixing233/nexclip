@@ -66,16 +66,20 @@ object SmsCodeHandler {
         if (!SyncSettings.smsCodeEnabled(appContext)) return null
         if (body.isBlank()) return null
 
-        // 复用剪贴板路径的同一套提取逻辑, 保证两条入口判定一致
+        // 记录仅包含处理状态与验证码，不保存短信正文或发件人。
+        // 未命中的短信也入记录，方便用户确认系统广播是否到达。
         val code = SmartActionEngine.extractVerificationCode(body) ?: run {
+            SmsCodeRecordStore.add(appContext, SmsCodeRecordStore.Status.NOT_FOUND)
             Log.d(TAG, "sms received but no verification code matched")
             return null
         }
 
         if (isDuplicate(code)) {
+            SmsCodeRecordStore.add(appContext, SmsCodeRecordStore.Status.DUPLICATE, code)
             Log.d(TAG, "duplicate code within dedup window, ignored")
             return null
         }
+        SmsCodeRecordStore.add(appContext, SmsCodeRecordStore.Status.EXTRACTED, code)
 
         writeToClipboard(appContext, code)
         notifyCode(appContext, code)
