@@ -36,9 +36,10 @@ object ShizukuClipboardManager {
 
     private var activeListenerBinder: ClipListenerBinder? = null
     private var isInitialized = false
+    private var appContext: Context? = null
 
     private val binderReceivedListener = Shizuku.OnBinderReceivedListener {
-        updateStatus()
+        updateStatus(appContext)
     }
 
     private val binderDeadListener = Shizuku.OnBinderDeadListener {
@@ -46,19 +47,20 @@ object ShizukuClipboardManager {
         activeListenerBinder = null
     }
 
-    private val permissionResultListener = Shizuku.OnRequestPermissionResultListener { _, grantResult ->
-        if (grantResult == PackageManager.PERMISSION_GRANTED) {
-            _status.value = ShizukuStatus.AUTHORIZED_RUNNING
-        } else {
-            _status.value = ShizukuStatus.UNAUTHORIZED
-        }
+    private val permissionResultListener = Shizuku.OnRequestPermissionResultListener { _, _ ->
+        // 不直接相信回调结果，重新读取 Binder、版本和当前授权状态，避免权限被撤销后仍显示已授权。
+        updateStatus(appContext)
     }
 
     /**
      * 初始化 Shizuku 监听器与状态绑定
      */
     fun init(context: Context) {
-        if (isInitialized) return
+        appContext = context.applicationContext
+        if (isInitialized) {
+            updateStatus(appContext)
+            return
+        }
         isInitialized = true
 
         try {
@@ -76,8 +78,9 @@ object ShizukuClipboardManager {
      */
     fun updateStatus(context: Context? = null) {
         try {
+            val resolvedContext = context ?: appContext
             if (!Shizuku.pingBinder()) {
-                val isInstalled = context?.let { isShizukuInstalled(it) } ?: false
+                val isInstalled = resolvedContext?.let { isShizukuInstalled(it) } ?: false
                 _status.value = if (isInstalled) ShizukuStatus.DEAD_OR_STOPPED else ShizukuStatus.NOT_INSTALLED
                 return
             }

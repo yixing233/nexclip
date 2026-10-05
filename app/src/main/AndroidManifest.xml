@@ -21,6 +21,8 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- 应用内下载新版本后唤起系统安装器执行覆盖安装 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Shizuku API 调用与授权检查所需的权限声明 -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
     <uses-permission android:name="moe.shizuku.privileged.api.permission.RECEIVE_STATUS" />
 
     <!-- 包可见性声明：允许检测与拉起 LSPosed / Xposed / 模块管理器与 Root 管理器 / Shizuku -->

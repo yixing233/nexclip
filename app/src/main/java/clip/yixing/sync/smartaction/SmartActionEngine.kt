@@ -31,6 +31,91 @@ object SmartActionEngine {
      */
     private const val MAX_DISTANCE_CANDIDATE = 16
 
+    // ---------------------------------------------------------------------
+    // 正则常量
+    //
+    // 以下正则在改造前都是「每次调用现场构造」: extractVerificationCode 单次调用要编译约 30 条,
+    // 而它同时位于剪贴板捕获、通知构建与记录列表逐卡片组合三条热路径上。Kotlin 的 Regex 在
+    // 模式相同的前提下构造成本主要是 java.util.regex.Pattern.compile 的一次性开销, 提升为
+    // 对象级常量后仅在类初始化时编译一次。正则文本与语义保持与改造前逐一对应, 不做修改。
+    // ---------------------------------------------------------------------
+
+    /** 整段文本即一个纯数字/G-码 (如 "839201", "G-123456") */
+    private val PURE_CODE_REGEX = Regex("^(?:G-)?([0-9]{4,8})$", RegexOption.IGNORE_CASE)
+
+    /** Google 专属验证码格式 (G-123456 / G - 123456) */
+    private val GOOGLE_CODE_REGEX = Regex("""(?i)\b(?:G\s*-\s*)([0-9]{6})\b""")
+
+    /** 验证码类关键字(用于判定文本是否含关键字, 以及弱特征分支的距离计算) */
+    private val CODE_KEYWORD_PATTERNS = listOf(
+        Regex("""验证码"""),
+        Regex("""动态码"""),
+        Regex("""校验码"""),
+        Regex("""安全码"""),
+        Regex("""确认码"""),
+        Regex("""动态密码"""),
+        Regex("""授权码"""),
+        Regex("""随机码"""),
+        Regex("""短信验证码"""),
+        Regex("""(?i)\bverification\s*code\b"""),
+        Regex("""(?i)\bsecurity\s*code\b"""),
+        Regex("""(?i)\bauth(?:entication)?\s*code\b"""),
+        Regex("""(?i)\b(?:login|confirm(?:ation)?|access|pin)\s*code\b"""),
+        Regex("""(?i)\bone-time\s*(?:passcode|password|code)\b"""),
+        Regex("""(?i)\bpasscode\b"""),
+        Regex("""(?i)\botp\b"""),
+        Regex("""(?i)\b2fa\b""")
+    )
+
+    /** 验证码关键字的正则片段(供前后缀匹配复用) */
+    private const val PREFIX_KEYWORD_FRAGMENT =
+        """(?:验证码|动态码|校验码|安全码|确认码|动态密码|授权码|随机码|短信验证码|verification\s*code|security\s*code|auth(?:entication)?\s*code|login\s*code|confirm(?:ation)?\s*code|access\s*code|one-time\s*(?:passcode|password|code)|passcode|otp|2fa)"""
+
+    /**
+     * 强特征前置匹配的连接片段。重复次数设上限是为封顶回溯深度:
+     * 无界量词在数千连续分隔符上会触发 StackOverflowError。
+     */
+    private const val CODE_SEPARATOR_FRAGMENT =
+        """(?:\s+(?:is|was|be)|\s*[为是]|\s*[:：,\-，【\[\(（〔\)\]】]){0,8}"""
+
+    /** 强特征前置匹配: 关键字紧跟验证码 (如 "验证码为: 123456", "OTP: 883920") */
+    private val PREFIX_CODE_REGEX = Regex(
+        """(?i)(?<![0-9A-Za-z])$PREFIX_KEYWORD_FRAGMENT(?![0-9A-Za-z])$CODE_SEPARATOR_FRAGMENT\s*([0-9a-zA-Z]{4,8})(?![0-9a-zA-Z])"""
+    )
+
+    /** 强特征后置匹配: 验证码在关键字前面 (如 "123456 为您的登录验证码") */
+    private val SUFFIX_CODE_REGEX = Regex(
+        """(?<![0-9a-zA-Z])([0-9a-zA-Z]{4,8})\s*(?:(?:为|是|，|,)\s*){0,16}[（\(]?(?:您的|本次|您本次)?(?:短信)?(?:登录|注册|支付|动态|身份)?$PREFIX_KEYWORD_FRAGMENT"""
+    )
+
+    /** 括号/特殊符号包裹的 4~8 位纯数字 (如 "【123456】") */
+    private val BRACKET_CODE_REGEX = Regex("""[【\[〔（(]([0-9]{4,8})[】\]〕）)]""")
+
+    /** 候选数字提取(排除版本号/路径/时间/尾号等邻接噪声) */
+    private val ALL_NUMBERS_REGEX = Regex("""(?<![\d._\-/\\a-zA-Z])(\d{4,8})(?![\d._\-/\\a-zA-Z])""")
+
+    /** 编程代码/路径判定所用的 URL 剔除正则 */
+    private val URL_SCRUB_REGEX = Regex("""(?i)\bhttps?://\S+""")
+
+    /** 编程代码特征正则集 */
+    private val PROGRAMMING_CODE_PATTERNS = listOf(
+        Regex("""(?i)::"""), // C++ / Rust / PowerShell 作用域解析符
+        Regex("""(?i)\b(?:const|let|var|val|fun|def|function|class|import|package|namespace|public|private|protected)\b"""),
+        Regex("""(?i)\b(?:System\.Environment|SetEnvironmentVariable|console\.log|println|return|SELECT\s+.*FROM)\b"""),
+        Regex("""(?:[\\/][a-zA-Z0-9_.-]+){2,}[\\/]?"""), // 多层文件路径(至少两级目录)
+        Regex("""(?i)\b[a-zA-Z]:[\\/]"""), // Windows 盘符路径, 如 C:\
+        Regex("""(?i)\.(?:exe|dll|apk|jar|sh|bat|ps1|py|kt|java|js|ts|cpp|rs|json|xml|yaml|yml)\b"""),
+        Regex("""[{}\[\];=]{3,}""") // 密集代码符号
+    )
+
+    private val URL_REGEX = Regex("(https?://[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+)", RegexOption.IGNORE_CASE)
+    private val PHONE_REGEX = Regex("(?:\\+?86)?(1[3-9]\\d{9})|\\b(\\d{3,4}-\\d{7,8})\\b")
+    private val EMAIL_REGEX = Regex("""(?i)\b([a-zA-Z0-9_.+-]+@([a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+))\b""")
+    private val DOMAIN_LABEL_REGEX = Regex("^[a-zA-Z0-9-]+$")
+    private val EXPRESS_SF_REGEX = Regex("SF\\d{13}", RegexOption.IGNORE_CASE)
+    private val EXPRESS_COMMON_REGEX = Regex("(?:单号|快递)[:：\\s]*([a-zA-Z0-9]{10,24})")
+    private val COLOR_HEX_REGEX = Regex("^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+
     /**
      * 应用变体定义模型 (标准版、极速版、概念版、HD版等)
      */
@@ -114,27 +199,153 @@ object SmartActionEngine {
     )
 
     /**
+     * 包名 → 是否已安装 的进程级缓存。
+     *
+     * [findInstalledVariants] 位于「记录列表逐卡片组合」这一热路径上: 每条含链接/口令的记录
+     * 都会枚举其应用族系的全部变体, 而每次 getPackageInfo 都是一次 PackageManager 跨进程
+     * 调用。同一次滚动里同一批变体会被重复查询数十次且结果恒定, 故在此缓存。
+     * 安装状态变化由 [invalidatePackageCache] 主动失效(见 SyncApp 的包变更广播)。
+     */
+    private val installedPackageCache = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+    /**
      * 检测设备上已安装的目标应用变体列表
      */
     private fun findInstalledVariants(context: Context, variants: List<AppVariant>): List<AppVariant> {
-        val pm = context.packageManager
-        return variants.filter { v ->
-            runCatching {
-                if (Build.VERSION.SDK_INT >= 33) {
-                    pm.getPackageInfo(v.packageName, PackageManager.PackageInfoFlags.of(0))
-                } else {
-                    pm.getPackageInfo(v.packageName, 0)
-                }
-                true
-            }.getOrDefault(false)
-        }
+        return variants.filter { isPackageInstalled(context, it.packageName) }
+    }
+
+    private fun isPackageInstalled(context: Context, packageName: String): Boolean {
+        installedPackageCache[packageName]?.let { return it }
+        val installed = runCatching {
+            val pm = context.packageManager
+            if (Build.VERSION.SDK_INT >= 33) {
+                pm.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                pm.getPackageInfo(packageName, 0)
+            }
+            true
+        }.getOrDefault(false)
+        installedPackageCache[packageName] = installed
+        return installed
     }
 
     /**
+     * 应用安装/卸载/更新后清空「已安装状态」缓存。
+     * 不做失效会让动作列表长期停留在旧结果(如新装的极速版客户端一直不出现)。
+     */
+    fun invalidatePackageCache() {
+        installedPackageCache.clear()
+        // 计数器参与缓存指纹: 若仅靠缓存 size 判变化, 空缓存时清空前后 size 都是 0,
+        // 指纹不变会导致旧的动作结果被继续命中, 覆盖不了新装的客户端。
+        packageCacheGeneration++
+    }
+
+    /** 安装状态缓存的失效代数(见 [invalidatePackageCache]) */
+    @Volatile
+    private var packageCacheGeneration = 0
+
+    /**
      * 智能识别文本中的操作意图并生成动作列表 (结合用户开关与自定义规则)
+     *
+     * 结果带缓存: 本方法位于记录列表「逐卡片组合」的热路径上, 每次调用要跑约 20 条正则、
+     * 解析一遍自定义规则 JSON 并可能发起 PackageManager 查询。同一条文本在滚动/重组的
+     * 过程中会被反复求值且结果恒定, 因此按「文本 + 设置指纹」缓存。
+     * 设置变更(开关/自定义规则)会自然改变指纹而使旧条目失效, 无需手动清理。
      */
     fun detectActions(context: Context, text: String): List<SmartAction> {
         if (text.isBlank() || text.length > MAX_SCAN_LENGTH) return emptyList()
+
+        val fingerprint = settingsFingerprint(context)
+        val cacheKey = fingerprint + '#' + text.length + '#' + text.hashCode()
+        detectionCache.get(cacheKey)?.let { cached ->
+            // 命中哈希后仍需比对原文: hashCode 碰撞会返回另一条记录的动作(错误链接),
+            // 代价远高于一次字符串比较, 故以原文相等为准。
+            if (cached.text == text) return cached.actions
+        }
+
+        val actions = computeActions(context, text)
+
+        // 仅缓存占位上限内的条目, 避免长会话下无界增长
+        if (text.length <= MAX_CACHEABLE_TEXT_LENGTH) {
+            detectionCache.put(cacheKey, CachedActions(text, actions))
+        }
+        return actions
+    }
+
+    /** 缓存条目: 保留原文以便命中时做精确比对, 避免 hashCode 碰撞返回错误动作 */
+    private class CachedActions(val text: String, val actions: List<SmartAction>)
+
+    /**
+     * 文本级缓存上限。记录文本最多可到 500k, 但可缓存的只取较短者:
+     * 长文本本身已超出真实剪贴板场景, 缓存它们只会白占内存。
+     */
+    private const val MAX_CACHEABLE_TEXT_LENGTH = 4096
+
+    /** 动作识别结果缓存(键内已含设置指纹与文本哈希) */
+    private val detectionCache = android.util.LruCache<String, CachedActions>(64)
+
+    /** 自定义规则正则缓存(键为模式串) */
+    private val ruleRegexCache = android.util.LruCache<String, Regex>(32)
+
+    /** 取(并缓存)自定义规则的正则; 非法模式返回 null 由调用方 runCatching 语义承接 */
+    private fun compiledRuleRegex(pattern: String): Regex {
+        ruleRegexCache.get(pattern)?.let { return it }
+        val regex = Regex(pattern, RegexOption.IGNORE_CASE)
+        ruleRegexCache.put(pattern, regex)
+        return regex
+    }
+
+    /**
+     * 缓存 `SharedPreferences` 句柄。
+     *
+     * 指纹在每次 [detectActions] 调用时都要读一遍设置, 而 `Context.getSharedPreferences`
+     * 内部是加锁的名字查表。同一进程内同名 prefs 恒为同一实例, 故缓存句柄以避免在
+     * 「逐卡片组合」的循环里反复加锁。
+     */
+    @Volatile
+    private var prefsHolder: android.content.SharedPreferences? = null
+
+    private fun cachedPrefs(context: Context): android.content.SharedPreferences {
+        prefsHolder?.let { return it }
+        return SyncSettings.prefs(context.applicationContext).also { prefsHolder = it }
+    }
+
+    /**
+     * 计算当前智能动作相关设置与安装状态的指纹。
+     *
+     * 之所以用指纹而不是监听设置变更: 设置写入分散在 SyncSettings 的多个 setter 中,
+     * 逐个挂钩既易漏又引入耦合; 而读取内存态的 SharedPreferences 是廉价的,
+     * 相较命中缓存所省下的正则与 IPC 开销可以忽略。
+     */
+    private fun settingsFingerprint(context: Context): String {
+        val prefs = cachedPrefs(context)
+        return buildString(64) {
+            append(prefs.getBoolean(SyncSettings.KEY_SMART_ACTION_MASTER, true)).append('|')
+            for (key in SMART_ACTION_TYPE_KEYS) {
+                append(prefs.getBoolean(key, true)).append('|')
+            }
+            // 自定义规则原文即为指纹, 规则增删改都会改变它, 无需解析 JSON
+            append(prefs.getString(SyncSettings.KEY_SMART_ACTION_CUSTOM_RULES, "") ?: "")
+            append('|')
+            // 安装状态变化(如新装极速版客户端)也要让缓存失效
+            append(packageCacheGeneration)
+        }
+    }
+
+    private val SMART_ACTION_TYPE_KEYS = arrayOf(
+        SyncSettings.KEY_SMART_ACTION_CODE,
+        SyncSettings.KEY_SMART_ACTION_DEEPLINK,
+        SyncSettings.KEY_SMART_ACTION_URL,
+        SyncSettings.KEY_SMART_ACTION_COMMAND,
+        SyncSettings.KEY_SMART_ACTION_PHONE,
+        SyncSettings.KEY_SMART_ACTION_EMAIL,
+        SyncSettings.KEY_SMART_ACTION_EXPRESS,
+        SyncSettings.KEY_SMART_ACTION_COLOR,
+        SyncSettings.KEY_SMART_ACTION_MAP
+    )
+
+    private fun computeActions(context: Context, text: String): List<SmartAction> {
         if (!SyncSettings.isSmartActionMasterEnabled(context)) return emptyList()
 
         val actions = mutableListOf<SmartAction>()
@@ -344,7 +555,9 @@ object SmartActionEngine {
         val customRules = runCatching { SyncSettings.customSmartActionRules(context) }.getOrDefault(emptyList())
         for (rule in customRules) {
             if (!rule.enabled || rule.pattern.isBlank()) continue
-            val matchResult = runCatching { Regex(rule.pattern, RegexOption.IGNORE_CASE).find(trimmed) }.getOrNull()
+            // 规则正则在热路径上按条重复编译, 且用户规则通常只有少数几条却会被每条记录各编译一次;
+            // 按模式串缓存编译结果。模式串变更(用户改规则)会产生新键, 旧键由 LRU 自然淘汰。
+            val matchResult = runCatching { compiledRuleRegex(rule.pattern).find(trimmed) }.getOrNull()
             if (matchResult != null) {
                 val matchedValue = matchResult.value
                 val group1 = matchResult.groupValues.getOrNull(1) ?: matchedValue
@@ -796,17 +1009,8 @@ object SmartActionEngine {
     private fun isLikelyProgrammingCode(text: String): Boolean {
         // URL 不是编程代码: 其中的 "https://host.tld/" 会被下面的路径规则命中(域名恰好呈现为
         // 斜杠包裹的片段), 而短信常同时携带验证码与链接, 若不剔除会整条跳过提取。故先移除 URL。
-        val scrubbed = text.replace(Regex("""(?i)\bhttps?://\S+"""), " ")
-        val codePatterns = listOf(
-            Regex("""(?i)::"""), // C++ / Rust / PowerShell 作用域解析符
-            Regex("""(?i)\b(?:const|let|var|val|fun|def|function|class|import|package|namespace|public|private|protected)\b"""),
-            Regex("""(?i)\b(?:System\.Environment|SetEnvironmentVariable|console\.log|println|return|SELECT\s+.*FROM)\b"""),
-            Regex("""(?:[\\/][a-zA-Z0-9_.-]+){2,}[\\/]?"""), // 多层文件路径(至少两级目录)
-            Regex("""(?i)\b[a-zA-Z]:[\\/]"""), // Windows 盘符路径, 如 C:\
-            Regex("""(?i)\.(?:exe|dll|apk|jar|sh|bat|ps1|py|kt|java|js|ts|cpp|rs|json|xml|yaml|yml)\b"""),
-            Regex("""[{}\[\];=]{3,}""") // 密集代码符号
-        )
-        return codePatterns.any { it.containsMatchIn(scrubbed) }
+        val scrubbed = text.replace(URL_SCRUB_REGEX, " ")
+        return PROGRAMMING_CODE_PATTERNS.any { it.containsMatchIn(scrubbed) }
     }
 
     /**
@@ -823,35 +1027,15 @@ object SmartActionEngine {
         // 整段文本只有一个 4~8 位数字串时不存在周边上下文, isValidCodeCandidate 的判定
         // (前缀/后缀上下文、边界字符)全部无法生效, 编程代码防御对此类输入亦恒为 false。
         // 因此该分支不再追加过滤: 单数字串一律视为验证码, 以保住 "123456" 这类只含验证码的短信。
-        val pureCodeRegex = Regex("^(?:G-)?([0-9]{4,8})$", RegexOption.IGNORE_CASE)
-        pureCodeRegex.find(trimmed)?.groupValues?.getOrNull(1)?.let { return it }
+        PURE_CODE_REGEX.find(trimmed)?.groupValues?.getOrNull(1)?.let { return it }
 
         // 关键防御: 若内容属于明显的编程代码/脚本命令/文件路径，直接跳过，杜绝误识别
         if (isLikelyProgrammingCode(text)) return null
 
         // 1. Google 专属验证码格式 (G-123456 / G - 123456)
-        val googleRegex = Regex("""(?i)\b(?:G\s*-\s*)([0-9]{6})\b""")
-        googleRegex.find(text)?.groupValues?.getOrNull(1)?.let { return it }
+        GOOGLE_CODE_REGEX.find(text)?.groupValues?.getOrNull(1)?.let { return it }
 
-        val codeKeywordPatterns = listOf(
-            Regex("""验证码"""),
-            Regex("""动态码"""),
-            Regex("""校验码"""),
-            Regex("""安全码"""),
-            Regex("""确认码"""),
-            Regex("""动态密码"""),
-            Regex("""授权码"""),
-            Regex("""随机码"""),
-            Regex("""短信验证码"""),
-            Regex("""(?i)\bverification\s*code\b"""),
-            Regex("""(?i)\bsecurity\s*code\b"""),
-            Regex("""(?i)\bauth(?:entication)?\s*code\b"""),
-            Regex("""(?i)\b(?:login|confirm(?:ation)?|access|pin)\s*code\b"""),
-            Regex("""(?i)\bone-time\s*(?:passcode|password|code)\b"""),
-            Regex("""(?i)\bpasscode\b"""),
-            Regex("""(?i)\botp\b"""),
-            Regex("""(?i)\b2fa\b""")
-        )
+        val codeKeywordPatterns = CODE_KEYWORD_PATTERNS
 
         val hasCodeKeyword = codeKeywordPatterns.any { it.containsMatchIn(text) }
         if (!hasCodeKeyword) return null
@@ -861,11 +1045,7 @@ object SmartActionEngine {
         // 汉字与汉字之间不存在单词边界, 故 \b验证码\b 对中文文本永不匹配 —— 而中文短信正是主要场景。
         // 分隔符里同时收 为/是 的无空格写法 (如 "验证码为550875"), 这是中文短信最常见的形式。
         // 重复次数设上限是为封顶回溯深度: 无界量词在数千连续分隔符上会触发 StackOverflowError。
-        val prefixKw = """(?:验证码|动态码|校验码|安全码|确认码|动态密码|授权码|随机码|短信验证码|verification\s*code|security\s*code|auth(?:entication)?\s*code|login\s*code|confirm(?:ation)?\s*code|access\s*code|one-time\s*(?:passcode|password|code)|passcode|otp|2fa)"""
-        val separator = """(?:\s+(?:is|was|be)|\s*[为是]|\s*[:：,\-，【\[\(（〔\)\]】]){0,8}"""
-        val prefixRegex = Regex(
-            """(?i)(?<![0-9A-Za-z])$prefixKw(?![0-9A-Za-z])$separator\s*([0-9a-zA-Z]{4,8})(?![0-9a-zA-Z])"""
-        )
+        val prefixRegex = PREFIX_CODE_REGEX
         for (match in prefixRegex.findAll(text)) {
             val candidate = match.groupValues.getOrNull(1) ?: continue
             val start = match.range.first + match.value.lastIndexOf(candidate)
@@ -877,9 +1057,7 @@ object SmartActionEngine {
 
         // 3. 强特征后置匹配: 验证码在关键字前面 (如: "123456 为您的登录验证码", "9527 是本次动态码")
         // 同上, 连接词组的重复次数设上限以封顶回溯深度; 上限同样远高于真实短信用量。
-        val suffixRegex = Regex(
-            """(?<![0-9a-zA-Z])([0-9a-zA-Z]{4,8})\s*(?:(?:为|是|，|,)\s*){0,16}[（\(]?(?:您的|本次|您本次)?(?:短信)?(?:登录|注册|支付|动态|身份)?$prefixKw"""
-        )
+        val suffixRegex = SUFFIX_CODE_REGEX
         for (match in suffixRegex.findAll(text)) {
             val candidate = match.groupValues.getOrNull(1) ?: continue
             val start = match.range.first
@@ -890,7 +1068,7 @@ object SmartActionEngine {
         }
 
         // 4. 括号/特殊符号包裹的 4~8 位纯数字 (如 "【123456】", "[892014]")
-        val bracketRegex = Regex("""[【\[〔（(]([0-9]{4,8})[】\]〕）)]""")
+        val bracketRegex = BRACKET_CODE_REGEX
         for (match in bracketRegex.findAll(text)) {
             val candidate = match.groupValues.getOrNull(1) ?: continue
             val start = match.range.first + 1
@@ -901,7 +1079,7 @@ object SmartActionEngine {
         }
 
         // 5. 候选数字距离加权提取 (排除版本号/路径/时间/尾号后，选取与"验证码"关键字距离最近的纯数字)
-        val allNumbersRegex = Regex("""(?<![\d._\-/\\a-zA-Z])(\d{4,8})(?![\d._\-/\\a-zA-Z])""")
+        val allNumbersRegex = ALL_NUMBERS_REGEX
         val matches = allNumbersRegex.findAll(text).toList()
         if (matches.isEmpty()) return null
 
@@ -1010,23 +1188,20 @@ object SmartActionEngine {
     }
 
     private fun extractUrls(text: String): List<String> {
-        val regex = Regex("(https?://[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+)", RegexOption.IGNORE_CASE)
-        return regex.findAll(text).map { it.value }.distinct().toList()
+        return URL_REGEX.findAll(text).map { it.value }.distinct().toList()
     }
 
     private fun extractPhones(text: String): List<String> {
-        val regex = Regex("(?:\\+?86)?(1[3-9]\\d{9})|\\b(\\d{3,4}-\\d{7,8})\\b")
-        return regex.findAll(text).map { it.value }.distinct().toList()
+        return PHONE_REGEX.findAll(text).map { it.value }.distinct().toList()
     }
 
     /**
      * 内置各大邮箱服务商与教育/科研机构后缀精准识别
      */
     private fun extractEmails(text: String): List<String> {
-        val regex = Regex("""(?i)\b([a-zA-Z0-9_.+-]+@([a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+))\b""")
         val results = mutableListOf<String>()
 
-        for (match in regex.findAll(text)) {
+        for (match in EMAIL_REGEX.findAll(text)) {
             val fullEmail = match.groupValues[1].trim()
             val domain = match.groupValues[2].lowercase().trim('.')
             if (isValidEmailDomain(domain)) {
@@ -1100,7 +1275,7 @@ object SmartActionEngine {
         )
         if (validTlds.contains(tld)) {
             val domainParts = domain.split('.')
-            if (domainParts.all { it.isNotBlank() && it.matches(Regex("^[a-zA-Z0-9-]+$")) && !it.startsWith("-") && !it.endsWith("-") }) {
+            if (domainParts.all { it.isNotBlank() && DOMAIN_LABEL_REGEX.matches(it) && !it.startsWith("-") && !it.endsWith("-") }) {
                 return true
             }
         }
@@ -1112,10 +1287,10 @@ object SmartActionEngine {
         if (!text.contains("快递") && !text.contains("单号") && !text.contains("运单") && !text.startsWith("SF")) {
             return null
         }
-        val sfRegex = Regex("SF\\d{13}", RegexOption.IGNORE_CASE)
+        val sfRegex = EXPRESS_SF_REGEX
         sfRegex.find(text)?.value?.let { return it }
 
-        val commonRegex = Regex("(?:单号|快递)[:：\\s]*([a-zA-Z0-9]{10,24})")
+        val commonRegex = EXPRESS_COMMON_REGEX
         commonRegex.find(text)?.groupValues?.getOrNull(1)?.let { return it }
 
         return null
@@ -1123,7 +1298,7 @@ object SmartActionEngine {
 
     private fun extractColorHex(text: String): String? {
         val trimmed = text.trim()
-        val hexRegex = Regex("^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+        val hexRegex = COLOR_HEX_REGEX
         if (hexRegex.matches(trimmed)) return trimmed
         return null
     }

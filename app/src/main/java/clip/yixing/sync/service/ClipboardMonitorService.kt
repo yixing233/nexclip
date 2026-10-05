@@ -118,6 +118,9 @@ class ClipboardMonitorService : Service() {
         isRunning.value = false
         isServerConnected.value = false
         serverConnectionState.value = ServerConnectionState.DISCONNECTED
+        // 落盘已改到后台单线程执行, 服务销毁时把队列里待写的记录排空,
+        // 否则刚捕获的最后一条可能随进程回收一起丢失。
+        flushPendingPersist()
         super.onDestroy()
     }
 
@@ -463,14 +466,35 @@ class ClipboardMonitorService : Service() {
         @Volatile
         var isApplyingRemote: Boolean = false
 
+        /** 十六进制字符表, 供 [toHex] 使用 */
+        private val HEX_CHARS = "0123456789abcdef".toCharArray()
+
+        /**
+         * 字节数组转小写十六进制。
+         *
+         * 原实现用 `joinToString { "%02x".format(it) }`: 每个字节都要走一次 String.format
+         * (即一次 Formatter 构造与解析), 对大文本/大图片的哈希而言开销远超散列本身。
+         * 这里改为查表, 结果与原实现逐字符相同。
+         */
+        private fun toHex(bytes: ByteArray): String {
+            val out = CharArray(bytes.size * 2)
+            var i = 0
+            for (b in bytes) {
+                val v = b.toInt() and 0xFF
+                out[i++] = HEX_CHARS[v ushr 4]
+                out[i++] = HEX_CHARS[v and 0x0F]
+            }
+            return String(out)
+        }
+
         fun sha256(s: String): String {
             val md = java.security.MessageDigest.getInstance("SHA-256")
-            return md.digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
+            return toHex(md.digest(s.toByteArray()))
         }
 
         fun sha256Bytes(bytes: ByteArray): String {
             val md = java.security.MessageDigest.getInstance("SHA-256")
-            return md.digest(bytes).joinToString("") { "%02x".format(it) }
+            return toHex(md.digest(bytes))
         }
 
         fun registerInternalCopy(text: String?, imageRef: String? = null) {
@@ -710,6 +734,9 @@ class ClipboardMonitorService : Service() {
 
         /** 启动时恢复本地记录 */
         fun loadCaptured(context: Context) {
+            // 落盘已改到后台线程, 读取前必须先把队列排空: 否则可能读到尚未写入的旧快照,
+            // 再用它覆盖内存里更新的记录(原同步落盘不存在这个窗口)。
+            flushPendingPersist()
             val raw = context.getSharedPreferences(PREFS_CAPTURED, Context.MODE_PRIVATE)
                 .getString("clips", null) ?: return
             val list = mutableListOf<CapturedClip>()
@@ -736,11 +763,39 @@ class ClipboardMonitorService : Service() {
         }
 
         /**
+         * 落盘用的单线程执行器。
+         *
+         * 必须串行: [persist] 每次都整体覆盖写同一条 key, 若并发执行, 后入队的旧快照可能
+         * 覆盖先入队的新快照, 导致磁盘内容回退。单线程天然保证 FIFO。
+         */
+        private val persistExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "NexClip-Persist").apply { isDaemon = true }
+        }
+
+        /**
+         * 等待已排队的落盘任务全部完成。
+         *
+         * 仅在进程即将结束的路径上调用(服务销毁)。加超时是因为: 若落盘线程卡在磁盘 IO,
+         * onDestroy 绝不能一起卡住 —— 那样会触发 ANR, 比丢一条记录严重得多。
+         */
+        fun flushPendingPersist() {
+            runCatching {
+                val latch = java.util.concurrent.CountDownLatch(1)
+                persistExecutor.execute { latch.countDown() }
+                latch.await(2, java.util.concurrent.TimeUnit.SECONDS)
+            }
+        }
+
+        /**
          * 落盘并返回真正被保存下来的列表(已按「记录上限」裁剪、去重、按时间倒序)。
          *
          * 调用方必须用返回值回写 [captured],否则内存里的列表会比磁盘上的长
          * (例如上限 100 时内存停在 101),重启后又突然变短,并导致记录页触底分页
          * 永远差最后一条而一直显示"正在加载更多"。
+         *
+         * 裁剪与返回值同步完成(内存态必须立即可见, 否则界面会闪回旧列表); 而 JSON
+         * 序列化与写入挪到后台线程 —— 本方法在剪贴板捕获路径上由主线程调用, 每次都要
+         * 序列化最多 200 条记录, 是主线程上最大的一笔同步开销。
          */
         private fun persist(context: Context, list: List<CapturedClip>): List<CapturedClip> {
             val maxHistory = SyncSettings.maxHistory(context)
@@ -748,23 +803,29 @@ class ClipboardMonitorService : Service() {
             val nonFavorites = list.filterNot { it.isFavorite }.take(maxHistory)
             val toSave = (favorites + nonFavorites).distinctBy { it.id }.sortedByDescending { it.time }
 
-            val arr = JSONArray()
-            toSave.forEach { c ->
-                arr.put(
-                    JSONObject().apply {
-                        put("t", c.text)
-                        put("m", c.time)
-                        put("fav", c.isFavorite)
-                        if (c.imageRef != null) put("img", c.imageRef)
-                        if (c.sourceDevice != null) put("src", c.sourceDevice)
-                        if (c.sourcePackage != null) put("pkg", c.sourcePackage)
-                        if (c.sourceApp != null) put("app", c.sourceApp)
-                        put("man", c.isManual)
+            val appContext = context.applicationContext
+            persistExecutor.execute {
+                runCatching {
+                    val arr = JSONArray()
+                    toSave.forEach { c ->
+                        arr.put(
+                            JSONObject().apply {
+                                put("t", c.text)
+                                put("m", c.time)
+                                put("fav", c.isFavorite)
+                                if (c.imageRef != null) put("img", c.imageRef)
+                                if (c.sourceDevice != null) put("src", c.sourceDevice)
+                                if (c.sourcePackage != null) put("pkg", c.sourcePackage)
+                                if (c.sourceApp != null) put("app", c.sourceApp)
+                                put("man", c.isManual)
+                            }
+                        )
                     }
-                )
+                    val json = arr.toString()
+                    appContext.getSharedPreferences(PREFS_CAPTURED, Context.MODE_PRIVATE)
+                        .edit().putString("clips", json).apply()
+                }
             }
-            context.getSharedPreferences(PREFS_CAPTURED, Context.MODE_PRIVATE)
-                .edit().putString("clips", arr.toString()).apply()
             return toSave
         }
 
