@@ -38,7 +38,10 @@ class PushClient(
         val hubUrl = serverUrl.trimEnd('/') + "/hubs/clipboard?deviceId=" +
             java.net.URLEncoder.encode(deviceId, "UTF-8") + "&deviceToken=" +
             java.net.URLEncoder.encode(deviceToken, "UTF-8")
-        val conn = HubConnectionBuilder.create(hubUrl).build()
+        val conn = HubConnectionBuilder.create(hubUrl)
+            // 直连服务端:忽略系统/Wi-Fi 代理,避免代理转发内网地址导致连不上
+            .setHttpClientBuilderCallback { b -> b.proxy(java.net.Proxy.NO_PROXY) }
+            .build()
         connection = conn
         conn.on("ClipboardUpdated", { raw ->
             // Class<T> 重载:回调直接收到反序列化后的条目对象(LinkedHashMap)

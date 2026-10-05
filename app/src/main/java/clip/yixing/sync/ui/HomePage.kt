@@ -70,6 +70,7 @@ import clip.yixing.sync.util.CaptureMethod
 import clip.yixing.sync.util.ClipboardTest
 import clip.yixing.sync.util.ImageLoader
 import clip.yixing.sync.util.SyncSettings
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -329,6 +330,8 @@ internal fun HomePage(
                                         }
                                     }
                                     snackbarHostState?.showAppSnack("已推送至所有设备", SnackType.Success)
+                                } catch (e: CancellationException) {
+                                    throw e
                                 } catch (e: Exception) {
                                     snackbarHostState?.showAppSnack(e.message ?: "推送失败", SnackType.Error)
                                 } finally {

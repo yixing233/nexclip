@@ -192,9 +192,11 @@ internal fun SettingsPage(
     var currentSubPage by remember { mutableStateOf<SettingsSubPage?>(null) }
     var displayedSubPage by remember { mutableStateOf<SettingsSubPage?>(null) }
     var parentSubPage by remember { mutableStateOf<SettingsSubPage?>(null) }
+    var isReturningToParent by remember { mutableStateOf(false) }
     val subPageAnimProgress = remember { Animatable(1f) } // 0f: 完全展开展示, 1f: 退出到屏幕右侧
 
     fun openSubPage(page: SettingsSubPage) {
+        isReturningToParent = false
         parentSubPage = currentSubPage
         displayedSubPage = page
         currentSubPage = page
@@ -205,9 +207,10 @@ internal fun SettingsPage(
     }
 
     fun closeSubPage() {
+        val returnPage = parentSubPage
+        isReturningToParent = returnPage != null
         scope.launch {
             subPageAnimProgress.animateTo(1f, animationSpec = tween(240, easing = FastOutSlowInEasing))
-            val returnPage = parentSubPage
             currentSubPage = returnPage
             parentSubPage = null
             if (returnPage != null) {
@@ -217,6 +220,7 @@ internal fun SettingsPage(
             } else {
                 displayedSubPage = null
             }
+            isReturningToParent = false
         }
     }
 
@@ -329,6 +333,7 @@ internal fun SettingsPage(
             closeSubPage()
             return@PredictiveBackHandler
         }
+        isReturningToParent = parentSubPage != null
         try {
             progress.collect { event ->
                 val p = FastOutSlowInEasing.transform(SyncSettings.mapPredictiveBackProgress(context, event.progress))
@@ -346,9 +351,11 @@ internal fun SettingsPage(
             } else {
                 displayedSubPage = null
             }
+            isReturningToParent = false
         } catch (e: CancellationException) {
             // 用户取消手势（滑回边缘）：从当前位置平滑弹回复原
             subPageAnimProgress.animateTo(0f, animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
+            isReturningToParent = false
         }
     }
 
@@ -374,6 +381,8 @@ internal fun SettingsPage(
         try {
             val api = SyncApi(serverUrl, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
             devices = withContext(Dispatchers.IO) { api.getDevices() }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             devicesError = e.message ?: "加载失败"
             if (e is ApiException && (e.statusCode == 401 || e.statusCode == 403 || e.statusCode == 410)) {
@@ -409,6 +418,8 @@ internal fun SettingsPage(
                         val api = SyncApi(serverUrl, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
                         val list = withContext(Dispatchers.IO) { api.getDevices() }
                         devices = list
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         if (e is ApiException && (e.statusCode == 401 || e.statusCode == 403 || e.statusCode == 410)) {
                             SyncSettings.clearPairing(context)
@@ -436,6 +447,8 @@ internal fun SettingsPage(
                         val api = SyncApi(serverUrl, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
                         val list = withContext(Dispatchers.IO) { api.getDevices() }
                         devices = list
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         if (e is ApiException && (e.statusCode == 401 || e.statusCode == 403 || e.statusCode == 410)) {
                             SyncSettings.clearPairing(context)
@@ -485,6 +498,8 @@ internal fun SettingsPage(
                         }
                     }
                     snackbarHostState.showAppSnack("备份已成功导出", SnackType.Success)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     snackbarHostState.showAppSnack("导出失败: ${e.message}", SnackType.Error)
                 }
@@ -509,6 +524,8 @@ internal fun SettingsPage(
                         ClipboardMonitorService.importBackup(context, content)
                     }
                     snackbarHostState.showAppSnack("成功导入 $count 条记录", SnackType.Success)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     snackbarHostState.showAppSnack("导入失败: ${e.message}", SnackType.Error)
                 }
@@ -593,13 +610,19 @@ internal fun SettingsPage(
     // 二级子页面全屏滑入时通知底栏收起避让（对话框和气泡卡片不隐藏底栏，由系统 Window 遮罩自然覆盖）
     LaunchedEffect(currentSubPage) {
         onOverlayActiveChanged(currentSubPage != null)
+        if (currentSubPage == SettingsSubPage.Permissions) {
+            // 进入权限页时主动刷新，避免页面停留期间授权被撤销后仍显示旧状态。
+            ShizukuClipboardManager.init(context)
+            ShizukuClipboardManager.updateStatus(context)
+        }
     }
 
     val screenCornerRadius = rememberScreenCornerRadius()
 
     Box(modifier = Modifier.fillMaxSize()) {
         // ---- 1. 底层：一级设置主页 ----
-        val baseProgress = subPageAnimProgress.value // 0f: 二级页打开时底层下沉, 1f: 二级页关闭时底层复原
+        // 返回三级页时保持一级页面下沉，避免当前页移出后一级页面先闪现，再切换到二级页。
+        val baseProgress = if (isReturningToParent) 0f else subPageAnimProgress.value // 0f: 底层下沉, 1f: 底层复原
         Box(
             modifier = Modifier
                 .fillMaxSize()

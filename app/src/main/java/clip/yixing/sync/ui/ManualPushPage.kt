@@ -86,6 +86,7 @@ import clip.yixing.sync.service.ClipboardMonitorService
 import clip.yixing.sync.showAppSnack
 import clip.yixing.sync.util.ImageLoader
 import clip.yixing.sync.util.SyncSettings
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -189,6 +190,8 @@ fun ManualPushPage(
                     } else {
                         snackbarHostState?.showAppSnack("无法读取选中的图片", SnackType.Error)
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     snackbarHostState?.showAppSnack("图片加载失败: ${e.message}", SnackType.Error)
                 }
@@ -220,6 +223,8 @@ fun ManualPushPage(
                 // 默认仅全选在线设备；若无设备在线则保持为空，绝不默认勾选离线设备
                 val onlineIds = others.filter { it.online }.map { it.id }.toSet()
                 selectedDeviceIds = onlineIds
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 android.util.Log.e("NexClip", "ManualPushPage refreshDevices error", e)
             }
@@ -305,6 +310,8 @@ fun ManualPushPage(
                             }
                         }
                         snackbarHostState?.showAppSnack("已成功送达至 $targetSummary", SnackType.Success)
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         snackbarHostState?.showAppSnack("网络推送失败: ${e.message ?: "网络异常"}", SnackType.Error)
                     } finally {
@@ -484,6 +491,8 @@ fun ManualPushPage(
                                         try {
                                             refreshDevices()
                                             snackbarHostState?.showAppSnack("在线设备列表已刷新", SnackType.Success)
+                                        } catch (e: CancellationException) {
+                                            throw e
                                         } catch (e: Exception) {
                                             snackbarHostState?.showAppSnack("刷新失败: ${e.message}", SnackType.Error)
                                         }

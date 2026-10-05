@@ -91,6 +91,7 @@ import clip.yixing.sync.util.SyncSettings
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -451,6 +452,8 @@ fun QrScanPage(
                                                 snackbarHostState?.showAppSnack("配对成功！已连接到服务", SnackType.Success)
                                                 pendingResult = null
                                                 onPairSuccess()
+                                            } catch (e: CancellationException) {
+                                                throw e
                                             } catch (e: Exception) {
                                                 snackbarHostState?.showAppSnack("配对失败: ${e.message}", SnackType.Error)
                                             } finally {

@@ -39,6 +39,7 @@ import clip.yixing.sync.SnackType
 import clip.yixing.sync.showAppSnack
 import clip.yixing.sync.util.UpdateChecker
 import clip.yixing.sync.util.UpdateInfo
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
@@ -130,6 +131,7 @@ fun AppUpdateDialog(
                     // 自动唤起系统安装器
                     launchInstaller(apk)
                 }.onFailure { ex ->
+                    if (ex is CancellationException) throw ex
                     downloadError = ex.message
                     snackbarHostState?.showAppSnack("下载失败: ${ex.message}", SnackType.Error)
                 }

@@ -1136,6 +1136,8 @@ internal fun RecordsPage(
                                         }
                                     }
                                     snackbarHostState.showAppSnack("已批量推送 $count 条记录", SnackType.Success)
+                                } catch (e: CancellationException) {
+                                    throw e
                                 } catch (e: Exception) {
                                     snackbarHostState.showAppSnack(e.message ?: "推送失败", SnackType.Error)
                                 }
@@ -1274,6 +1276,8 @@ internal fun RecordsPage(
                                         }
                                     }
                                     snackbarHostState.showAppSnack(if (detailClip.isImage) "已推送图片到所有设备" else "已推送到所有设备", SnackType.Success)
+                                } catch (e: CancellationException) {
+                                    throw e
                                 } catch (e: Exception) {
                                     snackbarHostState.showAppSnack(e.message ?: "推送失败", SnackType.Error)
                                 }
@@ -1296,6 +1300,8 @@ internal fun RecordsPage(
                                         )
                                     }
                                     snackbarHostState.showAppSnack("已推送选中文本到所有设备", SnackType.Success)
+                                } catch (e: CancellationException) {
+                                    throw e
                                 } catch (e: Exception) {
                                     snackbarHostState.showAppSnack(e.message ?: "推送失败", SnackType.Error)
                                 }

@@ -50,6 +50,7 @@ class SyncApi(
     private val authDeviceToken: String = "",
 ) {
     private val client = OkHttpClient.Builder()
+        .proxy(java.net.Proxy.NO_PROXY)
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()

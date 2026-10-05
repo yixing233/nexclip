@@ -6,7 +6,9 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -261,6 +263,7 @@ object UpdateChecker {
         onProgress: (bytesRead: Long, totalBytes: Long, percentage: Float, speed: String) -> Unit
     ): Result<File> = withContext(Dispatchers.IO) {
         runCatching {
+            ensureActive()
             val updateDir = File(context.getExternalFilesDir(null) ?: context.filesDir, "updates")
             if (!updateDir.exists()) updateDir.mkdirs()
             val finalApk = File(updateDir, "NexClip_v${latestVersion}_Android.apk")
@@ -306,6 +309,8 @@ object UpdateChecker {
                         if (read == -1) break
                         output.write(buffer, 0, read)
                         bytesReadTotal += read
+
+                        ensureActive()
 
                         val now = System.currentTimeMillis()
                         if (now - lastReportTime >= 250 || (totalBytes > 0 && bytesReadTotal == totalBytes)) {
