@@ -39,6 +39,16 @@ public sealed class PushClient : IAsyncDisposable
     /// 连接推送通道。serverUrl 必填;deviceId/deviceName/platform/version 用于服务端设备登记
     /// (node 服务端从 WebSocket URL 参数识别设备并更新平台信息)。
     /// deviceToken 为服务端签发的设备令牌，缺失或被撤销时服务端拒绝连接。
+    ///
+    /// 凭证传输方式(重要):deviceToken 走 <b>请求头</b> X-Device-Token,不再拼进 URL。
+    /// 原因:URL 会进 nginx/反代的 access log、浏览器历史、Referer 与各类网络抓包记录,
+    /// 而这里传的是长期有效的设备令牌,一旦落进任何一份日志就等于永久泄露。
+    /// 实测 .NET SignalR 客户端在 WebSocket 与 negotiate(POST) 两条路径上都会带上
+    /// WithUrl 配置里的 Headers,服务端 (server.ts) 的 negotiate 与 upgrade 也都支持
+    /// 从 X-Device-Id / X-Device-Token 头读取,因此无需降级到 query。
+    ///
+    /// 保留 query 传递的只剩非敏感的登记信息(deviceId/deviceName/platform/version),
+    /// 它们本身不构成凭证。
     /// </summary>
     public async Task ConnectAsync(
         string serverUrl, string? deviceId = null, string? deviceName = null,
@@ -50,10 +60,6 @@ public sealed class PushClient : IAsyncDisposable
         if (!string.IsNullOrWhiteSpace(deviceId))
         {
             var qs = new List<string> { "deviceId=" + Uri.EscapeDataString(deviceId) };
-            if (!string.IsNullOrWhiteSpace(deviceToken))
-            {
-                qs.Add("deviceToken=" + Uri.EscapeDataString(deviceToken));
-            }
             if (!string.IsNullOrWhiteSpace(deviceName))
             {
                 qs.Add("deviceName=" + Uri.EscapeDataString(deviceName));
@@ -70,7 +76,18 @@ public sealed class PushClient : IAsyncDisposable
             endpoint = ub.Uri;
         }
         var builder = new HubConnectionBuilder()
-            .WithUrl(endpoint)
+            .WithUrl(endpoint, options =>
+            {
+                // 设备令牌走请求头,避免出现在 URL / 反代日志里(见上方说明)
+                if (!string.IsNullOrWhiteSpace(deviceToken))
+                {
+                    options.Headers["X-Device-Token"] = deviceToken;
+                }
+                if (!string.IsNullOrWhiteSpace(deviceId))
+                {
+                    options.Headers["X-Device-Id"] = deviceId;
+                }
+            })
             .WithAutomaticReconnect(new DeviceAuthRetryPolicy(ReconnectDelays));
         var hub = builder.Build();
         hub.KeepAliveInterval = TimeSpan.FromSeconds(10);
