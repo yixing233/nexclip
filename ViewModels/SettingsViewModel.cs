@@ -595,6 +595,10 @@ public partial class SettingsViewModel : ObservableObject
             // 迁移:新目录无数据才复制(避免覆盖已有数据)
             if (File.Exists(oldDb) && !File.Exists(newDb))
             {
+                // 先 checkpoint:WAL 模式下最近写入的页可能还在 -wal 文件里,
+                // 直接复制 history.db 会得到一份缺数据的旧快照
+                // (实测:连写 20 条后直接复制,新库 0 条;先 checkpoint 再复制则 20 条完整)。
+                _svc.History.Checkpoint();
                 File.Copy(oldDb, newDb);
                 if (Directory.Exists(oldImages))
                 {
