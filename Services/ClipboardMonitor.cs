@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.UI.Dispatching;
 using NexClip.Desktop.Models;
@@ -18,14 +18,20 @@ public sealed class ClipboardMonitor
         string Hash,
         SourceAppInfo? SourceApp = null,
         string? Html = null,
-        IReadOnlyList<ClipboardFileInfo>? Files = null);
+        IReadOnlyList<ClipboardFileInfo>? Files = null,
+        /// <summary>剪贴板上确实有位图,但编码后超过同步上限。此时 ImagePng 为空,但仍算一次有效捕获。</summary>
+        bool OversizedImage = false,
+        /// <summary>超限图片的像素尺寸(用于提示文案与本地占位)。</summary>
+        (uint Width, uint Height)? OversizedSize = null);
 
     /// <summary>一次剪贴板读取的完整结果。文件字段为"复制的文件"元数据,不含文件内容。</summary>
     public readonly record struct ClipboardPayload(
         string? Text,
         string? Html,
         byte[]? Image,
-        IReadOnlyList<ClipboardFileInfo>? Files);
+        IReadOnlyList<ClipboardFileInfo>? Files,
+        bool OversizedImage = false,
+        (uint Width, uint Height)? OversizedSize = null);
 
     private readonly DispatcherQueue _dispatcher;
     private readonly SettingsStore _settings;
@@ -40,6 +46,13 @@ public sealed class ClipboardMonitor
     private int _pauseCount;
     private DateTime _pauseUntil = DateTime.MinValue;
     private bool _started;
+
+    /// <summary>上一次记录捕获失败日志的时间(用于同类错误节流)。</summary>
+    private DateTime _lastCaptureFailureLogUtc = DateTime.MinValue;
+    /// <summary>自上次记录日志以来被节流掉的捕获失败次数。</summary>
+    private int _throttledCaptureFailures;
+    /// <summary>同一类捕获失败的最小记录间隔:2 秒轮询下不节流会持续刷屏。</summary>
+    private static readonly TimeSpan CaptureFailureLogInterval = TimeSpan.FromMinutes(5);
     /// <summary>当前捕获阶段(用于诊断与看门狗判断)。</summary>
     private volatile string _captureStage = "idle";
     /// <summary>当前捕获开始时间;无进行中捕获时为 null。</summary>
@@ -278,6 +291,13 @@ public sealed class ClipboardMonitor
                 {
                     hash = HashBytes(image);
                 }
+                else if (payload.OversizedImage)
+                {
+                    // 仅当降采样后仍无法产出预览字节时才走到这里。
+                    // 仍需要一个稳定哈希用于"同一张图重复复制去重置顶":
+                    // 降采样是确定性的,但此时没有字节可用,只能用尺寸作为标识。
+                    hash = HashText($"oversized-image|{payload.OversizedSize?.Width}x{payload.OversizedSize?.Height}");
+                }
                 else if (payload.Files is { Count: > 0 } files)
                 {
                     // 文件条目哈希只基于路径与大小元数据,不对大文件做任何读取
@@ -317,14 +337,34 @@ public sealed class ClipboardMonitor
                     Log.Debug($"已忽略来自远程控制应用的剪贴板内容: {sourceApp?.Name ?? sourceApp?.ProcessName}");
                     return;
                 }
-                await _onCapture(new CapturedClip(payload.Text, payload.Image, hash, sourceApp, payload.Html, payload.Files), ct);
+                await _onCapture(new CapturedClip(
+                    payload.Text, payload.Image, hash, sourceApp, payload.Html, payload.Files,
+                    payload.OversizedImage, payload.OversizedSize), ct);
                 Interlocked.Exchange(ref _lastCaptureSuccessUtcTicks, DateTime.UtcNow.Ticks);
             }
             catch (Exception ex)
             {
                 Interlocked.Increment(ref _captureFailureCount);
                 Interlocked.Exchange(ref _lastCaptureFailureUtcTicks, DateTime.UtcNow.Ticks);
-                Log.Warn($"剪贴板捕获失败(阶段={_captureStage}): {ex.Message}");
+                // 节流:轮询兜底每 2 秒跑一轮,若剪贴板持续处于某种失败状态,
+                // 不节流会以 2 秒一条的速度刷屏(实测出现过连续 6 小时的同一条错误),
+                // 既迅速撑大日志,又掩盖真正的新错误。
+                var nowUtc = DateTime.UtcNow;
+                if (nowUtc - _lastCaptureFailureLogUtc >= CaptureFailureLogInterval)
+                {
+                    var skipped = _throttledCaptureFailures;
+                    _throttledCaptureFailures = 0;
+                    _lastCaptureFailureLogUtc = nowUtc;
+                    // 必须带上类型与 HRESULT:WinRT/剪贴板争用类异常的 Message 经常是空串,
+                    // 只记 Message 会得到"剪贴板捕获失败(阶段=reading): "这种无法定位的日志。
+                    Log.Warn($"剪贴板捕获失败(阶段={_captureStage}): {ex.GetType().Name} " +
+                             $"0x{ex.HResult:X8} {ex.Message}" +
+                             (skipped > 0 ? $"(期间另有 {skipped} 次同类失败已节流)" : ""));
+                }
+                else
+                {
+                    Interlocked.Increment(ref _throttledCaptureFailures);
+                }
             }
             finally
             {
@@ -471,8 +511,13 @@ public sealed class ClipboardMonitor
     /// </summary>
     private async Task<ClipboardPayload> ReadClipboardPayloadAsync(DataPackageView content)
     {
-        var image = await ImageCodec.CaptureClipboardPngAsync(content);
+        var capture = await ImageCodec.CaptureClipboardBitmapAsync(content);
+        var image = capture.Png;
+        var oversized = capture.Oversized;
+        // "有位图"(含超限)与"没有位图"必须分开:只要剪贴板提供了位图格式,
+        // 就不能再退化成文本/文件条目,否则一次截图会被误记成别的类型。
         var hasImage = image is not null && image.LongLength > 0;
+        var hasAnyImage = hasImage || capture.Kind == ImageCodec.BitmapCaptureKind.TooLarge;
 
         string? text = null;
         string? html = null;
@@ -480,7 +525,7 @@ public sealed class ClipboardMonitor
         {
             (text, html) = await ImageCodec.ReadClipboardRichTextAsync(content);
         }
-        else if (!hasImage)
+        else if (!hasAnyImage)
         {
             // 已判定为位图时无需再读文本(与既有行为一致,避免多一次跨进程读取)
             text = await ImageCodec.ReadClipboardTextAsync(content);
@@ -488,9 +533,22 @@ public sealed class ClipboardMonitor
 
         if (hasImage)
         {
+            // 超限图片同样走这里:image 是降采样后的预览字节,本地可正常展示与复制;
+            // oversized 标记会一路传到上传链路,由它跳过同步。
+            if (oversized)
+            {
+                Log.Warn($"剪贴板图片超过同步上限({ImageCodec.MaxImageBytes / 1024 / 1024}MB),已保存降采样预览但不参与同步");
+            }
             return text is not null && ImageCodec.HasVisibleHtmlText(html)
                 ? new ClipboardPayload(text, html, null, null)
-                : new ClipboardPayload(null, null, image, null);
+                : new ClipboardPayload(null, null, image, null, oversized, capture.Size);
+        }
+
+        if (oversized)
+        {
+            // 极端情况:降采样后仍然超限,连预览都没有
+            Log.Warn("剪贴板图片超过同步上限且无法降采样,仅记录其存在");
+            return new ClipboardPayload(null, null, null, null, true, capture.Size);
         }
         if (text is not null) return new ClipboardPayload(text, html, null, null);
 
@@ -532,6 +590,11 @@ public sealed class ClipboardMonitor
         {
             hash = HashBytes(image);
         }
+        else if (payload.OversizedImage)
+        {
+            // 与自动路径保持一致:无预览字节时用尺寸做稳定标识,保证手动同步不会把它当成"没有内容"
+            hash = HashText($"oversized-image|{payload.OversizedSize?.Width}x{payload.OversizedSize?.Height}");
+        }
         else if (payload.Files is { Count: > 0 } files)
         {
             hash = ClipboardFileMeta.ComputeHash(files);
@@ -545,7 +608,9 @@ public sealed class ClipboardMonitor
             return "";
         }
         var sourceApp = await ResolveSourceAppAsync();
-        await _onCapture(new CapturedClip(payload.Text, payload.Image, hash, sourceApp, payload.Html, payload.Files), ct);
+        await _onCapture(new CapturedClip(
+            payload.Text, payload.Image, hash, sourceApp, payload.Html, payload.Files,
+            payload.OversizedImage, payload.OversizedSize), ct);
         return hash;
     }
 

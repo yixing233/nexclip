@@ -315,6 +315,19 @@ public partial class HistoryItemViewModel : ObservableObject
         OnPropertyChanged(nameof(OriginalHitTest));
     }
 
+    /// <summary>
+    /// 超限图片占位文案。超限图片按设计不落缓存文件(编码结果本就拿不到),
+    /// 如果只留空缩略图,用户会以为"这张图坏了",必须显式说明为什么没有预览。
+    /// </summary>
+    public string OversizedImageHint =>
+        // 只在"图片条目且本地没有任何可显示的缓存文件"时出现:
+        // 有降采样预览的条目会正常显示缩略图,不需要这条提示。
+        IsImage && string.IsNullOrEmpty(Item.ImagePath) && string.IsNullOrEmpty(Item.ImageRef)
+            ? "图片超过同步上限，且无法生成预览"
+            : "";
+
+    public bool HasOversizedHint => !string.IsNullOrEmpty(OversizedImageHint);
+
     private static BitmapImage? BuildThumbnail(string? path)
     {
         if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;

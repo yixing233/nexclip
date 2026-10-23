@@ -176,14 +176,24 @@ public sealed partial class TransferChatPage : UserControl
             // 检测剪贴板是否含有图片/截图
             try
             {
-                var pngBytes = await ImageCodec.CaptureClipboardPngAsync();
-                if (pngBytes is { Length: > 0 })
+                var capture = await ImageCodec.CaptureClipboardBitmapAsync();
+                if (capture.Png is { Length: > 0 })
                 {
                     e.Handled = true;
+                    var pngBytes = capture.Png;
                     var tempFile = Path.Combine(Path.GetTempPath(), $"pasted_chat_{DateTime.UtcNow.Ticks}.png");
                     await File.WriteAllBytesAsync(tempFile, pngBytes);
                     ViewModel.SetSelectedImage(pngBytes, tempFile);
                     App.Services.Tray?.Notify("NexClip 互传", "已附加剪贴板截图，可继续输入描述一并发送");
+                    return;
+                }
+                if (capture.Kind == ImageCodec.BitmapCaptureKind.TooLarge)
+                {
+                    // 超限截图无法附加:明确告知原因,而不是让 Ctrl+V "没反应"
+                    e.Handled = true;
+                    var size = capture.Size is { } s2 ? $"{s2.Width}×{s2.Height}" : "";
+                    App.Services.Tray?.Notify("NexClip 互传",
+                        $"剪贴板截图 {size} 超过 {ImageCodec.MaxImageBytes / 1024 / 1024}MB 上限，无法附加");
                     return;
                 }
             }

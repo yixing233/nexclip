@@ -110,21 +110,67 @@ public static class ImageCodec
 
     private static readonly Regex HtmlTagRegex = new("<[^>]*>", RegexOptions.Compiled | RegexOptions.Singleline);
 
-    /// <summary>从剪贴板读取位图并编码为 PNG 字节;无位图返回 null;超 10MB 返回 null(调用方提示)。</summary>
-    public static async Task<byte[]?> CaptureClipboardPngAsync()
+    /// <summary>
+    /// 剪贴板位图的捕获结果。
+    ///
+    /// 关键区分:剪贴板上"根本没有位图"与"有位图但编码后超过 10MB"是两件完全不同的事。
+    /// 旧实现两种情况都返回 null,调用方只能当成"没有图片",于是超大截图会被静默丢弃——
+    /// 既不进本地历史,也不弹任何提示,用户看到的就是"复制了但没反应"。
+    /// </summary>
+    public enum BitmapCaptureKind
     {
-        if (!NativeMethods.TryProbeClipboard()) return null;
+        /// <summary>剪贴板中没有位图格式。</summary>
+        None,
+        /// <summary>成功编码为 PNG 字节。</summary>
+        Success,
+        /// <summary>
+        /// 存在位图,但按原尺寸编码超过 <see cref="MaxImageBytes"/>。
+        /// 此时 <see cref="BitmapCapture.Png"/> 仍非空:里面是自动降采样后的可预览版本,
+        /// 供本地历史使用;同步链路必须跳过它(见 <see cref="BitmapCapture.Oversized"/>）。
+        /// </summary>
+        TooLarge,
+    }
+
+    /// <summary>位图捕获结果(不可变)。</summary>
+    /// <param name="Kind">捕获结果类型。</param>
+    /// <param name="Png">PNG 字节。Success 与 TooLarge 均非空;None 时为 null。</param>
+    /// <param name="Size">图片像素尺寸(降采样后)。</param>
+    /// <param name="Oversized">原尺寸编码超过同步上限,只能本地使用。</param>
+    public readonly record struct BitmapCapture(
+        BitmapCaptureKind Kind,
+        byte[]? Png,
+        (uint Width, uint Height)? Size,
+        bool Oversized = false);
+
+    /// <summary>从剪贴板读取位图并编码为 PNG。</summary>
+    public static async Task<BitmapCapture> CaptureClipboardBitmapAsync()
+    {
+        if (!NativeMethods.TryProbeClipboard()) return new BitmapCapture(BitmapCaptureKind.None, null, null);
         var content = Clipboard.GetContent();
-        return await CaptureClipboardPngAsync(content);
+        return await CaptureClipboardBitmapAsync(content);
     }
 
     /// <summary>从已取得的剪贴板视图读取位图并编码为 PNG(复用视图,避免重复 GetContent)。</summary>
-    public static async Task<byte[]?> CaptureClipboardPngAsync(DataPackageView content)
+    public static async Task<BitmapCapture> CaptureClipboardBitmapAsync(DataPackageView content)
     {
-        if (!content.Contains(StandardDataFormats.Bitmap)) return null;
+        if (!content.Contains(StandardDataFormats.Bitmap)) return new BitmapCapture(BitmapCaptureKind.None, null, null);
         var streamRef = await content.GetBitmapAsync();
         using var stream = await streamRef.OpenReadAsync();
         return await CompressAndEncodePngAsync(stream);
+    }
+
+    /// <summary>兼容入口:只要字节,超出上限时按"无位图"处理(旧调用方语义)。</summary>
+    public static async Task<byte[]?> CaptureClipboardPngAsync()
+    {
+        var capture = await CaptureClipboardBitmapAsync();
+        return capture.Kind == BitmapCaptureKind.Success ? capture.Png : null;
+    }
+
+    /// <summary>兼容入口(已取得视图)。</summary>
+    public static async Task<byte[]?> CaptureClipboardPngAsync(DataPackageView content)
+    {
+        var capture = await CaptureClipboardBitmapAsync(content);
+        return capture.Kind == BitmapCaptureKind.Success ? capture.Png : null;
     }
 
     /// <summary>
@@ -196,7 +242,13 @@ public static class ImageCodec
         }
     }
 
-    private static async Task<byte[]?> CompressAndEncodePngAsync(IRandomAccessStream inStream)
+    /// <summary>
+    /// 超限时降采样重编码尝试的最小长边。
+    /// 降到这个尺寸仍然超过上限就放弃(几乎不可能:2048 全噪声约 16MB,1024 约 4MB)。
+    /// </summary>
+    private const uint MinOversizeLongSide = 512;
+
+    private static async Task<BitmapCapture> CompressAndEncodePngAsync(IRandomAccessStream inStream)
     {
         var decoder = await BitmapDecoder.CreateAsync(inStream);
         var origW = decoder.PixelWidth;
@@ -209,7 +261,41 @@ public static class ImageCodec
         var targetW = (uint)Math.Max(1, Math.Round(origW * scale));
         var targetH = (uint)Math.Max(1, Math.Round(origH * scale));
 
-        var transform = new BitmapTransform { ScaledWidth = targetW, ScaledHeight = targetH };
+        var (bytes, width, height) = await EncodePngAsync(decoder, targetW, targetH);
+        if (bytes.LongLength <= MaxImageBytes)
+        {
+            return new BitmapCapture(BitmapCaptureKind.Success, bytes, (width, height), Oversized: false);
+        }
+
+        // 超限:继续降采样,给本地历史留一份能看的预览。
+        //
+        // 为什么不直接"存不了就算了":一张 4096 噪声图 PNG 可达 60MB+,用户复制后如果列表里
+        // 什么都没有,体感就是"工具坏了"。降采样后通常只有几 MB,本地查看/复制缩略图仍然有用,
+        // 只是这份内容不参与跨设备同步(见 Oversized 标记)。
+        var smallW = targetW;
+        var smallH = targetH;
+        while (Math.Max(smallW, smallH) > MinOversizeLongSide)
+        {
+            smallW = (uint)Math.Max(1, Math.Round(smallW * 0.5));
+            smallH = (uint)Math.Max(1, Math.Round(smallH * 0.5));
+            var (smallBytes, w2, h2) = await EncodePngAsync(decoder, smallW, smallH);
+            if (smallBytes.LongLength <= MaxImageBytes)
+            {
+                Log.Info($"图片超限,已降采样到 {w2}×{h2} 作为本地预览(不同步)");
+                return new BitmapCapture(BitmapCaptureKind.TooLarge, smallBytes, (w2, h2), Oversized: true);
+            }
+        }
+
+        // 连最小可接受尺寸都超限:只回报标记,不留本地副本
+        Log.Warn($"图片超过 {MaxImageBytes / 1024 / 1024}MB 上限且降采样后仍超限,仅记录其存在");
+        return new BitmapCapture(BitmapCaptureKind.TooLarge, null, (targetW, targetH), Oversized: true);
+    }
+
+    /// <summary>把指定位图按给定尺寸编码为 PNG 字节。</summary>
+    private static async Task<(byte[] Bytes, uint Width, uint Height)> EncodePngAsync(
+        BitmapDecoder decoder, uint width, uint height)
+    {
+        var transform = new BitmapTransform { ScaledWidth = width, ScaledHeight = height };
         var pixelData = await decoder.GetPixelDataAsync(
             BitmapPixelFormat.Bgra8,
             BitmapAlphaMode.Premultiplied,
@@ -224,17 +310,16 @@ public static class ImageCodec
             encoder.SetPixelData(
                 BitmapPixelFormat.Bgra8,
                 BitmapAlphaMode.Premultiplied,
-                targetW, targetH,
+                width, height,
                 decoder.DpiX, decoder.DpiY,
                 pixelData.DetachPixelData());
             await encoder.FlushAsync();
-            if (outStream.Size > MaxImageBytes) return null;
 
             var bytes = new byte[outStream.Size];
             using var reader = new DataReader(outStream.GetInputStreamAt(0));
             await reader.LoadAsync((uint)outStream.Size);
             reader.ReadBytes(bytes);
-            return bytes;
+            return (bytes, width, height);
         }
         finally
         {
