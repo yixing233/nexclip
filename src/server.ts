@@ -74,8 +74,11 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 
   // negotiate(必须走统一鉴权:query access_token 也接受)
   if (p === '/hubs/clipboard/negotiate') {
-    const hubDeviceId = url.searchParams.get('deviceId') ?? '';
-    const hubDeviceToken = url.searchParams.get('deviceToken') ?? '';
+    // 设备凭证优先从请求头读取,query 仅作为旧客户端的兜底。
+    // 令牌放 URL 会进 nginx/反代 access log 与浏览器历史,而它是长期有效的凭证,
+    // 必须让客户端有机会用头传递。桌面端(.NET SignalR)与 Android 都走 header。
+    const hubDeviceId = extractDeviceId(req) || (url.searchParams.get('deviceId') ?? '');
+    const hubDeviceToken = extractDeviceToken(req) || (url.searchParams.get('deviceToken') ?? '');
     const hubDevice = hubDeviceId && hubDeviceToken ? svc.authenticateDevice(hubDeviceId, hubDeviceToken) : null;
     if (!actor && !hubDevice) {
       sendJson(res, 401, { error: hubDeviceId ? '设备凭证无效或已失效,请重新配对' : 'unauthorized' });
