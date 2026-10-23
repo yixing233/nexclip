@@ -1,0 +1,9 @@
+{
+  "port": 5033,
+  "maxHistoryCount": 1000,
+  "databasePath": "./data/syncclipboard.db",
+  "imageStoragePath": "./data/images",
+  "maxImageSizeBytes": 10485760,
+  "onlineThresholdSeconds": 120,
+  "webDist": "./web/dist"
+}

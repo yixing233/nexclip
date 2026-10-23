@@ -2,10 +2,18 @@
 node_modules/
 dist/
 
-# 环境配置与密钥
+# 环境配置与密钥（config.json 按机器不同，只提交 config.example.json）
+config.json
 .env
 .env.local
 .env.*.local
+
+# 服务端本地产物（只存在于服务器，不进版本库）
+/backup/
+/releases/
+/web/
+/dist.old/
+/dist.new/
 
 # 运行时数据与上传文件
 data/

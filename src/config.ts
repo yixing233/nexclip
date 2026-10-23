@@ -66,7 +66,11 @@ export function loadConfig(): AppConfig {
     imageStoragePath: env('SC_IMAGE_PATH', String(file.imageStoragePath ?? 'data/images')),
     maxImageSizeBytes: num(env('SC_MAX_IMAGE_BYTES', String(file.maxImageSizeBytes ?? 10 * 1024 * 1024)), 10 * 1024 * 1024),
     onlineThresholdSeconds: num(env('SC_ONLINE_THRESHOLD_SECONDS', String(file.onlineThresholdSeconds ?? 120)), 120),
-    webDist: file.webDist == null ? '../web/dist' : String(file.webDist),
+    // 静态资源目录:优先 SC_WEB_DIST,其次 config.json,最后按目录结构猜(单仓库 ../web/dist / 独立部署 ./web/dist)
+    webDist: env('SC_WEB_DIST',
+      file.webDist == null
+        ? (existsSync(join(rootDir, 'web/dist')) ? './web/dist' : '../web/dist')
+        : String(file.webDist)),
     pairingCodeTtlSeconds: num(env('SC_PAIRING_TTL_SECONDS', String(file.pairingCodeTtlSeconds ?? 600)), 600),
     adminUsername: env('ADMIN_USERNAME', dotEnv.ADMIN_USERNAME ?? 'syncadmin'),
     adminPassword: env('ADMIN_PASSWORD', dotEnv.ADMIN_PASSWORD ?? ''),
