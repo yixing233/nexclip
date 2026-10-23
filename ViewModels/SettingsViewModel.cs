@@ -447,15 +447,25 @@ public partial class SettingsViewModel : ObservableObject
 
     /// <summary>复制本机设备 ID 到剪贴板。</summary>
     [RelayCommand]
-    public async void CopyDeviceId()
+    public async Task CopyDeviceIdAsync()
     {
-        if (await Services.ImageCodec.WriteClipboardTextAsync(DeviceIdText))
+        // 返回 Task 而不是 async void:async void 的异常没有调用方可以观察,
+        // 而 [RelayCommand] 生成的异步命令本身也要求 Task 返回才能正确串接异常与可重入。
+        try
         {
-            ShowMessage("本机设备 ID 已复制到剪贴板", InfoBarSeverity.Success);
+            if (await Services.ImageCodec.WriteClipboardTextAsync(DeviceIdText))
+            {
+                ShowMessage("本机设备 ID 已复制到剪贴板", InfoBarSeverity.Success);
+            }
+            else
+            {
+                ShowMessage("剪贴板被其他程序占用，复制未生效", InfoBarSeverity.Warning);
+            }
         }
-        else
+        catch (Exception ex)
         {
-            ShowMessage("剪贴板被其他程序占用，复制未生效", InfoBarSeverity.Warning);
+            Log.Error($"复制设备 ID 失败: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}", ex);
+            ShowMessage("复制设备 ID 失败，请稍后重试", InfoBarSeverity.Error);
         }
     }
 

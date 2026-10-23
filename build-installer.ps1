@@ -8,7 +8,7 @@ $desktopDir = $PSScriptRoot
 $installerDir = Join-Path $desktopDir "NexClip.Installer.Native"
 $resourcesDir = Join-Path $installerDir "Resources"
 $releasesDir = Join-Path $desktopDir "release-out"
-$version = "20261023.01"
+$version = "20261023.02"
 
 # Native AOT 的链接步骤依赖 vswhere.exe 定位 MSVC link.exe。
 # VS 开发者命令行会自带,普通 PowerShell 里不在 PATH 上,链接会以 exit 123 失败,
