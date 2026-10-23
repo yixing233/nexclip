@@ -127,6 +127,17 @@ public class FluentInstallerWindow
         InitAppIcon();
 
         _existingVersion = DetectExistingInstalledVersion();
+
+        // 自启动复选框的初始状态必须**读取当前真实注册状态**,而不是硬编码 false。
+        //
+        // 为什么(这是一个已经发生的真实故障):此前默认 false,且安装时无条件调用
+        // SetStartupShortcut(dir, false) —— 于是每次升级/覆盖安装都会把用户原本开着的
+        // 开机自启动**静默关掉**。用户升级后发现"开机不启动了",只能回设置页重新打开。
+        //
+        // 现在的语义:升级时沿用用户既有选择(勾选框直接反映当前注册表状态);
+        // 只有全新安装(注册表无该项)才落到默认值。
+        _autoStartup = StartupRegistration.IsEnabled();
+
         _requiredInstallSpaceBytes = SetupPolicy.CalculateRequiredSpaceBytes(
             PayloadService.GetExpandedPayloadSizeBytes(),
             0);
@@ -625,7 +636,9 @@ public class FluentInstallerWindow
                 return;
             }
 
-            if (_rectStartupCheck.Contains(_mouseX, _mouseY))
+            // 仅全新安装时响应:升级安装不自绘该复选框(_rectStartupCheck 为零矩形),
+            // 显式判断避免命中 (0,0) 附近的误点。升级时该设置由主程序设置页负责。
+            if (string.IsNullOrEmpty(_existingVersion) && _rectStartupCheck.Contains(_mouseX, _mouseY))
             {
                 _autoStartup = !_autoStartup;
                 Invalidate();
@@ -874,13 +887,24 @@ public class FluentInstallerWindow
                 ShortcutHelper.CreateStartMenuShortcut(_installDir);
                 if (_createDesktopShortcut) ShortcutHelper.CreateDesktopShortcut(_installDir);
 
-                // 自启动必须**双向**处理:勾选时写入 Run 键,未勾选时主动清理。
-                // 只写不清会导致「取消勾选后重新安装」仍然自启动 —— 用户明确表达了不要,
-                // 而旧的 Run 键还在生效,表现就是设置不生效。
-                var startupApplied = ShortcutHelper.SetStartupShortcut(_installDir, _autoStartup);
-                if (_autoStartup && !startupApplied)
+                // 自启动的处理分两种情况,区别至关重要:
+                //
+                // 1) 全新安装:按用户勾选决定(勾选写入,不勾选保持无)。
+                // 2) 升级/覆盖安装:**完全不动**。用户在设置页里的选择必须被保留 ——
+                //    早期实现在这里无条件调用 SetStartupShortcut(dir, false),
+                //    导致每次升级都把用户开着的自启动静默关掉(已发生的真实故障)。
+                var isUpgrade = !string.IsNullOrEmpty(_existingVersion);
+                if (!isUpgrade)
                 {
-                    SetupLog.Write("开机自启动注册失败(可能被组策略限制),安装继续。");
+                    var startupApplied = ShortcutHelper.SetStartupShortcut(_installDir, _autoStartup);
+                    if (_autoStartup && !startupApplied)
+                    {
+                        SetupLog.Write("开机自启动注册失败(可能被组策略限制),安装继续。");
+                    }
+                }
+                else
+                {
+                    SetupLog.Write($"升级安装:保留既有开机自启动设置(当前={StartupRegistration.IsEnabled()}),不做改动");
                 }
                 await Task.Delay(100);
 
@@ -1366,11 +1390,26 @@ public class FluentInstallerWindow
 
         // 5. 选项复选框
         float checkY = S(352.0f);
-        _rectDesktopCheck = new GdiPlus.RECTF(startX, checkY, S(190), S(26));
-        RenderCheckBox(g, _rectDesktopCheck, "创建桌面快捷方式", _createDesktopShortcut);
+        var isUpgradeInstall = !string.IsNullOrEmpty(_existingVersion);
 
-        _rectStartupCheck = new GdiPlus.RECTF(startX + S(210), checkY, S(190), S(26));
-        RenderCheckBox(g, _rectStartupCheck, "开机自动启动", _autoStartup);
+        // 升级/覆盖安装时**不询问**开机自启动:这是软件自身的设置项,已在设置页里,
+        // 升级过程中再问一遍既多余又容易把用户既有选择改掉(见构造函数里的说明)。
+        // 升级时复选框整个不绘制,安装阶段沿用当前注册状态(不写也不删)。
+        if (!isUpgradeInstall)
+        {
+            _rectDesktopCheck = new GdiPlus.RECTF(startX, checkY, S(190), S(26));
+            RenderCheckBox(g, _rectDesktopCheck, "创建桌面快捷方式", _createDesktopShortcut);
+
+            _rectStartupCheck = new GdiPlus.RECTF(startX + S(210), checkY, S(190), S(26));
+            RenderCheckBox(g, _rectStartupCheck, "开机自动启动", _autoStartup);
+        }
+        else
+        {
+            // 升级时仍保留桌面快捷方式选项(用户可能想补建),但不显示自启动
+            _rectDesktopCheck = new GdiPlus.RECTF(startX, checkY, S(190), S(26));
+            RenderCheckBox(g, _rectDesktopCheck, "创建桌面快捷方式", _createDesktopShortcut);
+            _rectStartupCheck = default;
+        }
 
         // 6. 底部操作按钮行 (取消 + 一键安装)
         float bottomBtnY = S(404.0f);

@@ -14,6 +14,7 @@ namespace NexClip.Installer.Native.Tests;
 /// 这些测试把注册表根指向一次性子键(<see cref="StartupRegistration.Root"/>),
 /// 不会碰到真实的自启动项。
 /// </summary>
+[Collection(StartupRegistrationCollection.Name)]
 public sealed class StartupRegistrationTests : IDisposable
 {
     private readonly string _sandboxPath;

@@ -121,8 +121,27 @@ public static class Program
             {
                 ShortcutHelper.CreateDesktopShortcut(options.InstallDirectory);
             }
-            // 与交互式安装一致:勾选时写 Run 键,未勾选时清理既有项(幂等)
-            ShortcutHelper.SetStartupShortcut(options.InstallDirectory, options.AutoStartup);
+            // 自启动处理规则(与交互式安装一致),关键在于区分"用户表达了意图"与"没说我不管":
+            //
+            //   全新安装  → 按 /autostart 决定(未给则确保关闭,幂等)
+            //   升级安装  → 默认**保留**用户既有设置;只有显式给了 /autostart 才开启
+            //
+            // 早期实现在升级时也调 SetStartupShortcut(dir, false),导致每次静默升级
+            // (企业推送、自动更新这些最常见的场景)都把用户开着的自启动静默关掉。
+            var isUpgrading = InstallerPathHelper.TryGetRegisteredInstallDirectory() is not null;
+            if (!isUpgrading)
+            {
+                ShortcutHelper.SetStartupShortcut(options.InstallDirectory, options.AutoStartup);
+            }
+            else if (options.AutoStartup)
+            {
+                ShortcutHelper.SetStartupShortcut(options.InstallDirectory, true);
+                SetupLog.Write("静默升级:检测到显式 /autostart,已开启开机自启动");
+            }
+            else
+            {
+                SetupLog.Write($"静默升级:保留既有开机自启动(当前={StartupRegistration.IsEnabled()}),未做改动");
+            }
             RegistryHelper.RegisterUninstall(options.InstallDirectory);
 
             var needsRestart = dependencyResult.RestartRequired || !dependencyResult.DetectionConfirmed;
