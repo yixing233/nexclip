@@ -710,13 +710,18 @@ public sealed class SyncEngine : IDisposable
                 if (entry.Type == "Text" && entry.Text is not null)
                 {
                     // 富文本开关关闭时只写回纯文本
-                    ImageCodec.SetClipboardText(entry.Text, s.RichTextEnabled ? entry.Html : null);
-                    if (contentHash is not null) _monitor?.RecordLastSeen(contentHash);
+                    if (await ImageCodec.WriteClipboardTextAsync(entry.Text, s.RichTextEnabled ? entry.Html : null) &&
+                        contentHash is not null)
+                    {
+                        _monitor?.RecordLastSeen(contentHash);
+                    }
                 }
                 else if (imagePath is not null)
                 {
-                    await ImageCodec.SetClipboardImageAsync(imagePath);
-                    if (contentHash is not null) _monitor?.RecordLastSeen(contentHash);
+                    if (await ImageCodec.SetClipboardImageAsync(imagePath) && contentHash is not null)
+                    {
+                        _monitor?.RecordLastSeen(contentHash);
+                    }
                 }
             }
             catch (Exception ex)
@@ -833,8 +838,14 @@ public sealed class SyncEngine : IDisposable
         RaiseOnUiThread(() => TransferChanged?.Invoke(true, kind));
     }
 
-    /// <summary>复制历史条目到本机剪贴板(图片先确保本地缓存),并抑制回环上传。支持 plainText 纯文本模式。</summary>
-    public async Task CopyHistoryItemAsync(Models.HistoryItem item, bool plainText = false)
+    /// <summary>
+    /// 复制历史条目到本机剪贴板(图片先确保本地缓存),并抑制回环上传。支持 plainText 纯文本模式。
+    ///
+    /// <para>返回值是"内容是否真的进了剪贴板",不再是"方法有没有抛异常"。调用方必须据此决定
+    /// 还要不要继续粘贴:以前写入失败(剪贴板被远程控制软件占用,CLIPBRD_E_CANT_OPEN)会被
+    /// 静默吞掉,随后照样注入 Ctrl+V,结果贴出上一次的旧内容,用户完全无从察觉。</para>
+    /// </summary>
+    public async Task<bool> CopyHistoryItemAsync(Models.HistoryItem item, bool plainText = false)
     {
         try
         {
@@ -844,34 +855,39 @@ public sealed class SyncEngine : IDisposable
                 // plainText 为真(Shift+粘贴 / 右键"粘贴为纯文本")或富文本开关关闭时,只写纯文本;
                 // 否则同时写 HTML 与纯文本,由目标程序按自身能力择取。
                 var html = plainText || !_svc.Settings.RichTextEnabled ? null : item.Html;
-                ImageCodec.WriteClipboardText(item.Text, html);
+                if (!await ImageCodec.WriteClipboardTextAsync(item.Text, html)) return false;
                 // 抑制回环用的哈希必须与实际写入剪贴板的内容一致:降级为纯文本时不能用条目原本的富文本哈希
                 var hash = html is null
                     ? ClipboardMonitor.HashText(item.Text)
                     : item.ContentHash ?? ClipboardMonitor.HashText(item.Text, html);
                 _monitor?.RecordLastSeen(hash);
+                return true;
             }
-            else if (item.Type == "Image")
+
+            if (item.Type == "Image")
             {
                 if (plainText)
                 {
-                    if (!string.IsNullOrEmpty(item.ImagePath)) ImageCodec.WriteClipboardText(item.ImagePath);
-                    return;
+                    // 纯文本模式贴图片路径;没路径就没什么可写的,明确返回失败
+                    if (string.IsNullOrEmpty(item.ImagePath)) return false;
+                    return await ImageCodec.WriteClipboardTextAsync(item.ImagePath);
                 }
                 var path = item.ImagePath;
                 if (string.IsNullOrEmpty(path) || !File.Exists(path))
                 {
-                    if (string.IsNullOrEmpty(item.ImageRef)) return;
+                    if (string.IsNullOrEmpty(item.ImageRef)) return false;
                     var s = _svc.Settings;
                     var bytes = await _svc.Api.DownloadImageAsync(s.ServerUrl, s.DeviceId, s.AuthToken, item.ImageRef);
-                    if (bytes is null) return;
+                    if (bytes is null) return false;
                     path = await ImageCodec.SavePngAsync(bytes, item.ServerId ?? item.Id);
                 }
-                await ImageCodec.SetClipboardImageAsync(path!);
+                if (!await ImageCodec.SetClipboardImageAsync(path!)) return false;
                 var hash = item.ContentHash ?? ClipboardMonitor.HashBytes(await File.ReadAllBytesAsync(path!));
                 _monitor?.RecordLastSeen(hash);
+                return true;
             }
-            else if (item.Type == "File")
+
+            if (item.Type == "File")
             {
                 // 写回的是文件引用(CF_HDROP),不是文件内容:即使条目包含大文件也不产生额外磁盘/内存开销。
                 // 已失效的路径由 ClipboardFiles 内部跳过;全部失效时剪贴板保持原内容不变。
@@ -882,43 +898,48 @@ public sealed class SyncEngine : IDisposable
                 if (alive.Count == 0)
                 {
                     Log.Warn($"复制文件条目失败:文件已全部不存在或无法访问(id={item.Id})");
-                    return;
+                    return false;
                 }
 
                 if (plainText)
                 {
                     // 纯文本模式:写入换行分隔的路径,便于粘贴到终端、编辑器或远程会话
-                    ImageCodec.WriteClipboardText(string.Join(Environment.NewLine, alive));
-                    _monitor?.RecordLastSeen(ClipboardMonitor.HashText(string.Join(Environment.NewLine, alive)));
-                    return;
+                    return await ImageCodec.WriteClipboardTextAsync(string.Join(Environment.NewLine, alive));
                 }
 
-                if (!await ClipboardFiles.WriteClipboardFilesAsync(alive)) return;
+                if (!await ClipboardFiles.WriteClipboardFilesAsync(alive)) return false;
                 _monitor?.RecordLastSeen(item.ContentHash ?? ClipboardFileMeta.ComputeHash(item.Files));
+                return true;
             }
+
+            return false;
         }
         catch (Exception ex)
         {
-            Log.Error($"复制历史条目失败:{ex.Message}");
+            // 带上类型与 HRESULT:剪贴板争用类异常的 Message 常为空串
+            Log.Error($"复制历史条目失败: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}", ex);
+            return false;
         }
     }
 
     /// <summary>
     /// 把已经合并好的文本写入剪贴板(批量粘贴用),并抑制回环上传。
     /// 复用单条复制的回环抑制方式:哈希必须与真正写进剪贴板的内容一致,否则
-    /// 下次捕获会把它当成新内容再次上传。
+    /// 下次捕获会把它当成新内容再次上传。返回 false 表示内容没进剪贴板。
     /// </summary>
-    public void WriteMergedTextToClipboard(string text)
+    public async Task<bool> WriteMergedTextToClipboardAsync(string text)
     {
         try
         {
             using var _ = _monitor?.PauseCapture();
-            ImageCodec.WriteClipboardText(text);
+            if (!await ImageCodec.WriteClipboardTextAsync(text)) return false;
             _monitor?.RecordLastSeen(ClipboardMonitor.HashText(text));
+            return true;
         }
         catch (Exception ex)
         {
-            Log.Error($"批量粘贴写入剪贴板失败:{ex.Message}");
+            Log.Error($"批量粘贴写入剪贴板失败: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}", ex);
+            return false;
         }
     }
 

@@ -1,4 +1,4 @@
-﻿namespace NexClip.Desktop.Services;
+namespace NexClip.Desktop.Services;
 
 using System;
 using System.Diagnostics;
@@ -55,22 +55,71 @@ public static class SourceAppDetector
     private const uint ProcessQueryLimitedInformation = 0x1000;
 
     /// <summary>
-    /// 取剪贴板数据所有者窗口的进程名。仅 Win32 查询 + 一次进程路径读取,
-    /// 无 PE 版本信息解析(磁盘 IO)、无图标提取(GDI),可在 UI 线程即时执行。
-    /// 取不到返回 null。
+    /// 取剪贴板**数据所有者**的进程名(即"内容是谁放进剪贴板的")。取不到返回 null。
     ///
-    /// 用途:在发起任何跨进程剪贴板读取之前做来源过滤。剪贴板所有者若为无响应的远控程序,
-    /// 读取会连同本进程一起挂起且无法超时中断,因此过滤必须发生在此之前。
+    /// 语义边界(重要):GetClipboardOwner 返回的是**内容所有权**,不是**持锁状态**。
+    /// 内容所有者可以长期存在而此刻完全没人锁着剪贴板 —— 这两种情况必须区别对待,
+    /// 否则诊断会指向错误的程序。要判断"谁正在挡住我们的 OpenClipboard",
+    /// 请用 <see cref="TryGetClipboardLockHolderProcessName"/>。
+    ///
+    /// 本方法的正确用途是"来源过滤":发起跨进程读取之前,若数据所有者是无响应的
+    /// 远控程序,读取时会因它的延迟渲染(WM_RENDERFORMAT)挂住且无法中断,
+    /// 这类来源必须提前跳过 —— 判断依据正是数据所有者,所以这里用 GetClipboardOwner 是对的。
     ///
     /// 刻意不使用 <see cref="CaptureOwnerHandle"/> 的前台窗口兜底:那个兜底对"识别来源应用"
     /// 是合理的,但用于"是否跳过读取"会拿前台窗口冒充剪贴板所有者,既可能误过滤正常复制,
-    /// 也可能漏掉真正的风险来源。此处只认 GetClipboardOwner,取不到即视为未知并放行。
+    /// 也可能漏掉真正的风险来源。
     /// </summary>
-    public static string? TryGetClipboardOwnerProcessName()
+    public static string? TryGetClipboardOwnerProcessName() => ProcessNameOfWindow(GetClipboardOwner());
+
+    /// <summary>
+    /// 取剪贴板**持锁者**的进程名,即"此刻 OpenClipboard 尚未 Close 的进程"。无人持锁时返回 null。
+    ///
+    /// 与 <see cref="TryGetClipboardOwnerProcessName"/> 的区别是排查问题的关键:
+    /// 剪贴板是"谁持锁谁说了算"的全局资源,我们的 OpenClipboard/SetContent 收到
+    /// CLIPBRD_E_CANT_OPEN 时,原因是**持锁者**,而不是内容所有者。
+    /// 实测本机:GetClipboardOwner 常驻指向 GameViewer(UU远程,它放了内容),
+    /// 而 GetOpenClipboardWindow 在无人操作时是 0 —— 若拿前者当"占用者"上报,
+    /// 排查时会把每一次偶发争用都错误地归因到它身上。
+    ///
+    /// <para><b>已知盲区(实测确认,必须知道)</b>:<c>OpenClipboard(NULL)</c> 持锁时,
+    /// 系统会把这个锁记为"无主窗口",<c>GetOpenClipboardWindow</c> 返回 0,
+    /// 于是这里查不到持有者。只有传入了真实窗口句柄的持锁者才可见 ——
+    /// 用跨进程实测验证过:传 HWND 时外部能读到 pid 且外部 OpenClipboard 同步失败;
+    /// 传 NULL 时外部读到 0,锁依然存在但无法归因。
+    /// 本应用自己的探针用的就是 NULL,所以**绝不能**用它来判断"是不是我们自己"。
+    /// 因此调用方必须把 null 当作"未知"处理,不能理解成"没人占用"。</para>
+    ///
+    /// 使用时机:探针失败、写入收到 CLIPBRD_E_CANT_OPEN、要在 UI 上提示"是谁占着剪贴板"。
+    /// </summary>
+    public static string? TryGetClipboardLockHolderProcessName() => ProcessNameOfWindow(GetOpenClipboardWindow());
+
+    /// <summary>
+    /// 生成"剪贴板被谁占着"的用户可读说明。
+    ///
+    /// 措辞刻意区分两种情况,避免把排查方向带偏:
+    /// - 有持锁者(GetOpenClipboardWindow 非 0):明确说"X 正在占用系统剪贴板",这是可执行的结论;
+    /// - 只有数据所有者:不说"占用"(那会误导用户以为内容所有者就是元凶),
+    ///   而是描述为"内容来自 X"并提示短暂争用。
+    /// </summary>
+    public static string DescribeClipboardBlocker() =>
+        DescribeClipboardBlocker(null);
+
+    /// <summary>同上,但可传入调用方已经测到的持锁者(写入器重试期间观察到的那个)。</summary>
+    public static string DescribeClipboardBlocker(string? measuredLockHolder) =>
+        NexClip.Tray.ClipboardWritePolicy.DescribeBlocker(
+            string.IsNullOrEmpty(measuredLockHolder) ? TryGetClipboardLockHolderProcessName() : measuredLockHolder,
+            TryGetClipboardOwnerProcessName());
+
+    /// <summary>
+    /// 窗口句柄 → 进程名。只做 Win32 查询 + 一次进程路径读取:无 PE 版本信息解析(磁盘 IO)、
+    /// 无图标提取(GDI),可在 UI 线程即时执行。
+    /// 句柄无效、属于本进程或取不到进程时一律返回 null,由调用方按"未知"处理。
+    /// </summary>
+    private static string? ProcessNameOfWindow(IntPtr hwnd)
     {
         try
         {
-            var hwnd = GetClipboardOwner();
             if (hwnd == IntPtr.Zero || !NativeMethods.IsWindow(hwnd)) return null;
 
             GetWindowThreadProcessId(hwnd, out uint pid);

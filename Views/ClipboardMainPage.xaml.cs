@@ -804,11 +804,32 @@ public sealed partial class ClipboardMainPage : Page
         if (_contextItem is { } vm) await (App.ClipboardWindow?.PasteItemAsync(vm, plainText: true) ?? Task.CompletedTask);
     }
 
+    /// <summary>复制纯文本到剪贴板(右键菜单)。写入走专用 STA 线程,失败时明确提示而不是静默无反应。</summary>
+    private static async Task CopyPlainTextAsync(string text)
+    {
+        try
+        {
+            if (await ImageCodec.WriteClipboardTextAsync(text)) return;
+            NotifyClipboardBusy("复制未生效");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"复制纯文本失败: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>剪贴板被占用时统一提示,占用者取写入器实测结果。</summary>
+    private static void NotifyClipboardBusy(string consequence)
+    {
+        var detail = SourceAppDetector.DescribeClipboardBlocker(ClipboardWriter.LastBlockedBy);
+        App.Services.Tray?.Notify("剪贴板暂时不可用", $"{detail}，{consequence}。");
+    }
+
     private void CopyPlainTextMenuItem_Click(object sender, RoutedEventArgs e)
     {
         if (_contextItem is { } vm && vm.Item.Text is not null)
         {
-            ImageCodec.WriteClipboardText(vm.Item.Text);
+            _ = CopyPlainTextAsync(vm.Item.Text);
         }
     }
 
@@ -851,9 +872,7 @@ public sealed partial class ClipboardMainPage : Page
     {
         if (_contextItem is { HasSourceApp: true } vm)
         {
-            var dataPackage = new Windows.ApplicationModel.DataTransfer.DataPackage();
-            dataPackage.SetText(vm.SourceAppName);
-            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
+            _ = CopyPlainTextAsync(vm.SourceAppName ?? "");
         }
     }
 
@@ -1147,8 +1166,14 @@ public sealed partial class ClipboardMainPage : Page
         }
         else if (!string.IsNullOrEmpty(_currentViewerImagePath) && File.Exists(_currentViewerImagePath))
         {
-            await ImageCodec.WriteClipboardImageAsync(_currentViewerImagePath);
-            App.Services.Tray?.Notify("NexClip", "已复制图片");
+            if (await ImageCodec.WriteClipboardImageAsync(_currentViewerImagePath))
+            {
+                App.Services.Tray?.Notify("NexClip", "已复制图片");
+            }
+            else
+            {
+                NotifyClipboardBusy("本次复制未生效");
+            }
         }
     }
 

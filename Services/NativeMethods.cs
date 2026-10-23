@@ -91,9 +91,109 @@ internal static class NativeMethods
     internal static bool TryProbeClipboard()
     {
         if (!OpenClipboard(IntPtr.Zero)) return false;
-        CloseClipboard();
-        return true;
+        // 必须无条件关闭:一旦这两步之间抛出异常而没关,本进程就会永久持锁,
+        // 表现为全机复制粘贴失效,直到本进程退出。
+        try
+        {
+            return true;
+        }
+        finally
+        {
+            CloseClipboard();
+        }
     }
+
+    // ---- 专用 STA 线程的消息泵(剪贴板写入线程用) ----
+    // WinRT 的剪贴板调用要求 STA;而 SETCONTENT/延迟渲染的数据是经窗口消息回取到本线程的,
+    // 所以这条线程必须同时是一个消息泵,否则别的程序来粘贴时会一直等我们。
+
+    internal const uint WmQuit = 0x0012;
+    /// <summary>MsgWaitForMultipleObjectsEx 的失败返回值。</summary>
+    internal const uint WaitFailed = 0xFFFFFFFF;
+    private const uint PM_REMOVE = 0x0001;
+    private const uint QsAllInput = 0x04FF;
+    private const uint MwmoInputAvailable = 0x00000040;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    private static extern bool PeekMessageW(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax, uint wRemoveMsg);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr DispatchMessageW(ref MSG lpMsg);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool TranslateMessage(ref MSG lpMsg);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern bool PostThreadMessageW(uint idThread, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint MsgWaitForMultipleObjectsEx(uint nCount, IntPtr[] pHandles,
+        uint dwMilliseconds, uint dwWakeMask, uint dwFlags);
+
+    // RoInitialize 在 Windows 8+ 由 combase.dll 导出(ole32.dll 没有这个入口点,写错会抛
+    // EntryPointNotFoundException —— 而它在 STA 初始化路径上,一旦抛出写入线程会直接起不来)。
+    [System.Runtime.InteropServices.DllImport("combase.dll")]
+    private static extern int RoInitialize(int initType);
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    internal struct MSG
+    {
+        public IntPtr hwnd;
+        public uint message;
+        public IntPtr wParam;
+        public IntPtr lParam;
+        public uint time;
+        public POINT pt;
+        public uint lPrivate;
+    }
+
+    /// <summary>在当前线程初始化 Windows Runtime(STA)。已初始化时返回的 S_FALSE/RPC_E_CHANGED_MODE 均可忽略。</summary>
+    internal static void EnsureWinRtInitialized()
+    {
+        try
+        {
+            const int RO_INIT_SINGLETHREADED = 0;
+            RoInitialize(RO_INIT_SINGLETHREADED);
+        }
+        catch
+        {
+            // 已初始化或不可用时继续:后续 WinRT 调用会自行报错,不影响 UI 线程
+        }
+    }
+
+    /// <summary>确保当前线程有一个消息队列(仅创建、不取消息)。</summary>
+    internal static void EnsureMessageQueue()
+    {
+        PeekMessageW(out _, IntPtr.Zero, 0, 0, 0 /* PM_NOREMOVE */);
+    }
+
+    /// <summary>把当前线程待处理的消息全部处理掉(不阻塞)。</summary>
+    internal static void PumpMessages()
+    {
+        while (PeekMessageW(out var msg, IntPtr.Zero, 0, 0, PM_REMOVE))
+        {
+            if (msg.message == WmQuit) return;
+            TranslateMessage(ref msg);
+            DispatchMessageW(ref msg);
+        }
+    }
+
+    /// <summary>
+    /// 等待"有新工作(事件句柄被置位)"或"有窗口消息到达",最多 timeoutMs 毫秒。
+    /// 返回 true 表示可能还需要继续泵消息。
+    /// </summary>
+    internal static bool WaitForWorkOrMessage(IntPtr handle, uint timeoutMs)
+    {
+        if (handle == IntPtr.Zero) return false;
+        var result = MsgWaitForMultipleObjectsEx(1, new[] { handle }, timeoutMs, QsAllInput, 0);
+        if (result == WaitFailed) return false;
+        // 0 = 事件被置位, 1 = 有消息到达, 258 = 超时
+        return result == 0 || result == 1;
+    }
+
+    /// <summary>请求当前线程的消息泵退出。</summary>
+    internal static void PostQuitToCurrentThread() =>
+        PostThreadMessageW(GetCurrentThreadId(), WmQuit, IntPtr.Zero, IntPtr.Zero);
 
     /// <summary>
     /// 将进程工作集中的可分页内存换出:窗口隐藏到托盘后调用,
@@ -133,9 +233,16 @@ internal static class NativeMethods
             ? GetWindowThreadProcessId(foreground, out _)
             : 0;
         var currentThread = GetCurrentThreadId();
-        var attached = foregroundThread != 0 &&
-                       foregroundThread != currentThread &&
-                       AttachThreadInput(currentThread, foregroundThread, true);
+
+        // AttachThreadInput 会把本线程的输入队列挂到目标线程上:目标一旦不泵消息,
+        // 本线程也跟着不再泵消息 —— 而消息泵恰恰是本进程响应别人粘贴请求的唯一通道。
+        // 所以附加之前必须先确认目标线程还活着;无响应就放弃附加,只做裸 SetForegroundWindow
+        // (成功率低一些,但绝不会把调用方拖死)。
+        var canAttach = foregroundThread != 0 &&
+                        foregroundThread != currentThread &&
+                        IsThreadResponsive(foregroundThread);
+
+        var attached = canAttach && AttachThreadInput(currentThread, foregroundThread, true);
         try
         {
             var activated = SetForegroundWindow(hwnd);
@@ -146,6 +253,26 @@ internal static class NativeMethods
         {
             if (attached) AttachThreadInput(currentThread, foregroundThread, false);
         }
+    }
+
+    /// <summary>
+    /// 判断指定线程是否仍在处理消息。用带 150ms 超时 + SMTO_ABORTIFHUNG 的空消息探测:
+    /// 线程无响应时立即返回 false(而不是无限等待),这是安全 AttachThreadInput 的前置条件。
+    /// </summary>
+    internal static bool IsThreadResponsive(uint threadId)
+    {
+        if (threadId == 0) return false;
+        var info = new GUITHREADINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<GUITHREADINFO>() };
+        if (!GetGUIThreadInfo(threadId, ref info)) return false;
+        // 空闲线程(GUI 结构里没有任何活动窗口/焦点)通常是已退出或不可交互,不应附加
+        var probe = info.hwndActive != IntPtr.Zero ? info.hwndActive
+                  : info.hwndFocus != IntPtr.Zero ? info.hwndFocus
+                  : info.hwndCaret;
+        if (probe == IntPtr.Zero) return false;
+
+        var ok = SendMessageTimeout(probe, 0 /* WM_NULL */, UIntPtr.Zero, IntPtr.Zero,
+            SMTO_ABORTIFHUNG | SMTO_BLOCK, 150, out _);
+        return ok != IntPtr.Zero;
     }
 
     /// <summary>模拟 Ctrl+V 粘贴(双击/回车粘贴到目标窗口)。按键间加小延迟,避免目标应用吞键。</summary>
@@ -246,6 +373,7 @@ internal static class NativeMethods
     // ---- WM_PASTE 直达消息(标准编辑控件最可靠,无需前台/按键注入) ----
     internal const uint WM_PASTE = 0x0302;
     internal const uint SMTO_ABORTIFHUNG = 0x0002;
+    internal const uint SMTO_BLOCK = 0x0001;
 
     [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
     internal static extern IntPtr SendMessageTimeout(
@@ -417,7 +545,9 @@ internal static class NativeMethods
         {
             var targetTid = GetWindowThreadProcessId(hwnd, out _);
             var curTid = GetCurrentThreadId();
-            var attached = targetTid != 0 && targetTid != curTid && AttachThreadInput(curTid, targetTid, true);
+            // 与 ActivateWindow 同理:目标线程无响应时不附加输入队列,否则本线程会一起停摆。
+            var canAttach = targetTid != 0 && targetTid != curTid && IsThreadResponsive(targetTid);
+            var attached = canAttach && AttachThreadInput(curTid, targetTid, true);
             try
             {
                 if (SetFocus(hwnd) != IntPtr.Zero) return true;
@@ -426,6 +556,9 @@ internal static class NativeMethods
             {
                 if (attached) AttachThreadInput(curTid, targetTid, false);
             }
+
+            // 目标不响应就别再重试:第二次注定同样失败,只会白白多花 30ms。
+            if (!canAttach) return false;
             System.Threading.Thread.Sleep(30);
         }
         return false;

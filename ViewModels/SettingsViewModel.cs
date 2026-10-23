@@ -447,12 +447,16 @@ public partial class SettingsViewModel : ObservableObject
 
     /// <summary>复制本机设备 ID 到剪贴板。</summary>
     [RelayCommand]
-    public void CopyDeviceId()
+    public async void CopyDeviceId()
     {
-        var dp = new Windows.ApplicationModel.DataTransfer.DataPackage();
-        dp.SetText(DeviceIdText);
-        Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
-        ShowMessage("本机设备 ID 已复制到剪贴板", InfoBarSeverity.Success);
+        if (await Services.ImageCodec.WriteClipboardTextAsync(DeviceIdText))
+        {
+            ShowMessage("本机设备 ID 已复制到剪贴板", InfoBarSeverity.Success);
+        }
+        else
+        {
+            ShowMessage("剪贴板被其他程序占用，复制未生效", InfoBarSeverity.Warning);
+        }
     }
 
     /// <summary>保存设备名称并同步至服务端。</summary>

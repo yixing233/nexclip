@@ -45,6 +45,9 @@ public sealed partial class ClipboardWindow : Window
 
     private bool _isPasting;
 
+    /// <summary>粘贴时回焦的硬超时:回焦只是"锦上添花",绝不允许它拖住粘贴。</summary>
+    private const int FocusRestoreTimeoutMs = 800;
+
     /// <summary>窗口显示完成事件(页面订阅:聚焦列表支持键盘操作)。</summary>
     public event Action? Shown;
 
@@ -577,18 +580,48 @@ public sealed partial class ClipboardWindow : Window
 
     private static AutomationElement? CaptureAutomationFocus(IntPtr target)
     {
-        var root = AutomationElement.FromHandle(target);
-        var focusedDescendant = root.FindFirst(
-            TreeScope.Descendants,
-            new AndCondition(
-                new PropertyCondition(AutomationElement.HasKeyboardFocusProperty, true),
-                new PropertyCondition(AutomationElement.IsKeyboardFocusableProperty, true)));
-        if (focusedDescendant is not null) return focusedDescendant;
+        // 先用 AutomationElement.FocusedElement 取全局焦点:这是一次轻量查询(实测 2~3ms),
+        // 而且绝大多数情况下它就是答案。
+        // 原实现反过来:先在目标窗口内做一次 Descendants 全量搜索(实测 347ms),
+        // 每次呼出都要为一次粘贴付这个代价 —— 而粘贴路径本身只有几百毫秒的预算。
+        try
+        {
+            var focusedElement = AutomationElement.FocusedElement;
+            if (focusedElement is not null &&
+                focusedElement.Current.IsKeyboardFocusable &&
+                IsUnderRoot(focusedElement, target))
+            {
+                return focusedElement;
+            }
+        }
+        catch
+        {
+            // 焦点元素在受保护进程或已失效,退回下面的搜索
+        }
 
-        var focusedElement = AutomationElement.FocusedElement;
-        return focusedElement is not null && focusedElement.Current.IsKeyboardFocusable
-            ? focusedElement
-            : null;
+        // 焦点不在目标窗口内(例如被输入法候选窗或托盘接走):才做一次限定范围的搜索。
+        // 失败一律视为"拿不到",由调用方退回 Win32 焦点路径。
+        try
+        {
+            var root = AutomationElement.FromHandle(target);
+            if (root is null) return null;
+            return root.FindFirst(
+                TreeScope.Descendants,
+                new AndCondition(
+                    new PropertyCondition(AutomationElement.HasKeyboardFocusProperty, true),
+                    new PropertyCondition(AutomationElement.IsKeyboardFocusableProperty, true)));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>UIA 元素是否属于指定顶层窗口(按最近的原生窗口句柄求根比较)。</summary>
+    private static bool IsUnderRoot(AutomationElement element, IntPtr target)
+    {
+        var root = GetAutomationRootWindow(element);
+        return NativeMethods.IsSameRootWindow(root, target);
     }
 
     private void TryTrackCurrentAutomationFocus()
@@ -606,9 +639,20 @@ public sealed partial class ClipboardWindow : Window
         }
     }
 
+    /// <summary>相邻两次 UIA 焦点跟踪的最小间隔:拖动/连续 Tab 时焦点事件可能每秒几十次。</summary>
+    private long _lastAutomationTrackTicks;
+
     private void TrackExternalAutomationFocus(object sender, AutomationFocusChangedEventArgs _)
     {
         if (sender is not AutomationElement element) return;
+
+        // 节流:连续焦点变化(拖动滚动、Tab 连按)时不必每次都做跨进程查询,
+        // 缓存只需要"最近一次外部焦点",120ms 的粒度完全够用。
+        var nowTicks = Environment.TickCount64;
+        var last = Interlocked.Read(ref _lastAutomationTrackTicks);
+        if (nowTicks - last < 120) return;
+        Interlocked.Exchange(ref _lastAutomationTrackTicks, nowTicks);
+
         try
         {
             if (element.Current.ProcessId == Environment.ProcessId ||
@@ -660,17 +704,24 @@ public sealed partial class ClipboardWindow : Window
         }
     }
 
+    /// <summary>
+    /// 求 UIA 元素所属的顶层窗口。原实现在每次焦点变化时都沿父链走到顶(最多 64 层跨进程调用),
+    /// 一次焦点变化就可能花掉几十到几百毫秒 —— 这正是"打字时整体发顿"的来源之一。
+    /// 现在改为:先看元素自身的原生句柄(绝大多数控件都有),有就直接求根返回;
+    /// 只有自绘控件(句柄为 0)才继续向上爬,且限制在 8 层以内。
+    /// </summary>
     private static IntPtr GetAutomationRootWindow(AutomationElement element)
     {
         var current = element;
-        var root = IntPtr.Zero;
-        for (var depth = 0; current is not null && depth < 64; depth++)
+        for (var depth = 0; current is not null && depth < 8; depth++)
         {
-            var nativeHandle = current.Current.NativeWindowHandle;
-            if (nativeHandle != 0) root = NativeMethods.GetRootWindow(new IntPtr(nativeHandle));
+            int nativeHandle;
+            try { nativeHandle = current.Current.NativeWindowHandle; }
+            catch { return IntPtr.Zero; }
+            if (nativeHandle != 0) return NativeMethods.GetRootWindow(new IntPtr(nativeHandle));
             current = TreeWalker.RawViewWalker.GetParent(current);
         }
-        return root;
+        return IntPtr.Zero;
     }
 
     private static string DescribeAutomationElement(AutomationElement? element)
@@ -703,9 +754,18 @@ public sealed partial class ClipboardWindow : Window
                 NativeMethods.ActivateWindow(target);
             }
             await WaitForForegroundAsync(target, 300);
+            // 恢复焦点只是锦上添花:同样放进线程池并限时,绝不阻塞 UI 线程。
             var automationFocus = GetPasteAutomationFocus();
-            if (IsPasteFocusIntact(target, _pasteFocus, automationFocus)) return;
-            TryRestorePasteFocus(target, _pasteFocus, automationFocus);
+            var isChromium = NativeMethods.IsChromiumWindow(target);
+            var restoreTask = Task.Run(() =>
+            {
+                if (IsPasteFocusIntact(target, _pasteFocus, automationFocus, isChromium)) return;
+                TryRestorePasteFocus(target, _pasteFocus, automationFocus, isChromium);
+            });
+            if (await Task.WhenAny(restoreTask, Task.Delay(FocusRestoreTimeoutMs)) != restoreTask)
+            {
+                Log.Warn($"恢复呼出前焦点超时({FocusRestoreTimeoutMs}ms),放弃回焦");
+            }
         }
         catch (Exception ex)
         {
@@ -732,7 +792,20 @@ public sealed partial class ClipboardWindow : Window
             var focus = _pasteFocus;
             var automationFocus = GetPasteAutomationFocus();
             Log.Debug($"粘贴开始:id={vm.Item.Id}, plainText={plainText}, target={target}, focus={focus}, uia={automationFocus is not null}");
-            await engine.CopyHistoryItemAsync(vm.Item, plainText: plainText);
+
+            // 先确认内容真的写进了剪贴板再注入按键。
+            // 写入失败(剪贴板被远程控制软件/其它剪贴板工具占用)时若照样发 Ctrl+V,
+            // 目标应用贴出的是剪贴板上一次的内容 —— 用户看到"粘贴了,但贴的是别的东西",
+            // 这比明确失败糟糕得多。此处的提前返回同时避免了后面无谓的窗口隐藏与回焦。
+            var writeStarted = Environment.TickCount64;
+            if (!await engine.CopyHistoryItemAsync(vm.Item, plainText: plainText))
+            {
+                Log.Warn($"粘贴取消:内容未写入剪贴板(id={vm.Item.Id}, 耗时={Environment.TickCount64 - writeStarted}ms)");
+                NotifyClipboardUnavailable();
+                return;
+            }
+            Log.Debug($"粘贴:写剪贴板完成 {Environment.TickCount64 - writeStarted}ms");
+
             await HideAndInjectPasteAsync(target, focus, automationFocus, $"id={vm.Item.Id}");
         }
         catch (Exception ex)
@@ -742,6 +815,26 @@ public sealed partial class ClipboardWindow : Window
         finally
         {
             _isPasting = false;
+        }
+    }
+
+    /// <summary>
+    /// 剪贴板被占用导致粘贴/复制无法进行时提示用户。
+    /// 占用者优先用写入器实测到的结果(重试期间一直占着的那个进程),它比事后重新查询更准 ——
+    /// 后者往往已经查不到,只能显示"其他程序"。
+    /// </summary>
+    private static void NotifyClipboardUnavailable()
+    {
+        try
+        {
+            // 优先用写入器实测到的持锁者;拿不到时用统一措辞描述,不要把"内容所有者"说成"占用者"
+            var detail = SourceAppDetector.DescribeClipboardBlocker(ClipboardWriter.LastBlockedBy);
+            App.Services.Tray?.Notify("剪贴板暂时不可用",
+                $"{detail}，本次操作已取消。请稍后重试。");
+        }
+        catch
+        {
+            // 提示失败不影响主流程
         }
     }
 
@@ -763,7 +856,12 @@ public sealed partial class ClipboardWindow : Window
             var focus = _pasteFocus;
             var automationFocus = GetPasteAutomationFocus();
             Log.Debug($"批量粘贴开始:chars={text.Length}, target={target}, focus={focus}, uia={automationFocus is not null}");
-            engine.WriteMergedTextToClipboard(text);
+            if (!await engine.WriteMergedTextToClipboardAsync(text))
+            {
+                Log.Warn("批量粘贴取消:内容未写入剪贴板");
+                NotifyClipboardUnavailable();
+                return;
+            }
             await HideAndInjectPasteAsync(target, focus, automationFocus, $"merged({text.Length}字符)");
         }
         catch (Exception ex)
@@ -807,11 +905,41 @@ public sealed partial class ClipboardWindow : Window
             await WaitForForegroundAsync(target, 700);
         }
 
+        // Chromium 判定会枚举目标窗口的全部子窗口(每个子窗口一次跨进程 GetClassName),
+        // 一次粘贴里原本要算三遍(回焦判定、回焦兜底、注入键选择)。这里算一次复用到底。
+        var isChromium = NativeMethods.IsChromiumWindow(target);
+
         // 焦点已经自然回到呼出前的输入框时,绝对不要再强设一次:强设焦点会让目标应用的
         // TSF 焦点文档与 Win32 焦点脱节,之后打字候选栏会跳到屏幕左上角
         // (详见 IsPasteFocusIntact / NativeMethods.SetFocusTo 注释)。只在没回焦时兜底。
-        var focusIntact = IsPasteFocusIntact(target, focus, automationFocus);
-        var focusRestored = focusIntact || TryRestorePasteFocus(target, focus, automationFocus);
+        // 焦点判定与回焦都可能触发跨进程 UIA 调用(Chromium 的 Automation.Compare、
+        // UIA SetFocus)以及 AttachThreadInput —— 三者都没有超时。全部挪到线程池并加硬超时:
+        // 拿不到焦点就当作"没回焦",但粘贴本身照常进行,绝不因为回焦失败而卡住 UI 线程。
+        var focusIntact = false;
+        var focusRestored = false;
+        var focusStarted = Environment.TickCount64;
+        var focusElapsed = -1L;
+        try
+        {
+            var focusTask = Task.Run(() =>
+            {
+                if (IsPasteFocusIntact(target, focus, automationFocus, isChromium)) return (Intact: true, Restored: true);
+                return (Intact: false, Restored: TryRestorePasteFocus(target, focus, automationFocus, isChromium));
+            });
+            if (await Task.WhenAny(focusTask, Task.Delay(FocusRestoreTimeoutMs)) == focusTask)
+            {
+                (focusIntact, focusRestored) = await focusTask;
+                focusElapsed = Environment.TickCount64 - focusStarted;
+            }
+            else
+            {
+                Log.Warn($"回焦超时({FocusRestoreTimeoutMs}ms 未返回,目标窗口可能无响应),直接注入粘贴键");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"回焦失败,忽略: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
+        }
         await WaitForForegroundAsync(target, 300);
         await Task.Delay(100);
         var foregroundAtInject = NativeMethods.GetForegroundWindow();
@@ -823,14 +951,14 @@ public sealed partial class ClipboardWindow : Window
 
         // 成熟剪贴板管理器会按目标应用选择粘贴键。Chromium/Electron 的
         // contenteditable/ProseMirror 对 Ctrl+V 更可靠,不能套用全局 Shift+Insert。
-        var forceCtrlV = NativeMethods.IsChromiumWindow(target);
-        var useCtrlV = forceCtrlV || App.Services.Settings.PasteKey == "CtrlV";
+        var useCtrlV = isChromium || App.Services.Settings.PasteKey == "CtrlV";
         var keyName = useCtrlV ? "Ctrl+V" : "Shift+Insert";
-        var strategy = forceCtrlV ? "chromium" : "configured";
+        var strategy = isChromium ? "chromium" : "configured";
         var injected = useCtrlV
             ? NativeMethods.SendInputCtrlV()
             : NativeMethods.SendInputShiftInsert();
-        Log.Debug($"粘贴:SendInput {keyName} (strategy={strategy}, natural={restoredNaturally}, activated={activated}, focusIntact={focusIntact}, focusRestored={focusRestored}, injected={injected}, {context})");
+        Log.Debug($"粘贴:SendInput {keyName} (strategy={strategy}, natural={restoredNaturally}, activated={activated}, focusIntact={focusIntact}, focusRestored={focusRestored}, injected={injected}, " +
+                  $"回焦耗时={focusElapsed}ms, {context})");
         return true;
     }
 
@@ -860,12 +988,12 @@ public sealed partial class ClipboardWindow : Window
     /// TSF 焦点文档因此与 Win32 焦点脱节,输入法查不到插入符矩形,候选栏退化到屏幕左上角。
     /// 判断刻意保守:拿不准一律返回 false 退回强制回焦,不牺牲粘贴成功率。
     /// </summary>
-    private static bool IsPasteFocusIntact(IntPtr target, IntPtr focus, AutomationElement? automationFocus)
+    private static bool IsPasteFocusIntact(IntPtr target, IntPtr focus, AutomationElement? automationFocus, bool isChromium)
     {
         if (!NativeMethods.IsSameRootWindow(NativeMethods.GetForegroundWindow(), target)) return false;
 
         // Chromium/Electron:Win32 焦点停在渲染窗口上不代表 DOM 输入框已回焦,只能比对 UIA 焦点元素。
-        if (NativeMethods.IsChromiumWindow(target))
+        if (isChromium)
         {
             if (automationFocus is null) return false;
             try
@@ -891,9 +1019,9 @@ public sealed partial class ClipboardWindow : Window
     private static bool TryRestorePasteFocus(
         IntPtr target,
         IntPtr focus,
-        AutomationElement? automationFocus)
+        AutomationElement? automationFocus,
+        bool isChromium)
     {
-        var isChromium = NativeMethods.IsChromiumWindow(target);
         if (isChromium && TrySetAutomationFocus(target, automationFocus)) return true;
 
         var focusTarget = focus;

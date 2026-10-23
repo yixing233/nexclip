@@ -205,12 +205,10 @@ public sealed partial class SettingsPage : Page
                 VerticalAlignment = VerticalAlignment.Center,
                 Style = (Style)Application.Current.Resources["AccentButtonStyle"],
             };
-            copyCodeBtn.Click += (_, _) =>
+            copyCodeBtn.Click += async (_, _) =>
             {
-                var pkg = new DataPackage();
-                pkg.SetText(result.Code);
-                Clipboard.SetContent(pkg);
-                copyCodeBtn.Content = "已复制";
+                // 走专用 STA 写入线程:失败时明确告知,而不是让按钮假装成功了
+                copyCodeBtn.Content = await ImageCodec.WriteClipboardTextAsync(result.Code) ? "已复制" : "剪贴板被占用";
             };
 
             Grid.SetColumn(codeLabel, 0);
@@ -355,15 +353,24 @@ public sealed partial class SettingsPage : Page
         try
         {
             var info = $"NexClip {_vm.VersionText} | 框架: WinUI 3 / .NET 9 | 服务端: NexClip Server (node) | 数据位置: {_vm.ConfiguredStorageDir} | 项目: github.com/yixing233/nexclip";
-            var pkg = new DataPackage();
-            pkg.SetText(info);
-            Clipboard.SetContent(pkg);
-            _vm.ShowMessage("版本信息已复制到剪贴板", InfoBarSeverity.Success);
+            _ = CopyVersionInfoAsync(info);
         }
         catch (Exception ex)
         {
             Log.Error("复制版本信息失败", ex);
             _vm.ShowMessage($"复制版本信息失败：{ServerApi.DescribeException(ex, "请稍后重试。")}", InfoBarSeverity.Error);
+        }
+    }
+
+    private async Task CopyVersionInfoAsync(string info)
+    {
+        if (await ImageCodec.WriteClipboardTextAsync(info))
+        {
+            _vm.ShowMessage("版本信息已复制到剪贴板", InfoBarSeverity.Success);
+        }
+        else
+        {
+            _vm.ShowMessage("剪贴板被其他程序占用，复制未生效", InfoBarSeverity.Warning);
         }
     }
 

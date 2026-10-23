@@ -108,12 +108,8 @@ public static class ClipboardFiles
         }
         if (items.Count == 0) return false;
 
-        var pkg = new DataPackage();
         // readOnly: true 表示复制(Ctrl+C)语义;传 false 会被资源管理器识别为剪切(Ctrl+X),
-        // 粘贴后原文件消失,属于破坏性行为,绝不能作为默认。
-        pkg.SetStorageItems(items, true);
-        pkg.Properties[ImageCodec.SelfOriginProperty] = "1";
-        ImageCodec.SetContentWithRetry(pkg, flush: true);
-        return true;
+        // 粘贴后原文件消失,属于破坏性行为,绝不能作为默认。写入交给专用 STA 线程。
+        return await ClipboardWriter.WriteFilesAsync(items);
     }
 }

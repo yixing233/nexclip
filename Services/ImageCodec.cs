@@ -174,73 +174,75 @@ public static class ImageCodec
     }
 
     /// <summary>
-    /// 写文本到系统剪贴板;标有 SelfOriginProperty 避免循环触发同步。
-    /// html 非空时同时写入 HTML 与纯文本两种格式,由目标程序按自身能力择取。
+    /// 写文本到系统剪贴板;html 非空时同时写入 HTML 与纯文本,由目标程序按自身能力择取。
+    ///
+    /// 实际写入由 <see cref="ClipboardWriter"/> 的专用 STA 线程完成。此处刻意**不**在
+    /// UI 线程上做任何剪贴板 IO:SetContent/Flush 是跨进程阻塞调用,留在 UI 线程上
+    /// 一旦占用者不响应就会把 UI 线程连同全机剪贴板一起拖死。
     /// </summary>
-    public static void WriteClipboardText(string text, string? html = null)
-    {
-        var pkg = new DataPackage();
-        pkg.SetText(text);
-        TrySetHtml(pkg, html);
-        pkg.Properties[SelfOriginProperty] = "1";
-        SetContentWithRetry(pkg, flush: true);
-    }
+    public static Task<bool> WriteClipboardTextAsync(string text, string? html = null) =>
+        ClipboardWriter.WriteTextAsync(text, html);
 
-    /// <summary>写图片到系统剪贴板;标有 SelfOriginProperty 避免循环触发同步。</summary>
-    public static async Task WriteClipboardImageAsync(string localImagePath)
+    /// <summary>写图片到系统剪贴板(先读成字节,再交给专用线程写入)。</summary>
+    public static async Task<bool> WriteClipboardImageAsync(string localImagePath)
     {
-        // 原实现用 StorageFile.GetFileFromPathAsync(...).AsTask().GetAwaiter().GetResult()
-        // 在 UI 线程上同步等待异步 WinRT 调用:既会阻塞 UI 线程做磁盘 IO,也存在经典
-        // sync-over-async 死锁风险。改为正常 await。
-        var file = await StorageFile.GetFileFromPathAsync(localImagePath);
-        var pkg = new DataPackage();
-        pkg.SetBitmap(RandomAccessStreamReference.CreateFromFile(file));
-        pkg.Properties[SelfOriginProperty] = "1";
-        SetContentWithRetry(pkg, flush: true);
-    }
-
-    /// <summary>写剪贴板的最大尝试次数与递增退避基数(毫秒)。</summary>
-    private const int ClipboardWriteAttempts = 5;
-    private const int ClipboardWriteBackoffMs = 20;
-
-    /// <summary>
-    /// 带退避重试的剪贴板写入。
-    /// 剪贴板是全局单占资源:另一个进程(远程控制软件、其它剪贴板管理器、Office 等)
-    /// 短暂持有它时,单次 SetContent 会直接失败并抛出消息为空的 COM 异常(CLIPBRD_E_CANT_OPEN 一类),
-    /// 用户看到的现象就是"复制/同步没反应、内容没进剪贴板"。
-    /// 主流剪贴板管理器(如 Ditto)的通行做法是短暂退避后重试,而不是把这次复制丢掉。
-    /// 最坏情况下总退避约 200ms,仅在真正发生争用时才会付出。
-    /// 本方法对同程序集开放:文件条目写回(ClipboardFiles)复用同一套退避策略,
-    /// 避免两处各写一份重试逻辑而在后续维护中产生行为差异。
-    /// </summary>
-    internal static void SetContentWithRetry(DataPackage package, bool flush)
-    {
-        for (var attempt = 0; ; attempt++)
+        try
         {
-            try
-            {
-                Clipboard.SetContent(package);
-                if (flush)
-                {
-                    // Flush 让内容在本进程退出后仍然可用;失败只影响"退出后是否留存",不影响本次写入
-                    try
-                    {
-                        Clipboard.Flush();
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Debug($"剪贴板 Flush 失败(内容已写入,本次复制不受影响): {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
-                    }
-                }
-                return;
-            }
-            catch (Exception ex) when (attempt < ClipboardWriteAttempts - 1)
-            {
-                Log.Debug($"写剪贴板失败,退避后重试(第 {attempt + 1} 次): {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
-                System.Threading.Thread.Sleep(ClipboardWriteBackoffMs * (attempt + 1));
-            }
+            var bytes = await ReadImageBytesAsync(localImagePath);
+            if (bytes is null || bytes.Length == 0) return false;
+            return await ClipboardWriter.WriteImageAsync(bytes);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"读取待复制图片失败: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
+            return false;
         }
     }
+
+    /// <summary>
+    /// 读出图片字节供剪贴板使用。
+    /// 剪贴板只接受位图流,统一转成 PNG 字节:本应用缓存的图片本身就是 PNG,直接读文件即可;
+    /// 其它来源(用户导入的 jpg/bmp 等)交给 WIC 转码,避免把不支持的格式塞进剪贴板。
+    /// </summary>
+    private static async Task<byte[]?> ReadImageBytesAsync(string path)
+    {
+        if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
+        var ext = Path.GetExtension(path);
+        if (string.Equals(ext, ".png", StringComparison.OrdinalIgnoreCase))
+        {
+            return await File.ReadAllBytesAsync(path);
+        }
+
+        var file = await StorageFile.GetFileFromPathAsync(path).AsTask().ConfigureAwait(false);
+        using var stream = await file.OpenReadAsync().AsTask().ConfigureAwait(false);
+        var decoder = await BitmapDecoder.CreateAsync(stream).AsTask().ConfigureAwait(false);
+        using var outStream = new InMemoryRandomAccessStream();
+        var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, outStream).AsTask().ConfigureAwait(false);
+        var pixels = await decoder.GetPixelDataAsync(
+            BitmapPixelFormat.Bgra8,
+            BitmapAlphaMode.Premultiplied,
+            new BitmapTransform(),
+            ExifOrientationMode.RespectExifOrientation,
+            ColorManagementMode.ColorManageToSRgb).AsTask().ConfigureAwait(false);
+        encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied,
+            decoder.PixelWidth, decoder.PixelHeight, decoder.DpiX, decoder.DpiY, pixels.DetachPixelData());
+        await encoder.FlushAsync().AsTask().ConfigureAwait(false);
+        var bytes = new byte[outStream.Size];
+        using var reader = new DataReader(outStream.GetInputStreamAt(0));
+        await reader.LoadAsync((uint)outStream.Size).AsTask().ConfigureAwait(false);
+        reader.ReadBytes(bytes);
+        return bytes;
+    }
+
+    // 说明:这里刻意不再提供"同步重试写剪贴板"的方法。
+    //
+    // 原先的 SetContentWithRetry 在调用线程上 SetContent + Flush,失败后 Thread.Sleep 退避重试。
+    // 它有两个致命问题:一是跑在 UI 线程上,而 SetContent/Flush 是**无超时**的跨进程调用,
+    // 占用者不响应时会把 UI 线程连同全机剪贴板一起拖死;二是重试用的 Thread.Sleep 会进一步
+    // 占住线程,把一次偶发争用放大成一次可感知的卡顿。
+    //
+    // 所有剪贴板写入现在统一走 ClipboardWriter:专用 STA 线程执行,调用方只 await 一个
+    // 带硬超时的 Task,失败会如实返回 false 由调用方决定要不要提示用户。
 
     /// <summary>
     /// 超限时降采样重编码尝试的最小长边。
@@ -395,24 +397,11 @@ public static class ImageCodec
     }
 
     /// <summary>把本地图片文件写入系统剪贴板。</summary>
-    public static async Task SetClipboardImageAsync(string filePath)
-    {
-        var file = await StorageFile.GetFileFromPathAsync(filePath);
-        var package = new DataPackage();
-        package.Properties.Add(SelfOriginProperty, true);
-        package.SetBitmap(RandomAccessStreamReference.CreateFromFile(file));
-        SetContentWithRetry(package, flush: false);
-    }
+    public static Task<bool> SetClipboardImageAsync(string filePath) => WriteClipboardImageAsync(filePath);
 
     /// <summary>把文本写入系统剪贴板。html 非空时附带写入 HTML 格式(纯文本始终写入作为兜底)。</summary>
-    public static void SetClipboardText(string text, string? html = null)
-    {
-        var package = new DataPackage();
-        package.Properties.Add(SelfOriginProperty, true);
-        package.SetText(text);
-        TrySetHtml(package, html);
-        SetContentWithRetry(package, flush: false);
-    }
+    public static Task<bool> SetClipboardText(string text, string? html = null) =>
+        ClipboardWriter.WriteTextAsync(text, html);
 
     /// <summary>
     /// 给 DataPackage 附加 HTML 格式。存储的是片段,写回前需用 CreateHtmlFormat 重新生成 CF_HTML 头。

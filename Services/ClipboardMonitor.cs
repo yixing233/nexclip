@@ -63,6 +63,10 @@ public sealed class ClipboardMonitor
     private long _lastCaptureFailureUtcTicks;
     private int _captureFailureCount;
     private int _watchdogRecoveryCount;
+    /// <summary>连续失败次数(成功后清零),用于指数退避。</summary>
+    private int _consecutiveFailures;
+    /// <summary>退避截止时间(UTC);在此之前不发起新的捕获。</summary>
+    private DateTime _retryNotBeforeUtc = DateTime.MinValue;
 
     /// <summary>剪贴板首次探测失败的时间;探测成功后清零。用于判断"持续不可用"而非"瞬时争用"。</summary>
     private long _clipboardUnavailableSinceTicks;
@@ -129,8 +133,14 @@ public sealed class ClipboardMonitor
         _onCapture = onCapture;
         _pollTimer = dispatcher.CreateTimer();
         _pollTimer.Interval = TimeSpan.FromSeconds(2);
-        _pollTimer.Tick += (_, _) => _ = CaptureAsync();
-        // 看门狗与轮询刻意分开:轮询必须留在 UI 线程(剪贴板 API 的线程亲和性),
+        _pollTimer.Tick += (_, _) =>
+        {
+            // 主路径是 ContentChanged 事件;轮询只是兜底(事件在个别宿主上会漏)。
+            // 序列号未变化时 CaptureAsync 会在读取剪贴板之前就返回,代价仅一次 Win32 调用,
+            // 因此这里保持 2 秒是安全的;真正昂贵的工作都有前置短路。
+            _ = CaptureAsync();
+        };
+        // 看门狗与轮询刻意分开:轮询留在 UI 线程(ContentChanged 的线程亲和性),
         // 而看门狗要在 UI 线程卡死时仍然存活,所以跑在后台线程池上。
         _watchdogTimer = new System.Threading.Timer(_ => CheckWatchdog(), null,
             Timeout.Infinite, Timeout.Infinite);
@@ -154,7 +164,14 @@ public sealed class ClipboardMonitor
         _watchdogTimer?.Change(Timeout.Infinite, Timeout.Infinite);
     }
 
-    /// <summary>暂停剪贴板捕获作用域:写回剪贴板时使用,彻底阻断写回触发的回环风暴。</summary>
+    /// <summary>
+    /// 暂停剪贴板捕获。写回剪贴板时使用,避免"自己写 → 自己捕获 → 自己上传"的回环。
+    ///
+    /// 语义要点:释放的是"暂停计数",**不是**"立即恢复监听"。释放后仍有一段静默窗口
+    /// (<see cref="PostPauseSilenceMs"/>)继续屏蔽捕获 —— 因为写剪贴板是异步的,
+    /// 上面的系统通知(WM_CLIPBOARDUPDATE)常常在写入返回之后才到,
+    /// 只靠 using 作用域内的屏蔽会漏掉这一次,于是每次粘贴都会触发一次多余的自捕获。
+    /// </summary>
     public IDisposable PauseCapture(TimeSpan? duration = null)
     {
         Interlocked.Increment(ref _pauseCount);
@@ -162,9 +179,13 @@ public sealed class ClipboardMonitor
         return new ActionDisposable(() =>
         {
             Interlocked.Decrement(ref _pauseCount);
-            _pauseUntil = DateTime.UtcNow.AddMilliseconds(1000);
+            // 释放后保持一段静默:等待系统把本次写入的变更通知送达(通常几毫秒,最坏几十毫秒)
+            _pauseUntil = DateTime.UtcNow.AddMilliseconds(PostPauseSilenceMs);
         });
     }
+
+    /// <summary>暂停释放后继续屏蔽捕获的时长(毫秒)。</summary>
+    private const double PostPauseSilenceMs = 500;
 
     /// <summary>记录已知内容 Hash,避免自写回后再次捕获或上传。</summary>
     public void RecordLastSeen(string hash)
@@ -185,6 +206,16 @@ public sealed class ClipboardMonitor
     private void OnContentChanged(object? sender, object e)
     {
         if (_pauseCount > 0 || DateTime.UtcNow < _pauseUntil) return;
+
+        // 系统通知是"剪贴板真的变了"的权威信号,必须无条件立即重试:
+        // 否则失败退避期间(最长 30s)用户新复制的内容会被整体跳过,
+        // 表现为"复制了但历史里没有",比反复失败严重得多。
+        if (DateTime.UtcNow < _retryNotBeforeUtc)
+        {
+            _retryNotBeforeUtc = DateTime.MinValue;
+            Interlocked.Exchange(ref _consecutiveFailures, 0);
+        }
+
         _captureStage = "starting";
         // 先取出旧实例再替换,最后取消并释放:被替换掉的 CancellationTokenSource 若只 Cancel 不 Dispose,
         // 其内部的定时器与回调注册会一直存活到 GC,剪贴板高频变动时会持续堆积。
@@ -224,6 +255,9 @@ public sealed class ClipboardMonitor
         {
             if (!_settings.MonitorEnabled) return;
             if (_pauseCount > 0 || DateTime.UtcNow < _pauseUntil) return;
+            // 上一次失败后的退避窗口内直接返回:失败往往意味着占用者还没放手,
+            // 每 2 秒重试一次只是在 UI 线程上反复做一次注定失败的跨进程调用。
+            if (DateTime.UtcNow < _retryNotBeforeUtc) return;
 
             // 零成本短路(必须放在所有剪贴板读取之前):剪贴板序列号只在内容真正变化时递增。
             // 序列号与上次成功处理的一致说明内容完全没变,直接返回,避免 2 秒轮询在剪贴板里
@@ -243,6 +277,11 @@ public sealed class ClipboardMonitor
 
             // 彻底杜绝自写回环(廉价快路径): 若剪贴板所有者即本进程,直接忽略。
             // 使用 Win32 查询,不触发跨进程 OLE 调用。
+            //
+            // 注意:自从写入改成 SetContent + Flush 之后,所有权会立刻交给系统,
+            // 这个快路径在"我们刚写完"时基本不会命中。真正挡住自写回环的是
+            // RecordLastSeen/SuppressNext 记录的 hash(见下方)与写入时的 PauseCapture。
+            // 因此这里不再指望它,只保留作为零成本兜底。
             if (SourceAppDetector.IsClipboardOwnedByCurrentProcess())
             {
                 // 这是"明确决定忽略本次剪贴板状态"而非"读取失败需要重试",必须记账序列号:
@@ -341,6 +380,9 @@ public sealed class ClipboardMonitor
                     payload.Text, payload.Image, hash, sourceApp, payload.Html, payload.Files,
                     payload.OversizedImage, payload.OversizedSize), ct);
                 Interlocked.Exchange(ref _lastCaptureSuccessUtcTicks, DateTime.UtcNow.Ticks);
+                // 成功即复位退避
+                Interlocked.Exchange(ref _consecutiveFailures, 0);
+                _retryNotBeforeUtc = DateTime.MinValue;
             }
             catch (Exception ex)
             {
@@ -350,6 +392,14 @@ public sealed class ClipboardMonitor
                 // 不节流会以 2 秒一条的速度刷屏(实测出现过连续 6 小时的同一条错误),
                 // 既迅速撑大日志,又掩盖真正的新错误。
                 var nowUtc = DateTime.UtcNow;
+                // 连续失败时按指数退避:失败通常意味着某个占用者暂时不放手,
+                // 每 2 秒重试一次只会在 UI 线程上反复做一次注定失败的跨进程调用。
+                var failures = Interlocked.Increment(ref _consecutiveFailures);
+                // 上限 8 秒:退避只为少做无用的跨进程调用,不承担"等待对方放手"的职责
+                // (那是系统通知与轮询自己会处理的事),过长会放大漏捕获的窗口。
+                var delayMs = Math.Min(2000 * (1 << Math.Min(failures - 1, 2)), 8000);
+                _retryNotBeforeUtc = nowUtc.AddMilliseconds(delayMs);
+
                 if (nowUtc - _lastCaptureFailureLogUtc >= CaptureFailureLogInterval)
                 {
                     var skipped = _throttledCaptureFailures;
@@ -359,7 +409,8 @@ public sealed class ClipboardMonitor
                     // 只记 Message 会得到"剪贴板捕获失败(阶段=reading): "这种无法定位的日志。
                     Log.Warn($"剪贴板捕获失败(阶段={_captureStage}): {ex.GetType().Name} " +
                              $"0x{ex.HResult:X8} {ex.Message}" +
-                             (skipped > 0 ? $"(期间另有 {skipped} 次同类失败已节流)" : ""));
+                             (skipped > 0 ? $"(期间另有 {skipped} 次同类失败已节流)" : "") +
+                             $";连续失败 {failures} 次,退避 {delayMs}ms");
                 }
                 else
                 {
@@ -415,9 +466,11 @@ public sealed class ClipboardMonitor
         if (Interlocked.Exchange(ref _clipboardBlocked, 1) == 0)
         {
             Interlocked.Increment(ref _clipboardBlockedCount);
-            var owner = SourceAppDetector.TryGetClipboardOwnerProcessName();
-            Log.Warn($"剪贴板被持续独占 {unavailableMs:F0}ms,暂停读取(占用者={owner ?? "未知"})");
-            ClipboardBlocked?.Invoke(owner);
+            // 这里要报的是"谁锁着剪贴板"(GetOpenClipboardWindow),不是"内容是谁放的"。
+            // 用错会让每一次偶发争用都被归因到常驻的内容所有者身上,排查方向直接跑偏。
+            var holder = SourceAppDetector.TryGetClipboardLockHolderProcessName();
+            Log.Warn($"剪贴板被持续独占 {unavailableMs:F0}ms,暂停读取(持锁者={holder ?? "未知"})");
+            ClipboardBlocked?.Invoke(holder);
         }
         // 刻意不记账序列号:熔断期间剪贴板上可能已被放入新内容,恢复后应当照常捕获,
         // 记账会让那份内容被永久跳过。重复探测本身不产生日志,不存在刷屏代价。
@@ -427,6 +480,11 @@ public sealed class ClipboardMonitor
     /// <summary>
     /// 剪贴板所有者是否为已配置过滤的远程控制程序。仅 Win32 查询 + 路径读取,
     /// 不做 PE 版本解析与图标提取,可安全放在跨进程读取之前。
+    ///
+    /// <para><b>这里必须用"数据所有者"(GetClipboardOwner),不能用"持锁者"</b>:
+    /// 要防的是读取时被所有者的延迟渲染(WM_RENDERFORMAT)挂住 —— 会来渲染数据的是内容所有者。
+    /// 持锁者只在 OpenClipboard 期间存在,与后续 GetContent 的阻塞风险无关;
+    /// 换成持锁者会让这条过滤在绝大多数时候失效(无人持锁时返回 null → 直接放行)。</para>
     /// </summary>
     private bool IsBlockedSource(uint clipboardSequence)
     {
@@ -464,9 +522,12 @@ public sealed class ClipboardMonitor
 
             Interlocked.Increment(ref _watchdogRecoveryCount);
             var stage = _captureStage;
-            var owner = SourceAppDetector.TryGetClipboardOwnerProcessName();
+            // 看门狗关心的是"谁让我们卡住的":持锁者优先,没有持锁者时退回内容所有者作为线索
+            var holder = SourceAppDetector.TryGetClipboardLockHolderProcessName();
+            var owner = holder ?? SourceAppDetector.TryGetClipboardOwnerProcessName();
             Log.Warn($"剪贴板看门狗触发: 阶段={stage}, 持续={elapsedMs:F0}ms, " +
-                     $"累计失败={_captureFailureCount}, 剪贴板占用者={owner ?? "未知"}");
+                     $"累计失败={_captureFailureCount}, " +
+                     $"持锁者={holder ?? "无"}, 内容所有者={SourceAppDetector.TryGetClipboardOwnerProcessName() ?? "未知"}");
 
             // 复位捕获状态,让后续轮询从干净状态开始。跨进程调用仍在进行时无法取消,
             // 因此这里只清标记;若 UI 线程确实已挂起,轮询定时器同样不会触发,不存在并发捕获。
@@ -564,8 +625,8 @@ public sealed class ClipboardMonitor
         // 否则用户点一次"同步当前剪贴板"就会把进程挂死。
         if (!NativeMethods.TryProbeClipboard())
         {
-            var owner = SourceAppDetector.TryGetClipboardOwnerProcessName();
-            Log.Warn($"手动捕获跳过:剪贴板当前不可打开(占用者={owner ?? "未知"})");
+            var holder = SourceAppDetector.TryGetClipboardLockHolderProcessName();
+            Log.Warn($"手动捕获跳过:剪贴板当前不可打开(持锁者={holder ?? "未知"})");
             return "";
         }
         uint manualSequence = 0;

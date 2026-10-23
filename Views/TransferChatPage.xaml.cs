@@ -234,22 +234,36 @@ public sealed partial class TransferChatPage : UserControl
         // 记录右键点击的气泡项
     }
 
-    private void CopyMessage_Click(object sender, RoutedEventArgs e)
+    private async void CopyMessage_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement fe && fe.DataContext is ChatMessageItem msg)
+        if (sender is not FrameworkElement fe || fe.DataContext is not ChatMessageItem msg) return;
+        bool ok;
+        string label;
+        if (msg.IsText && !string.IsNullOrEmpty(msg.Text))
         {
-            if (msg.IsText && !string.IsNullOrEmpty(msg.Text))
-            {
-                var dp = new DataPackage();
-                dp.SetText(msg.Text);
-                Clipboard.SetContent(dp);
-                App.Services.Tray?.Notify("NexClip", "已复制文本内容");
-            }
-            else if (msg.IsImage && !string.IsNullOrEmpty(msg.ImagePath) && File.Exists(msg.ImagePath))
-            {
-                _ = ImageCodec.SetClipboardImageAsync(msg.ImagePath);
-                App.Services.Tray?.Notify("NexClip", "已复制图片");
-            }
+            // 不再直接 Clipboard.SetContent:那是一次跨进程阻塞调用,且失败会被静默吞掉。
+            ok = await ImageCodec.WriteClipboardTextAsync(msg.Text);
+            label = "文本内容";
+        }
+        else if (msg.IsImage && !string.IsNullOrEmpty(msg.ImagePath) && File.Exists(msg.ImagePath))
+        {
+            ok = await ImageCodec.WriteClipboardImageAsync(msg.ImagePath);
+            label = "图片";
+        }
+        else
+        {
+            return;
+        }
+
+        if (ok)
+        {
+            App.Services.Tray?.Notify("NexClip", $"已复制{label}");
+        }
+        else
+        {
+            // 占用者取写入器实测到的持锁者;拿不到时用统一措辞,避免误导成内容所有者
+            var detail = SourceAppDetector.DescribeClipboardBlocker(ClipboardWriter.LastBlockedBy);
+            App.Services.Tray?.Notify("剪贴板暂时不可用", $"{detail}，本次复制未生效。");
         }
     }
 

@@ -565,17 +565,20 @@ public static class SmartActionService
         }
     }
 
-    private static void CopyToClipboard(string text)
+    private static void CopyToClipboard(string text) => _ = CopyToClipboardAsync(text);
+
+    private static async Task CopyToClipboardAsync(string text)
     {
         try
         {
-            var package = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
-            package.SetText(text);
-            global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(package);
+            if (!await ImageCodec.WriteClipboardTextAsync(text))
+            {
+                Log.Warn("复制到剪贴板失败:剪贴板被其他程序占用");
+            }
         }
         catch (Exception ex)
         {
-            Log.Warn($"复制到剪贴板失败: {ex.Message}");
+            Log.Warn($"复制到剪贴板失败: {ex.GetType().Name} 0x{ex.HResult:X8} {ex.Message}");
         }
     }
 }

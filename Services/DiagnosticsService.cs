@@ -56,7 +56,11 @@ public static class DiagnosticsService
         sb.AppendLine($"最后失败: {FormatUtc(monitor.LastCaptureFailureUtc)}");
         sb.AppendLine($"失败次数: {monitor.CaptureFailureCount}");
         sb.AppendLine($"看门狗恢复次数: {monitor.WatchdogRecoveryCount}");
-        sb.AppendLine($"剪贴板所有者: {SourceAppDetector.TryGetClipboardOwnerProcessName() ?? "未知"} (PID {GetClipboardOwnerPid()})");
+        // 两个概念必须分开列出,否则排查时会把"内容来源"误当成"卡住剪贴板的元凶":
+        // - 数据所有者:内容是谁放进去的,可以长期保持,不代表此刻有人持锁
+        // - 持锁者:此刻 OpenClipboard 未 Close 的进程,才是 OpenClipboard/SetContent 失败的直接原因
+        sb.AppendLine($"剪贴板数据所有者: {SourceAppDetector.TryGetClipboardOwnerProcessName() ?? "未知"} (PID {GetClipboardOwnerPid()})");
+        sb.AppendLine($"剪贴板持锁者: {SourceAppDetector.TryGetClipboardLockHolderProcessName() ?? "无(当前可自由打开)"}");
         sb.AppendLine($"剪贴板可打开: {NativeMethods.TryProbeClipboard()}");
         if (monitor.IsClipboardBlocked)
         {
