@@ -6,39 +6,21 @@ namespace NexClip.Installer.Native.Services;
 
 public static class ShortcutHelper
 {
+    /// <summary>
+    /// 创建 .lnk 快捷方式。
+    ///
+    /// <para><b>不再启动 PowerShell</b>：此前这里拼一段
+    /// <c>(New-Object -ComObject WScript.Shell).CreateShortcut(...)</c> 脚本交给
+    /// <c>powershell.exe</c> 执行。安装一次会拉起最多 3 个 PowerShell 进程
+    /// （开始菜单 NexClip、开始菜单「卸载 NexClip」、桌面），
+    /// 既慢（每个 300~800ms）又会被杀软拦成"可疑脚本执行"——
+    /// 用户反馈火绒每次都弹拦截，正是这个来源。</para>
+    ///
+    /// <para>现在直接调用 IShellLink COM：零子进程、毫秒级、不触发脚本告警。</para>
+    /// </summary>
     public static void CreateShortcut(string targetExePath, string lnkFilePath, string description = "", string workingDir = "")
     {
-        try
-        {
-            var dir = Path.GetDirectoryName(lnkFilePath);
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-            {
-                Directory.CreateDirectory(dir);
-            }
-
-            var wDir = string.IsNullOrEmpty(workingDir) ? Path.GetDirectoryName(targetExePath) : workingDir;
-            
-            var script = "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('" + lnkFilePath.Replace("'", "''") + "'); " +
-                         "$s.TargetPath = '" + targetExePath.Replace("'", "''") + "'; " +
-                         "$s.WorkingDirectory = '" + (wDir ?? "").Replace("'", "''") + "'; " +
-                         "$s.Description = '" + description.Replace("'", "''") + "'; " +
-                         "$s.IconLocation = '" + targetExePath.Replace("'", "''") + ",0'; " +
-                         "$s.Save()";
-
-            var psi = new ProcessStartInfo
-            {
-                FileName = "powershell.exe",
-                Arguments = "-NoProfile -NonInteractive -WindowStyle Hidden -Command \"" + script + "\"",
-                CreateNoWindow = true,
-                UseShellExecute = false
-            };
-
-            using var p = Process.Start(psi);
-            p?.WaitForExit();
-        }
-        catch
-        {
-        }
+        Win32.ShellLinkWriter.TryCreate(targetExePath, lnkFilePath, description, workingDir);
     }
 
     public static void CreateDesktopShortcut(string installDir)
