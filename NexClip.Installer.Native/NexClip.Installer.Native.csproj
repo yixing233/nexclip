@@ -25,7 +25,30 @@
   <ItemGroup>
     <!-- 运行环境依赖清单（固定下载地址 + SHA-256）由 installer\setup-dependencies.json 单点维护 -->
     <EmbeddedResource Include="..\installer\setup-dependencies.json" LogicalName="NexClip.Installer.Native.Resources.setup-dependencies.json" />
-    <EmbeddedResource Include="Resources\payload.zip" Condition="Exists('Resources\payload.zip')" />
+    <!--
+      EnablePayload=false 时产出「卸载器变体」:同一个安装器程序集,但不内嵌 payload.zip。
+
+      为什么需要这个开关:安装器要往安装目录释放一个 Uninstall.exe,而卸载路径完全不使用
+      payload(只做结束进程 / 删快捷方式 / 删注册表 / 删目录)。此前直接把自己整份复制过去,
+      于是卸载器里带着 12.5MB 的完整安装包,白占磁盘,卸载时还要映射一个大可执行文件。
+      见 build-installer.ps1 第 4b 步与 PayloadService.DeployUninstaller。
+    -->
+    <EmbeddedResource Include="Resources\payload.zip"
+                      Condition="'$(EnablePayload)' != 'false' AND Exists('Resources\payload.zip')" />
+    <!--
+      卸载器变体(不内嵌 payload)本身也要塞进安装器:最终只分发单个 Setup.exe,
+      用户的机器上不存在 "同目录的 NexClip_Uninstall.exe",只能从资源里取出来落盘。
+      该资源约 6.8MB,换来安装目录少占 12.2MB —— 净收益为正。
+    -->
+    <!--
+      重要:条件里必须排除 EnablePayload=false —— 否则编译「卸载器变体」时会把这个文件
+      也嵌进变体自身,导致变体一轮比一轮大(实测 6.48MB → 12.96MB,即自我嵌套)。
+      变体只需要能扮演卸载器,不需要再携带一份卸载器。
+    -->
+    <EmbeddedResource Include="..\installer\NexClip_Uninstall_payload.exe"
+                      LogicalName="NexClip.Installer.Native.Resources.uninstaller.exe"
+                      Condition="'$(EnablePayload)' != 'false' AND Exists('..\installer\NexClip_Uninstall_payload.exe')" />
+
     <EmbeddedResource Include="Resources\app_icon.png" Condition="Exists('Resources\app_icon.png')" />
     <EmbeddedResource Include="Resources\app_icon.ico" Condition="Exists('Resources\app_icon.ico')" />
   </ItemGroup>
