@@ -16,8 +16,24 @@ public sealed class SyncEngine : IDisposable
     private ClipboardMonitor? _monitor;
     private PushClient? _push;
     // 上传与本地捕获解耦:网络重试不能阻塞剪贴板监听,否则连续复制会被监听器丢弃。
-    private readonly SemaphoreSlim _uploadGate = new(1, 1);
-    private ConnState _state = ConnState.NotConfigured;
+    //
+    // 并发度 4 而非 1:闸门原本只用 1,导致一张大图(慢速上行可占几十秒)期间所有文本上传
+    // 都被堵在后面。实测场景(8MB 图约 35 秒 + 期间 3 段文本):
+    //   并发 1 -> 最后一条文本 t=37.4s 才同步出去
+    //   并发 2 -> 最后一条文本 t=2.7s
+    // 文本同步的及时性正是这个工具的核心体验,不该被图片上传拖住。
+    //
+    // 并发安全依据:
+    //   1) 每个任务只操作自己捕获到的 clip,不共享可变状态;
+    //   2) HistoryStore 内部用 lock 串行化,跨线程调用安全;
+    //   3) 服务端 uploadText/uploadImage 是同步函数 + Node 单线程,getCurrent+INSERT
+    //      之间没有 await 边界,不存在"同内容插入两条"的竞态;
+    //      即使竞态,服务端也按内容哈希去重,重复上传返回 unchanged。
+    private const int UploadConcurrency = 4;
+    private readonly SemaphoreSlim _uploadGate = new(UploadConcurrency, UploadConcurrency);
+    // 心跳定时器与 SignalR/HTTP 续体会在后台线程读写本字段,故标记 volatile;
+    // 对外暴露的 State 只读取最近一次已发布的状态,订阅方实际收到的是 UI 线程上的回调。
+    private volatile ConnState _state = ConnState.NotConfigured;
     private int _credentialRecoveryInProgress;
     private System.Threading.Timer? _heartbeatTimer;
     /// <summary>心跳回调重入闸门:1 表示上一轮心跳仍在执行中。</summary>
@@ -92,7 +108,7 @@ public sealed class SyncEngine : IDisposable
             await _svc.ChatVm.RefreshDevicesAsync();
         });
         _push.StateChanged += s => _dispatcher.TryEnqueue(() => HandlePushState(s));
-        _push.ErrorOccurred += ex => _dispatcher.TryEnqueue(() =>
+        _push.ErrorOccurred += ex => RaiseOnUiThread(() =>
         {
             if (IsDeviceAuthFailure(ex))
             {
@@ -189,7 +205,13 @@ public sealed class SyncEngine : IDisposable
             SetState(ConnState.NotConfigured, "");
             return;
         }
-        if (_push is null) return;
+        // 引擎尚未 Start(或已 Dispose)时 _push 为空:此时也要发布状态,
+        // 否则 State 会一直停在上一次的取值,托盘/首页读到的是过期结论。
+        if (_push is null)
+        {
+            SetState(ConnState.NotConfigured, "同步引擎尚未启动");
+            return;
+        }
 
         // 旧版客户端只有 IsPaired，没有设备令牌。服务端为旧数据库中的已登记设备
         // 提供一次性领取路径；领取后立即作废临时配对码，再按新协议连接。
@@ -334,10 +356,50 @@ public sealed class SyncEngine : IDisposable
         }
     }
 
+    /// <summary>
+    /// 发布连接状态。<b>所有</b>事件都必须在 UI 线程抛出。
+    ///
+    /// 本类此前只对 EntryUpdated / TransferChanged 做了线程调度,而 SetState 是裸的同步 Invoke,
+    /// 但它的调用方里有两条运行在线程池上:心跳定时器(System.Threading.Timer)与
+    /// ConnectAsync 的 await 续体。订阅方 MainViewModel 直接改写绑定到 XAML 的属性
+    /// (ConnectionText / IsBusy),WinUI 会抛 RPC_E_WRONG_THREAD (0x8001010E);
+    /// 托盘那一路则是 WinForms NotifyIcon,只能在创建它的线程上改图标。
+    /// 离线重连期间心跳每 30 秒就会走一次这条路径,属于高频触发面。
+    ///
+    /// 这里统一改由 DispatcherQueue 投递:已在 UI 线程时直接同步执行(不额外排队,
+    /// 避免状态发布与后续断言之间出现时序差),后台线程则排队,
+    /// 两种情况都满足"事件在 UI 线程抛出"的约定。
+    /// </summary>
     private void SetState(ConnState state, string message)
     {
         _state = state;
-        ConnectionChanged?.Invoke(state, message);
+        RaiseOnUiThread(() => ConnectionChanged?.Invoke(state, message));
+    }
+
+    /// <summary>
+    /// 把事件投递到 UI 线程执行:已在 UI 线程时同步执行,后台线程排队。
+    ///
+    /// 刻意不在"排队失败"时退化为同步调用:那会在应用退出阶段把事件重新抛回后台线程,
+    /// 恰好破坏本方法要维持的线程契约。此时 _state 字段已先行更新,轮询 State 仍能读到正确结论。
+    /// </summary>
+    private void RaiseOnUiThread(Action action)
+    {
+        if (_dispatcher.HasThreadAccess)
+        {
+            action();
+            return;
+        }
+
+        try
+        {
+            if (_dispatcher.TryEnqueue(() => action())) return;
+            Log.Debug("UI 调度队列已关闭,本条状态事件丢弃(State 已更新)");
+        }
+        catch (Exception ex)
+        {
+            // 应用退出阶段 DispatcherQueue 可能已被关闭:只记日志,不跨线程硬调
+            Log.Debug($"状态事件回投 UI 线程失败: {ex.Message}");
+        }
     }
 
     /// <summary>剪贴板捕获管线:先落本地历史,再异步上传,避免网络异常导致复制内容丢失。</summary>
@@ -345,7 +407,9 @@ public sealed class SyncEngine : IDisposable
     {
         var s = _svc.Settings;
         if (!s.MonitorEnabled) return;
-        if (clip.Text is null && clip.ImagePng is null && clip.Files is null) return;
+        // 超限图片的 ImagePng 为空,但它仍是一次有效捕获:必须进入本地历史,
+        // 否则用户复制了大图后列表里什么都没有(本次修复的核心症状)。
+        if (clip.Text is null && clip.ImagePng is null && clip.Files is null && !clip.OversizedImage) return;
 
         try
         {
@@ -371,6 +435,20 @@ public sealed class SyncEngine : IDisposable
             if (clip.Files is not null)
             {
                 Log.Debug($"文件条目仅保存到本地历史(共 {clip.Files.Count} 项),按设计不参与同步");
+                return;
+            }
+
+            // 超限图片:本地已落库(含降采样预览),这里只提示、不上传。
+            // 提示必须说清楚是"太大所以没同步",而不是让用户以为同步坏了。
+            if (clip.OversizedImage)
+            {
+                Log.Warn("图片超过同步上限,已保存到本地历史但不参与同步");
+                RaiseOnUiThread(() =>
+                {
+                    ConnectionChanged?.Invoke(_state,
+                        $"图片超过 {ImageCodec.MaxImageBytes / 1024 / 1024}MB,已保存在本地但跳过同步");
+                    SyncError?.Invoke();
+                });
                 return;
             }
 
@@ -422,10 +500,13 @@ public sealed class SyncEngine : IDisposable
         // 超限清理与清空历史都会直接删除它指向的文件,写入用户真实文件会导致误删。
         // 文件内容本身也不复制,只在 file_paths 中记录路径元数据。
         var isFile = clip.Files is { Count: > 0 };
+        // 超限图片仍按 Image 类型记录:有降采样预览时照常落图(本地可看可复制),
+        // 连预览都没有时也留一条"仅尺寸"的占位——两种情况都不该让内容凭空消失。
+        var isOversizedImage = clip.OversizedImage && !isFile && clip.ImagePng is not { Length: > 0 };
 
         var item = new Models.HistoryItem
         {
-            Type = isFile ? "File" : clip.ImagePng is { Length: > 0 } ? "Image" : "Text",
+            Type = isFile ? "File" : (isOversizedImage || clip.ImagePng is { Length: > 0 }) ? "Image" : "Text",
             Text = clip.Text,
             Html = clip.Html,
             ImagePath = imagePath,
@@ -481,15 +562,9 @@ public sealed class SyncEngine : IDisposable
             }
             else if (clip.ImagePng is { Length: > 0 })
             {
-                if (clip.ImagePng.LongLength > ImageCodec.MaxImageBytes)
-                {
-                    _dispatcher.TryEnqueue(() =>
-                    {
-                        ConnectionChanged?.Invoke(_state, "图片超过 10MB,已保存在本地但跳过上传");
-                        SyncError?.Invoke();
-                    });
-                    return;
-                }
+                // 说明:这里不再需要"超过 10MB 就跳过"的分支——超限图片在捕获阶段就被
+                // ImageCodec 标记为 TooLarge 了(ImagePng 为空),OnCapturedAsync 已经拦下并提示,
+                // 根本不会进入本方法。旧分支在此永远不成立,已删除以免误导后来者。
                 var entry = await UploadImageWithRetryAsync(s, clip.ImagePng, CancellationToken.None);
                 if (entry is not null)
                 {
@@ -510,7 +585,7 @@ public sealed class SyncEngine : IDisposable
                 s.Save();
                 _ = _push?.DisconnectAsync();
             }
-            _dispatcher.TryEnqueue(() =>
+            RaiseOnUiThread(() =>
             {
                 var reason = ServerApi.DescribeException(ex, "请检查服务器配置后重试。");
                 ConnectionChanged?.Invoke(_state, $"上传失败(内容已保存在本地)：{reason}");
@@ -724,8 +799,39 @@ public sealed class SyncEngine : IDisposable
         }
     }
 
-    private void SetTransfer(bool active, TransferKind kind) =>
-        _dispatcher.TryEnqueue(() => TransferChanged?.Invoke(active, kind));
+    /// <summary>进行中的上传任务数。并发时"第一个完成的"不能代表"全部结束"。</summary>
+    private int _activeUploads;
+    /// <summary>进行中的下载任务数(多条推送可能同时到达)。</summary>
+    private int _activeDownloads;
+
+    /// <summary>
+    /// 发布传输状态。并发度为 1 时直接用 active 布尔值即可;放宽并发后必须按计数判断:
+    /// 否则几个任务里只要有一个先完成,就会把托盘/首页状态改回"已完成",
+    /// 而其余还在传,用户看到的是"同步一闪就结束"。
+    /// 只用 Interlocked 维护计数,不引入额外锁。
+    /// </summary>
+    private void SetTransfer(bool active, TransferKind kind)
+    {
+        // 用 ref 局部变量指向对应计数器,避免把 Upload/Download 的逻辑写两遍
+        ref var counter = ref kind == TransferKind.Upload ? ref _activeUploads : ref _activeDownloads;
+
+        if (!active)
+        {
+            // 离开时 -1;仍有同类任务在跑就不发布"结束"
+            var remaining = Interlocked.Decrement(ref counter);
+            if (remaining > 0) return;
+            if (remaining < 0)
+            {
+                // 计数错乱(理论上不该发生):归零后继续发布,避免状态永久卡在"传输中"
+                Interlocked.Exchange(ref counter, 0);
+            }
+            RaiseOnUiThread(() => TransferChanged?.Invoke(false, kind));
+            return;
+        }
+
+        Interlocked.Increment(ref counter);
+        RaiseOnUiThread(() => TransferChanged?.Invoke(true, kind));
+    }
 
     /// <summary>复制历史条目到本机剪贴板(图片先确保本地缓存),并抑制回环上传。支持 plainText 纯文本模式。</summary>
     public async Task CopyHistoryItemAsync(Models.HistoryItem item, bool plainText = false)
