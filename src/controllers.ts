@@ -37,9 +37,29 @@ export function sendNoContent(res: ServerResponse): void {
   res.end();
 }
 
-function sendApiError(res: ServerResponse, status: number, error: string): void {
-  sendJson(res, status, { error });
+/**
+ * 统一的 API 错误响应。
+ *
+ * code 是可选的机器可读错误码,供客户端做精确分支判断,避免"靠状态码 + 中文文案匹配"
+ * 这种脆弱写法(客户端改文案或换语言就会失效)。
+ * 目前只用于设备凭证类错误,见 CREDENTIAL_* 常量。
+ * 老客户端只读 error 字段,新增 code 不破坏兼容。
+ */
+function sendApiError(res: ServerResponse, status: number, error: string, code?: string): void {
+  sendJson(res, status, code ? { error, code } : { error });
 }
+
+/** 凭证类错误码:客户端据此决定是否清除本地配对状态。 */
+export const CredentialErrorCode = {
+  /** 请求没带设备凭证(客户端 bug 或从未配对):不应清除已有的有效凭证。 */
+  Missing: 'credential_missing',
+  /** 凭证存在但无效(被重置/已重新配对):需要用户重新配对。 */
+  Invalid: 'credential_invalid',
+  /** 设备已被移除(撤销):需要用户重新配对。 */
+  Revoked: 'credential_revoked',
+  /** 凭证有效但设备身份不匹配(403):属于客户端参数问题,不应清除凭证。 */
+  IdentityMismatch: 'device_identity_mismatch',
+} as const;
 
 /** 读取请求体(带大小上限) */
 export function readBody(req: IncomingMessage, limitBytes: number): Promise<Buffer> {
@@ -78,11 +98,11 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
   const rejectDeviceCredential = (): boolean => {
     const status = svc.deviceCredentialStatus(requestDeviceId, requestDeviceToken);
     if (status === 'revoked') {
-      sendApiError(res, 410, '设备已被移除,请重新配对');
+      sendApiError(res, 410, '设备已被移除,请重新配对', CredentialErrorCode.Revoked);
     } else if (status === 'missing') {
-      sendApiError(res, 401, '缺少设备凭证,请先完成配对');
+      sendApiError(res, 401, '缺少设备凭证,请先完成配对', CredentialErrorCode.Missing);
     } else {
-      sendApiError(res, 401, '设备凭证无效,请重新配对');
+      sendApiError(res, 401, '设备凭证无效,请重新配对', CredentialErrorCode.Invalid);
     }
     return false;
   };
@@ -187,7 +207,7 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     const html = rawHtml && rawHtml.length <= 262_144 ? rawHtml : null;
     const requestedId = typeof json.deviceId === 'string' && json.deviceId ? json.deviceId : 'web-' + randomHex(4);
     const deviceId = deviceActor?.Id ?? ctx.actor?.deviceId ?? requestedId;
-    if (deviceActor && requestedId !== deviceActor.Id) { sendApiError(res, 403, '上传设备身份与凭证不匹配'); return true; }
+    if (deviceActor && requestedId !== deviceActor.Id) { sendApiError(res, 403, '上传设备身份与凭证不匹配', CredentialErrorCode.IdentityMismatch); return true; }
     const deviceName = typeof json.deviceName === 'string' && json.deviceName ? json.deviceName : deviceId;
     const platform = typeof json.platform === 'string' ? json.platform : null;
     const version = typeof json.version === 'string' ? json.version : null;
@@ -212,7 +232,7 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     }
     const requestedId = mp.fields.deviceId || 'web-' + randomHex(4);
     const deviceId = deviceActor?.Id ?? ctx.actor?.deviceId ?? requestedId;
-    if (deviceActor && requestedId !== deviceActor.Id) { sendApiError(res, 403, '上传设备身份与凭证不匹配'); return true; }
+    if (deviceActor && requestedId !== deviceActor.Id) { sendApiError(res, 403, '上传设备身份与凭证不匹配', CredentialErrorCode.IdentityMismatch); return true; }
     const deviceName = mp.fields.deviceName || deviceId;
     const explicitPlat = mp.fields.platform?.trim() || null;
     const platform = detectPlatform(explicitPlat, req.headers['user-agent'], deviceName);
@@ -254,7 +274,7 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     if (!text) { sendJson(res, 400, { error: 'text 不能为空' }); return true; }
     const requestedId = typeof json.deviceId === 'string' && json.deviceId ? json.deviceId : 'web-' + randomHex(4);
     const deviceId = deviceActor?.Id ?? ctx.actor?.deviceId ?? requestedId;
-    if (deviceActor && requestedId !== deviceActor.Id) { sendApiError(res, 403, '上传设备身份与凭证不匹配'); return true; }
+    if (deviceActor && requestedId !== deviceActor.Id) { sendApiError(res, 403, '上传设备身份与凭证不匹配', CredentialErrorCode.IdentityMismatch); return true; }
     const deviceName = typeof json.deviceName === 'string' && json.deviceName ? json.deviceName : (deviceActor?.Name ?? deviceId);
     const rawTargets = Array.isArray(json.deviceIds) ? json.deviceIds.filter((x): x is string => typeof x === 'string' && !!x.trim()) : [];
     const targets = [...new Set(rawTargets)];
@@ -663,7 +683,7 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     const text = typeof json.text === 'string' ? json.text.trim() : '';
     if (!text) { sendJson(res, 400, { error: 'text 不能为空' }); return true; }
     const deviceId = typeof json.deviceId === 'string' && json.deviceId ? json.deviceId : deviceActor!.Id;
-    if (deviceId !== deviceActor!.Id) { sendApiError(res, 403, '上传设备身份与凭证不匹配'); return true; }
+    if (deviceId !== deviceActor!.Id) { sendApiError(res, 403, '上传设备身份与凭证不匹配', CredentialErrorCode.IdentityMismatch); return true; }
     const deviceName = typeof json.deviceName === 'string' && json.deviceName ? json.deviceName : 'Legacy Client';
     svc.uploadText(text, null, deviceId, deviceName, null, null, remoteIp(req), true);
     sendJson(res, 200, { ok: true });
