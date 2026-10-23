@@ -11,6 +11,27 @@ namespace NexClip.Desktop.Services;
 /// <summary>链接(URL)识别工具:判断文本是否为可打开的网址。</summary>
 public static class UrlUtil
 {
+    /// <summary>
+    /// 把 URL 处理成可安全写入日志的形式:只保留 scheme + host + path,
+    /// 丢弃查询串与片段(#)。查询串里常含访问令牌、验证码、分享密钥、邮箱等,
+    /// 而排障时真正有用的是"打开了哪个站点的哪个页面"。
+    /// 解析失败时退化为只保留前 40 个字符,绝不原样输出整串。
+    /// </summary>
+    public static string SanitizeForLog(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return "";
+        if (!Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri))
+        {
+            var trimmed = url.Trim();
+            return trimmed.Length <= 40 ? trimmed : trimmed[..40] + "…";
+        }
+        var path = uri.AbsolutePath.Length > 60 ? uri.AbsolutePath[..60] + "…" : uri.AbsolutePath;
+        var hadQuery = !string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.Fragment);
+        // 必须用 Authority 而不是 Host:自建服务端常用 http://host:5033 这种形式,
+        // 丢掉端口会让排障时完全认不出连的是哪个实例。
+        return $"{uri.Scheme}://{uri.Authority}{path}" + (hadQuery ? "?…" : "");
+    }
+
     /// <summary>是否为 http/https 链接(整个文本就是一个网址)。</summary>
     public static bool IsUrl(string? text)
     {

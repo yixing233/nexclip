@@ -43,7 +43,8 @@ public sealed partial class LinkToastWindow : Window
             }
             catch (Exception ex)
             {
-                Log.Error($"打开链接失败: {url}", ex);
+                // URL 的查询串可能含令牌/验证码,落盘前先脱敏
+                Log.Error($"打开链接失败: {UrlUtil.SanitizeForLog(url)}", ex);
             }
         }
     })

@@ -84,7 +84,7 @@ public partial class App : Application
         {
             try
             {
-                Log.Debug($"显示链接卡片:{url}");
+                Log.Debug($"显示链接卡片:{UrlUtil.SanitizeForLog(url)}");
                 var previous = LinkToast;
                 LinkToast = null;
                 previous?.Close();
@@ -155,7 +155,10 @@ public partial class App : Application
             }
             else
             {
-                Log.Warn($"打开链接:剪贴板无有效网址或动作 text='{text}'");
+                // 不要把剪贴板原文写进日志:那是用户刚复制的内容,可能是密码、验证码、私信。
+                // 排障需要的只是"它为什么没被识别成链接",长度 + 首字符类别已足够定位。
+                Log.Warn($"打开链接:剪贴板内容未被识别为链接(len={text.Length}, " +
+                         $"startsWithScheme={text.TrimStart().StartsWith("http", StringComparison.OrdinalIgnoreCase)})");
             }
         }
         catch (Exception ex)
@@ -633,6 +636,9 @@ public partial class App : Application
         catch { /* 未持有或已释放 */ }
         _instanceMutex?.Dispose();
         _instanceMutex = null;
+        // 日志改为后台线程异步落盘,退出前必须把队列里剩余的行刷完,
+        // 否则用户"退出前最后发生的那件事"恰好会从日志里消失。
+        Log.Shutdown();
         Environment.Exit(0);
     }
 

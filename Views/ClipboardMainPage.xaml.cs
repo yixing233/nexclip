@@ -1340,7 +1340,8 @@ public sealed partial class ClipboardMainPage : Page
             if (_history.IsMultiSelectMode) return;
             var isShift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
                 .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
-            Log.Debug($"双击粘贴:id={vm.Item.Id}, plainText={isShift}, type={vm.Item.Type}, text={vm.Item.Text?.Substring(0, Math.Min(20, vm.Item.Text?.Length ?? 0))}");
+            // 只记长度与类型,不记内容片段:日志会被用户打包发出来排障,不该带剪贴板正文。
+            Log.Debug($"双击粘贴:id={vm.Item.Id}, plainText={isShift}, type={vm.Item.Type}, textLen={vm.Item.Text?.Length ?? 0}");
             await (App.ClipboardWindow?.PasteItemAsync(vm, plainText: isShift) ?? Task.CompletedTask);
         }
     }
