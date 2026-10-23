@@ -13,11 +13,6 @@ GeneratedFiles/
 # build-installer.ps1 的输出目录(最终安装包通过 GitHub Release 分发,不入库)
 release-out/
 
-# 构建期产物:轻量卸载器变体(压缩后的 exe,约 3MB)。
-# 由 build-installer.ps1 第 4a 步生成、被 csproj 作为嵌入资源引用,
-# 属于「每次打包重新产出」的中间件,不入库。
-installer/NexClip_Uninstall_payload.exe
-
 # IDE 与用户配置
 .vs/
 *.user

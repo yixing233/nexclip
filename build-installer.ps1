@@ -1,4 +1,4 @@
-# NexClip 自研 Fluent 现代安装器自动化打包脚本
+﻿# NexClip 自研 Fluent 现代安装器自动化打包脚本
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
@@ -109,52 +109,7 @@ Write-Host ">>>   VC++       : $($dependencies.VisualCppMinimumVersion) ($([Math
 Write-Host ">>>   .NET       : $($dependencies.DotNetDesktopMinimumVersion) ($([Math]::Round($dependencies.DotNetDesktopInstallerSizeBytes / 1MB, 1)) MB)" -ForegroundColor DarkGray
 Write-Host ">>>   WinAppSDK  : $($dependencies.WindowsAppRuntimeMinimumVersion) ($([Math]::Round($dependencies.WindowsAppRuntimeInstallerSizeBytes / 1MB, 1)) MB)" -ForegroundColor DarkGray
 
-# 4a. 先产出「卸载器变体」:同一程序集但不内嵌 payload.zip。
-# 卸载路径完全不使用 payload(只结束进程 / 删快捷方式与自启动项 / 删注册表 / 删目录),
-# 而安装器此前直接把自己整份复制成 Uninstall.exe —— 每台机器白占 12.2MB,
-# 卸载时还要映射一个 19MB 的可执行文件。
-#
-# 顺序很重要:变体必须**先**编译并落到 installer\ 目录,
-# 主安装器(4b)才能在 dotnet publish 时把它作为嵌入资源打进单文件 exe。
-Write-Host ">>> 4a. 编译轻量卸载器变体 (不含 payload)..." -ForegroundColor Cyan
-
-# 先清掉上一轮留下的变体文件:它会被 csproj 作为嵌入资源引用,
-# 编译变体本身时若残留,会把自己嵌进自己(变体一轮比一轮大)。
-# csproj 侧已用 EnablePayload=false 排除,这里是第二道保险。
-$slimDestForCleanup = Join-Path $desktopDir "installer\NexClip_Uninstall_payload.exe"
-if (Test-Path $slimDestForCleanup) {
-    Remove-Item $slimDestForCleanup -Force -ErrorAction SilentlyContinue
-}
-
-$uninstallerPublishDir = Join-Path $desktopDir "bin\Release\CustomInstallerUninstaller"
-dotnet publish "$installerDir\NexClip.Installer.Native.csproj" -c Release -r win-x64 -p:PublishAot=true -p:EnablePayload=false -o $uninstallerPublishDir
-if ($LASTEXITCODE -ne 0) {
-    throw "卸载器变体 Native AOT 发布失败，退出码 $LASTEXITCODE。"
-}
-
-$slimUninstaller = Join-Path $uninstallerPublishDir "NexClip_Setup.exe"
-if (!(Test-Path $slimUninstaller)) {
-    throw "卸载器变体输出未找到: $slimUninstaller"
-}
-
-# 固定路径供 csproj 的 EmbeddedResource 引用,让主安装器把它嵌进 exe。
-# 必须压缩存储:变体是原生 exe,直接嵌入会让安装包从 18.99MB 涨到 25.48MB,
-# 抵消瘦身收益(安装目录只省 12.5MB,下载却多 6.5MB)。Deflate 实测压缩率约 52%。
-$slimDest = Join-Path $desktopDir "installer\NexClip_Uninstall_payload.exe"
-$slimRawBytes = [System.IO.File]::ReadAllBytes($slimUninstaller)
-$slimCompressedPath = "$slimDest.deflate"
-$fs = [System.IO.File]::Create($slimCompressedPath)
-try {
-    $deflate = New-Object System.IO.Compression.DeflateStream($fs, [System.IO.Compression.CompressionLevel]::SmallestSize, $true)
-    try { $deflate.Write($slimRawBytes, 0, $slimRawBytes.Length) } finally { $deflate.Dispose() }
-} finally { $fs.Dispose() }
-Move-Item $slimCompressedPath $slimDest -Force
-
-$slimRawMB = [Math]::Round($slimRawBytes.Length / 1MB, 2)
-$slimStoredMB = [Math]::Round((Get-Item $slimDest).Length / 1MB, 2)
-Write-Host ">>>   变体已就位: $slimRawMB MB → 压缩存储 $slimStoredMB MB" -ForegroundColor DarkGray
-
-Write-Host ">>> 4b. Native AOT 纯机器码编译 NexClip.Installer.Native..." -ForegroundColor Cyan
+Write-Host ">>> 4. Native AOT 纯机器码编译 NexClip.Installer.Native..." -ForegroundColor Cyan
 $installerPublishDir = Join-Path $desktopDir "bin\Release\CustomInstallerNative"
 dotnet publish "$installerDir\NexClip.Installer.Native.csproj" -c Release -r win-x64 -p:PublishAot=true -o $installerPublishDir
 if ($LASTEXITCODE -ne 0) {
@@ -165,13 +120,6 @@ $installerExe = Join-Path $installerPublishDir "NexClip_Setup.exe"
 if (!(Test-Path $installerExe)) {
     throw "安装器单文件输出未找到: $installerExe"
 }
-
-$installerSizeMB = [Math]::Round((Get-Item $installerExe).Length / 1MB, 2)
-$slimSizeMB = [Math]::Round((Get-Item $slimDest).Length / 1MB, 2)
-if ($slimSizeMB -ge $installerSizeMB) {
-    throw "卸载器变体($slimSizeMB MB)不小于安装器($installerSizeMB MB)，构建配置可能有误。"
-}
-Write-Host ">>>   安装器 $installerSizeMB MB / 卸载器 $slimSizeMB MB (安装目录节省 $([Math]::Round($installerSizeMB - $slimSizeMB, 2)) MB)" -ForegroundColor DarkGray
 
 Write-Host ">>> 5. 归档发布安装包..." -ForegroundColor Cyan
 Get-Process | Where-Object { $_.ProcessName -like "*NexClip_Setup*" } | Stop-Process -Force -ErrorAction SilentlyContinue

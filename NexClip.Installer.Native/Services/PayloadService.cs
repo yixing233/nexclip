@@ -500,92 +500,26 @@ public static class PayloadService
         }
     }
 
-    /// <summary>卸载器文件名。</summary>
-    internal const string UninstallerFileName = "Uninstall.exe";
-
-    /// <summary>卸载器变体在程序集内的资源名。</summary>
-    internal const string SlimUninstallerResourceName =
-        "NexClip.Installer.Native.Resources.uninstaller.exe";
-
     /// <summary>
-    /// 部署卸载器到安装目录。
-    ///
-    /// <para>卸载路径**完全不需要 payload** —— 它只做:结束进程、删快捷方式与自启动项、
-    /// 删注册表项、删除目录。因此这里优先落盘构建期嵌入的「卸载器变体」
-    /// (同一程序集但不内嵌 payload.zip,实测 6.79MB vs 完整安装器 18.99MB),
-    /// 而不是把安装器整份复制过去 —— 后者会让每台机器白占 12.2MB 磁盘,
-    /// 且卸载时需映射一个 19MB 的可执行文件。</para>
-    ///
-    /// <para>变体以**嵌入资源**形式随安装器分发:最终只发一个 Setup.exe,
-    /// 用户机器上不存在任何伴随文件,所以不能按"同目录查找"的方式获取。
-    /// 资源缺失时退回复制自身:功能仍然正确,只是体积不优化 ——
-    /// 绝不能因为瘦身而让卸载入口缺失。</para>
+    /// 生成/复制卸载器到安装目录
     /// </summary>
     public static bool DeployUninstaller(string destDir)
     {
-        var targetUninstaller = Path.Combine(destDir, UninstallerFileName);
         try
         {
-            if (TryDeploySlimUninstaller(targetUninstaller))
-            {
-                return true;
-            }
-
-            // 兜底:没有嵌入变体时复制自身,保证卸载入口存在
             var currentExe = Environment.ProcessPath;
             if (!string.IsNullOrEmpty(currentExe) && File.Exists(currentExe))
             {
+                var targetUninstaller = Path.Combine(destDir, "Uninstall.exe");
                 File.Copy(currentExe, targetUninstaller, overwrite: true);
-                SetupLog.Write("未找到嵌入的轻量卸载器,已复制安装器自身作为卸载器(体积未优化)");
                 return File.Exists(targetUninstaller);
             }
         }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        catch
         {
-            SetupLog.Write($"部署卸载器失败:{exception.Message}");
         }
 
         return false;
-    }
-
-    /// <summary>
-    /// 把嵌入的轻量卸载器落到目标位置;资源缺失或异常时返回 false 走兜底。
-    ///
-    /// <para>资源是 **Deflate 压缩** 的:可执行文件本身压缩率约 52%(6.48MB → 3.13MB),
-    /// 不做压缩的话安装包会从 18.99MB 涨到 25.48MB,抵消掉瘦身收益
-    /// (安装目录只省 12.5MB,而下载体积多 6.5MB)。压缩后净收益为正。</para>
-    /// </summary>
-    private static bool TryDeploySlimUninstaller(string targetPath)
-    {
-        try
-        {
-            using var resource = typeof(PayloadService).Assembly
-                .GetManifestResourceStream(SlimUninstallerResourceName);
-            if (resource is null || resource.Length == 0)
-            {
-                return false;
-            }
-
-            // 先写临时文件再替换:避免中途失败留下半个 exe,让卸载彻底失效
-            var temporary = targetPath + ".new";
-            using (var compressed = new DeflateStream(resource, CompressionMode.Decompress))
-            using (var output = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
-            {
-                compressed.CopyTo(output);
-            }
-
-            File.Move(temporary, targetPath, overwrite: true);
-            SetupLog.Write($"已部署轻量卸载器({new FileInfo(targetPath).Length / 1024}KB,不含 payload)");
-            return File.Exists(targetPath);
-        }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException or
-                System.Security.SecurityException or NotSupportedException or InvalidDataException)
-        {
-            SetupLog.Write($"部署轻量卸载器失败,将回退为复制安装器自身:{exception.Message}");
-            return false;
-        }
     }
 }
 
