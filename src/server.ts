@@ -8,7 +8,7 @@ import { SessionStore } from './sessions.js';
 import { RateLimiter } from './rate.js';
 import { SignalRHub } from './signalr.js';
 import { SyncService } from './service.js';
-import { handleApi, sendJson, type Ctx } from './controllers.js';
+import { handleApi, sendJson, CredentialErrorCode, type Ctx } from './controllers.js';
 import { serveStatic } from './static.js';
 
 const cfg = loadConfig();
@@ -81,7 +81,18 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
     const hubDeviceToken = extractDeviceToken(req) || (url.searchParams.get('deviceToken') ?? '');
     const hubDevice = hubDeviceId && hubDeviceToken ? svc.authenticateDevice(hubDeviceId, hubDeviceToken) : null;
     if (!actor && !hubDevice) {
-      sendJson(res, 401, { error: hubDeviceId ? '设备凭证无效或已失效,请重新配对' : 'unauthorized' });
+      // 与 REST 侧保持同一套语义:同样都是 401,只有 code 能让客户端判断
+      // 「缺少凭证」(客户端自身问题,不该清空配对)与「凭证无效/已移除」(该重新配对)。
+      // 2026-10-23 的线上故障正是卡在这条路径上:客户端只能看到 401,
+      // 于是把仍然有效的本地凭证清掉了。
+      const status = svc.deviceCredentialStatus(hubDeviceId, hubDeviceToken);
+      if (status === 'revoked') {
+        sendJson(res, 410, { error: '设备已被移除,请重新配对', code: CredentialErrorCode.Revoked });
+      } else if (status === 'missing') {
+        sendJson(res, 401, { error: '缺少设备凭证,请先完成配对', code: CredentialErrorCode.Missing });
+      } else {
+        sendJson(res, 401, { error: '设备凭证无效,请重新配对', code: CredentialErrorCode.Invalid });
+      }
       return;
     }
     // 网页会话与设备连接均接收实时剪贴板推送与设备变更

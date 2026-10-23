@@ -269,6 +269,51 @@ try {
   assert.equal(group2DevicesAfterY.body.length, 2);
   const group2Ids = group2DevicesAfterY.body.map((d) => d.id).sort();
   assert.deepEqual(group2Ids, ['device-x', 'device-y']);
+
+  // --- 设备凭证错误码(2026-10-23 线上故障的防回归) ---
+  // 背景:客户端曾只看状态码就清空配对。服务端因此给出机器可读 code,
+  // 让客户端能区分"缺少凭证"(客户端自己的 bug,不该清)与"凭证无效"(该重新配对)。
+  // 这两条都是 401,没有 code 就无法区分。
+  const restMissing = await api('/api/clipboard/history');
+  assert.equal(restMissing.res.status, 401, JSON.stringify(restMissing.body));
+  assert.equal(restMissing.body.code, 'credential_missing', 'REST 缺凭证必须带 code');
+
+  const restInvalid = await api('/api/clipboard/history', {
+    headers: deviceHeaders('device-x', 'definitely-not-the-token'),
+  });
+  assert.equal(restInvalid.res.status, 401, JSON.stringify(restInvalid.body));
+  assert.equal(restInvalid.body.code, 'credential_invalid', 'REST 错误凭证必须带 code');
+
+  // 被移除(revoked)必须可区分 —— 这是唯一"确实该清空本地配对"的一种。
+  // 用用户组2的 device-y:先由同伴 device-x 移除它,再用它自己的旧凭证试探。
+  const removeY = await api('/api/devices/device-y', {
+    method: 'DELETE',
+    headers: deviceHeaders('device-x', tokenX),
+  });
+  assert.equal(removeY.res.status, 204, JSON.stringify(removeY.body));
+
+  const revokedProbe = await api('/api/clipboard/history', {
+    headers: deviceHeaders('device-y', tokenY),
+  });
+  assert.equal(revokedProbe.res.status, 410, JSON.stringify(revokedProbe.body));
+  assert.equal(revokedProbe.body.code, 'credential_revoked', '已移除设备必须返回 credential_revoked');
+
+  // SignalR negotiate 是 10-23 故障真正出问题的路径(桌面端就卡在这里),
+  // 它同样必须带 code,否则客户端仍只能靠状态码猜。
+  const hubMissing = await api('/hubs/clipboard/negotiate');
+  assert.equal(hubMissing.res.status, 401, JSON.stringify(hubMissing.body));
+  assert.equal(hubMissing.body.code, 'credential_missing', 'negotiate 缺凭证必须带 code');
+
+  const hubInvalid = await api('/hubs/clipboard/negotiate', {
+    headers: deviceHeaders('device-x', 'definitely-not-the-token'),
+  });
+  assert.equal(hubInvalid.res.status, 401, JSON.stringify(hubInvalid.body));
+  assert.equal(hubInvalid.body.code, 'credential_invalid', 'negotiate 错误凭证必须带 code');
+
+  // 有效凭证必须照常放行(别把错误码改成误伤正常路径)
+  const hubOk = await api('/hubs/clipboard/negotiate', { headers: deviceHeaders('device-x', tokenX) });
+  assert.equal(hubOk.res.status, 200, JSON.stringify(hubOk.body));
+  assert.ok(hubOk.body.connectionToken, 'negotiate 成功应返回 connectionToken');
 } finally {
   child.kill('SIGTERM');
   await Promise.race([
