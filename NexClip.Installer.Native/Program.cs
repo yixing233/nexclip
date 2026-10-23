@@ -121,10 +121,8 @@ public static class Program
             {
                 ShortcutHelper.CreateDesktopShortcut(options.InstallDirectory);
             }
-            if (options.AutoStartup)
-            {
-                ShortcutHelper.SetStartupShortcut(options.InstallDirectory, true);
-            }
+            // 与交互式安装一致:勾选时写 Run 键,未勾选时清理既有项(幂等)
+            ShortcutHelper.SetStartupShortcut(options.InstallDirectory, options.AutoStartup);
             RegistryHelper.RegisterUninstall(options.InstallDirectory);
 
             var needsRestart = dependencyResult.RestartRequired || !dependencyResult.DetectionConfirmed;
@@ -212,10 +210,6 @@ public static class Program
     }
 
     /// <summary>
-    /// 输出运行环境体检报告：依赖检测结果、清单固定版本与磁盘空间，
-    /// 用于用户反馈“装不上/装完启动不了”时快速定位。
-    /// </summary>
-    /// <summary>
     /// 提前加载并校验内嵌依赖清单：清单损坏时给出明确提示，
     /// 而不是等到窗口字段初始化时抛出 TypeInitializationException。
     /// </summary>
@@ -239,6 +233,10 @@ public static class Program
         }
     }
 
+    /// <summary>
+    /// 输出运行环境体检报告：依赖检测结果、清单固定版本、磁盘空间与开机自启动状态，
+    /// 用于用户反馈“装不上/装完启动不了”时快速定位。
+    /// </summary>
     private static int RunDiagnostics(
         SetupArguments options,
         IReadOnlyList<DependencyDefinition> dependencies)
@@ -252,6 +250,21 @@ public static class Program
         report.AppendLine($"安装目录: {options.InstallDirectory}");
         report.AppendLine($"启动时工作目录: {ProcessHelper.StartupWorkingDirectory ?? "(未知)"}");
         report.AppendLine($"内嵌 Payload: {PayloadService.HasEmbeddedPayload()}");
+
+        // 自启动状态:历史上这里是"卸载残留"的高发点(安装器写快捷方式、主程序写 Run 键,
+        // 两条实现互不相通),把实际注册值打出来才能判断残留。
+        var startupEntries = StartupRegistration.Enumerate();
+        report.AppendLine($"开机自启动: {(startupEntries.Count > 0 ? "已注册" : "未注册")}");
+        foreach (var (name, value) in startupEntries)
+        {
+            report.AppendLine($"  自启动项 [{name}] = {value}");
+        }
+        var legacyStartupShortcut = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.Startup), "NexClip.lnk");
+        if (File.Exists(legacyStartupShortcut))
+        {
+            report.AppendLine($"  旧式自启动快捷方式仍存在: {legacyStartupShortcut}");
+        }
 
         if (SetupPolicy.TryGetAvailableDiskSpace(options.InstallDirectory, out var installFree))
         {

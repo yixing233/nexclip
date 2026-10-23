@@ -31,7 +31,7 @@ public enum DepState
 
 public class FluentInstallerWindow
 {
-    private const string InstallerVersion = "20261023.02";
+    private const string InstallerVersion = "20261023.03";
     private const uint AnimationTimerId = 1;
 
     private IntPtr _hwnd;
@@ -873,7 +873,15 @@ public class FluentInstallerWindow
                 _statusText = "正在配置桌面与开始菜单快捷方式...";
                 ShortcutHelper.CreateStartMenuShortcut(_installDir);
                 if (_createDesktopShortcut) ShortcutHelper.CreateDesktopShortcut(_installDir);
-                if (_autoStartup) ShortcutHelper.SetStartupShortcut(_installDir, true);
+
+                // 自启动必须**双向**处理:勾选时写入 Run 键,未勾选时主动清理。
+                // 只写不清会导致「取消勾选后重新安装」仍然自启动 —— 用户明确表达了不要,
+                // 而旧的 Run 键还在生效,表现就是设置不生效。
+                var startupApplied = ShortcutHelper.SetStartupShortcut(_installDir, _autoStartup);
+                if (_autoStartup && !startupApplied)
+                {
+                    SetupLog.Write("开机自启动注册失败(可能被组策略限制),安装继续。");
+                }
                 await Task.Delay(100);
 
                 _targetProgress = 0.98;

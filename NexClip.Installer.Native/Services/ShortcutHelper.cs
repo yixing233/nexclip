@@ -63,37 +63,77 @@ public static class ShortcutHelper
         CreateShortcut(uninstallExe, uninstallLnk, "卸载 NexClip");
     }
 
-    public static void SetStartupShortcut(string installDir, bool enable)
+    /// <summary>
+    /// 设置开机自启动。**自 20261023.03 起不再写启动文件夹快捷方式**,
+    /// 统一改为注册表 Run 键(见 <see cref="StartupRegistration"/>)。
+    ///
+    /// 改动原因:此前安装器写快捷方式、主程序设置页写 Run 键,两条实现互不相通,
+    /// 导致同一台机器出现两份自启动项,且卸载时 Run 键永久残留 ——
+    /// 用户卸载后每次开机仍会被拉起到一个不存在的程序。
+    ///
+    /// 无论开启还是关闭,这里都会顺带清掉历史遗留的启动文件夹快捷方式,
+    /// 让从旧版本升级上来的机器收敛到单一实现。
+    /// </summary>
+    /// <returns>是否成功启用(关闭操作总是返回成功,因为它只做删除)。</returns>
+    public static bool SetStartupShortcut(string installDir, bool enable)
     {
-        var startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
-        var lnk = Path.Combine(startup, "NexClip.lnk");
+        RemoveLegacyStartupShortcut();
+        return enable ? StartupRegistration.Enable(installDir) : StartupRegistration.Disable() || true;
+    }
 
-        if (enable)
+    /// <summary>删除启动文件夹里的历史自启动快捷方式(旧版安装器写过),幂等。</summary>
+    internal static void RemoveLegacyStartupShortcut()
+    {
+        try
         {
-            var exe = Path.Combine(installDir, "NexClip.exe");
-            CreateShortcut(exe, lnk, "NexClip 自启动服务");
+            var startup = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
+            if (string.IsNullOrWhiteSpace(startup)) return;
+
+            var lnk = Path.Combine(startup, "NexClip.lnk");
+            if (File.Exists(lnk))
+            {
+                File.Delete(lnk);
+                SetupLog.Write("已清理启动文件夹中的旧自启动快捷方式: NexClip.lnk");
+            }
         }
-        else
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
-            if (File.Exists(lnk)) File.Delete(lnk);
+            SetupLog.Write($"清理旧自启动快捷方式失败:{exception.Message}");
         }
     }
 
+    /// <summary>
+    /// 移除本应用创建的全部快捷方式与自启动项。
+    /// 卸载路径的关键一步:除桌面/开始菜单/启动文件夹之外,**必须**同时清理注册表 Run 键,
+    /// 否则卸载不干净(详见 <see cref="StartupRegistration"/> 的说明)。
+    /// </summary>
     public static void RemoveAllShortcuts()
     {
+        // 自启动项与快捷方式分开处理:前者在注册表,失败原因不同,不该被同一个 catch 吞掉
+        StartupRegistration.Disable();
+        RemoveLegacyStartupShortcut();
+
         try
         {
             var desktop = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "NexClip.lnk");
             if (File.Exists(desktop)) File.Delete(desktop);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            SetupLog.Write($"删除桌面快捷方式失败:{exception.Message}");
+        }
 
+        try
+        {
             var startMenu = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs", "NexClip");
             if (Directory.Exists(startMenu)) Directory.Delete(startMenu, true);
-
-            var startup = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "NexClip.lnk");
-            if (File.Exists(startup)) File.Delete(startup);
         }
-        catch
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
+            SetupLog.Write($"删除开始菜单快捷方式失败:{exception.Message}");
         }
     }
 }
