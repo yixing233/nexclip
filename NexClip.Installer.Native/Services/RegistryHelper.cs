@@ -10,7 +10,7 @@ public static class RegistryHelper
 
     internal static string? TryGetInstallLocation() => InstallerPathHelper.TryGetRegisteredInstallDirectory();
 
-    public static void RegisterUninstall(string installDir, string version = "20260918.01")
+    public static void RegisterUninstall(string installDir, string version = "20261023.01")
     {
         try
         {

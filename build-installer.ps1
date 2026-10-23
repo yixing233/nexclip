@@ -2,12 +2,13 @@
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-$root = Split-Path -Parent $PSScriptRoot
-$desktopDir = Join-Path $root "desktop"
+# windows 分支的根目录本身就是桌面工程(早期脚本假定脚本位于仓库根、工程在 desktop/ 下,
+# 但独立分支结构里 NexClip.Desktop.csproj 就在脚本同级)。
+$desktopDir = $PSScriptRoot
 $installerDir = Join-Path $desktopDir "NexClip.Installer.Native"
 $resourcesDir = Join-Path $installerDir "Resources"
-$releasesDir = "e:\Code\syncclipboard-releases"
-$version = "20260918.01"
+$releasesDir = Join-Path $desktopDir "release-out"
+$version = "20261023.01"
 
 # Native AOT 的链接步骤依赖 vswhere.exe 定位 MSVC link.exe。
 # VS 开发者命令行会自带,普通 PowerShell 里不在 PATH 上,链接会以 exit 123 失败,

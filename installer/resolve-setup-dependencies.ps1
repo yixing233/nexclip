@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     校验并解析安装器运行环境依赖清单 setup-dependencies.json。
 .DESCRIPTION
