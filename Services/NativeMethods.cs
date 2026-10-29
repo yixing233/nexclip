@@ -7,6 +7,8 @@ internal static class NativeMethods
 {
     internal const int GwlExStyle = -20;
     internal const long WsExToolwindow = 0x00000080;
+    /// <summary>窗口永不获得激活(焦点)。粘贴期间临时加上,避免剪贴板窗口抢走目标的输入焦点。</summary>
+    internal const long WsExNoActivate = 0x08000000;
     internal const long WsExAppwindow = 0x00040000;
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -279,6 +281,52 @@ internal static class NativeMethods
     /// 激活目标窗口:附加当前前台线程后请求 SetForegroundWindow。
     /// 不修改全局 ForegroundLockTimeout,也不注入 Alt 键。
     /// </summary>
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool SystemParametersInfo(uint uiAction, uint uiParam, ref uint pvParam, uint fWinIni);
+
+    private const uint SpiGetForegroundLockTimeout = 0x2000;
+    private const uint SpiSetForegroundLockTimeout = 0x2001;
+
+    /// <summary>
+    /// 暂时关闭 Windows 的"前台锁定超时"(SPI_SETFOREGROUNDLOCKTIMEOUT = 0)。
+    ///
+    /// 系统默认会阻止非前台进程抢前台(用户刚操作过别的窗口时尤其明显),
+    /// 这会让粘贴前的 SetForegroundWindow 静默失败 —— 表现为"按键发出去了但没粘上"。
+    /// Ditto 的 ActivateTarget 就是先把它设为 0、激活目标、再恢复原值。
+    ///
+    /// 返回原值,调用方用 <see cref="RestoreForegroundLockTimeout"/> 还原。
+    /// </summary>
+    internal static uint DisableForegroundLockTimeout()
+    {
+        try
+        {
+            uint previous = 0;
+            if (!SystemParametersInfo(SpiGetForegroundLockTimeout, 0, ref previous, 0)) return 0;
+            uint zero = 0;
+            SystemParametersInfo(SpiSetForegroundLockTimeout, 0, ref zero, 0);
+            return previous;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>恢复前台锁定超时(传 <see cref="DisableForegroundLockTimeout"/> 的返回值)。</summary>
+    internal static void RestoreForegroundLockTimeout(uint previous)
+    {
+        if (previous == 0) return;
+        try
+        {
+            SystemParametersInfo(SpiSetForegroundLockTimeout, 0, ref previous, 0);
+        }
+        catch
+        {
+            // 恢复失败不影响主流程
+        }
+    }
+
     internal static bool ActivateWindow(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return false;
@@ -708,12 +756,18 @@ internal static class NativeMethods
             var attached = canAttach && AttachThreadInput(curTid, targetTid, true);
             try
             {
-                if (SetFocus(hwnd) != IntPtr.Zero) return true;
+                SetFocus(hwnd);
             }
             finally
             {
                 if (attached) AttachThreadInput(curTid, targetTid, false);
             }
+
+            // SetFocus 的返回值是**调用前的焦点窗口**,不是成功标志 ——
+            // 原来用 "!= IntPtr.Zero" 判断成功是错的:跨进程窗口(尤其 Chromium 的
+            // Chrome_WidgetWin_1)常常返回非零但焦点并没真正过去。
+            // 改为用 GetGUIThreadInfo 回读目标线程的真实焦点来验证(与 Ditto 的做法一致)。
+            if (IsFocusOn(hwnd, targetTid)) return true;
 
             // 目标不响应就别再重试:第二次注定同样失败,只会白白多花 30ms。
             if (!canAttach) return false;
@@ -722,11 +776,49 @@ internal static class NativeMethods
         return false;
     }
 
+    /// <summary>回读目标线程的真实焦点窗口,判断焦点是否真的落在 <paramref name="expected"/> 上。</summary>
+    private static bool IsFocusOn(IntPtr expected, uint threadId)
+    {
+        if (threadId == 0) return false;
+        var info = new GUITHREADINFO { cbSize = System.Runtime.InteropServices.Marshal.SizeOf<GUITHREADINFO>() };
+        if (!GetGUIThreadInfo(threadId, ref info)) return false;
+        return info.hwndFocus == expected;
+    }
+
     [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
     internal static extern long GetWindowLongPtr(IntPtr hwnd, int index);
 
     [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
     internal static extern long SetWindowLongPtr(IntPtr hwnd, int index, long value);
+
+    /// <summary>
+    /// 临时把窗口设为"永不激活"(WS_EX_NOACTIVATE)。
+    ///
+    /// 用途:置顶粘贴期间,剪贴板窗口虽然可见,但不应抢走目标窗口的输入焦点。
+    /// 这正是 EcoPaste 的核心设计 —— 它的剪贴板窗口常驻 focusable=false,
+    /// 于是 show 时不会把前台应用推走,前台焦点始终留在用户正在编辑的窗口,
+    /// 注入 Ctrl+V 时按键直接落到目标输入框,无需隐藏窗口、无需强制回焦。
+    ///
+    /// 只在粘贴期间临时设置,粘贴后**必须**清除(见 RestoreActivatable),
+    /// 否则窗口永远无法获得焦点,用户点输入框打不了字。
+    /// </summary>
+    internal static bool SetNoActivate(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return false;
+        var ex = GetWindowLongPtr(hwnd, GwlExStyle);
+        if ((ex & WsExNoActivate) != 0) return false;   // 已经是该状态,无需记录"需要恢复"
+        SetWindowLongPtr(hwnd, GwlExStyle, ex | WsExNoActivate);
+        return true;
+    }
+
+    /// <summary>清除 WS_EX_NOACTIVATE(仅在 <see cref="SetNoActivate"/> 返回 true 时调用)。</summary>
+    internal static void ClearNoActivate(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return;
+        var ex = GetWindowLongPtr(hwnd, GwlExStyle);
+        if ((ex & WsExNoActivate) == 0) return;
+        SetWindowLongPtr(hwnd, GwlExStyle, ex & ~WsExNoActivate);
+    }
 
     // ---- 窗口过程子类化(禁用标题栏双击最大化) ----
     internal const int GwlWndproc = -4;

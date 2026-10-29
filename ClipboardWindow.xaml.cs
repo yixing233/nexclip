@@ -956,17 +956,29 @@ public sealed partial class ClipboardWindow : Window
 
         // 非置顶:隐藏选择窗,让 Windows 按原激活顺序自然恢复目标窗口及其内部焦点。
         // 对 Chromium/Electron 尤其重要:仅 SetForegroundWindow 能恢复顶层窗口,不能保证 DOM 输入框回焦。
-        AppWindow.Hide();
-        NativeMethods.ShowWindow(hwnd, 0 /* SW_HIDE */);
-        _hidePending = false;
-        var restoredNaturally = await WaitForForegroundAsync(target, 300);
-
-        // 自然恢复失败时再使用 Ditto 的显式激活方案。
+        // 先关掉 Windows 的前台锁定超时(参考 Ditto ActivateTarget):
+        // 实测这里 natural=False 时,后面的显式激活会被系统静默拒绝,
+        // 目标始终回不到前台,注入的按键自然到不了它那里。
+        var hidePathLockTimeout = NativeMethods.DisableForegroundLockTimeout();
+        bool restoredNaturally;
         var activated = false;
-        if (!restoredNaturally)
+        try
         {
-            activated = NativeMethods.ActivateWindow(target);
-            await WaitForForegroundAsync(target, 700);
+            AppWindow.Hide();
+            NativeMethods.ShowWindow(hwnd, 0 /* SW_HIDE */);
+            _hidePending = false;
+            restoredNaturally = await WaitForForegroundAsync(target, 300);
+
+            // 自然恢复失败时再使用 Ditto 的显式激活方案。
+            if (!restoredNaturally)
+            {
+                activated = NativeMethods.ActivateWindow(target);
+                await WaitForForegroundAsync(target, 700);
+            }
+        }
+        finally
+        {
+            NativeMethods.RestoreForegroundLockTimeout(hidePathLockTimeout);
         }
 
         // Chromium 判定会枚举目标窗口的全部子窗口(每个子窗口一次跨进程 GetClassName),
@@ -1128,20 +1140,26 @@ public sealed partial class ClipboardWindow : Window
         AutomationElement? automationFocus,
         bool isChromium)
     {
-        // Chromium/Electron 不再用 UIA SetFocus 兜底。
-        // 跨进程 UIA SetFocus 只改 Win32 焦点,目标 TSF 焦点文档不会重走获焦握手,
-        // 输入法查不到插入符矩形 → 候选栏飞到屏幕左上角(用户实测)。
-        // 牺牲极少数"DOM 焦点没回来"场景的成功率,换回正常输入法行为。
-        if (isChromium) return false;
-
+        // 关键区别(踩过坑,别改回去):
+        //   - UIA SetFocus **会**让输入法候选栏飞到屏幕左上角 —— 不能用;
+        //   - Win32 SetFocus(带 AttachThreadInput) **不会** —— 目标收到 WM_SETFOCUS
+        //     后自己内部处理焦点,TSF 上下文由它自己重建。
+        //
+        // 之前为了规避输入法问题直接 'if (isChromium) return false' 短路,
+        // 导致 Chromium 目标的焦点永远恢复不了(日志 focusRestored=False),
+        // 粘贴必然失败。两者可以兼得,走 Win32 SetFocus 这条路即可。
         var focusTarget = focus;
         if (focusTarget == IntPtr.Zero || focusTarget == target)
         {
+            // 呼出时没记到具体控件时退而求其次用渲染窗口:
+            // Chromium 渲染窗口收到 WM_SETFOCUS 会把焦点下发到最近的 DOM 元素。
             var renderWidget = NativeMethods.FindRenderWidgetChild(target);
             if (renderWidget != IntPtr.Zero) focusTarget = renderWidget;
         }
-        if (NativeMethods.SetFocusTo(focusTarget)) return true;
 
+        if (focusTarget != IntPtr.Zero && NativeMethods.SetFocusTo(focusTarget)) return true;
+
+        // UIA SetFocus 只作为最后兜底,且仅对非 Chromium:对 Chromium 既无效又打乱 TSF。
         return !isChromium && TrySetAutomationFocus(target, automationFocus);
     }
 
