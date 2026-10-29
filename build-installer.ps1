@@ -1,4 +1,4 @@
-﻿# NexClip 自研 Fluent 现代安装器自动化打包脚本
+# NexClip 自研 Fluent 现代安装器自动化打包脚本
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
@@ -156,3 +156,11 @@ Write-Host " 文件大小: $([Math]::Round($size / 1MB, 2)) MB ($size 字节)" -
 Write-Host " SHA256  : $hash" -ForegroundColor Yellow
 Write-Host " 归档路径: $finalInstallerDest" -ForegroundColor Yellow
 Write-Host "==========================================================" -ForegroundColor Green
+Write-Host ""
+Write-Host " 下一步（两步都要做，缺一步用户就收不到更新）：" -ForegroundColor Cyan
+Write-Host "   1. gh release create v$version ...  (GitHub 分发)" -ForegroundColor DarkGray
+Write-Host "   2. .\publish-to-server.ps1 -Version $version  (服务端直连源)" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host " 为什么需要第 2 步：服务端 /releases/ 不受 deploy.sh 管辖、也不在 git 里，" -ForegroundColor DarkYellow
+Write-Host " 只更新 GitHub 会让『服务端直连加速』这个更新源读到旧的 version.json，" -ForegroundColor DarkYellow
+Write-Host " 用户因此检测不到新版本（2026-10-29 实际发生过）。" -ForegroundColor DarkYellow
