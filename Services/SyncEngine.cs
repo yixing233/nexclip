@@ -315,11 +315,26 @@ public sealed class SyncEngine : IDisposable
         }
     }
 
+    /// <summary>
+    /// 旧版本客户端把共享令牌存在 AuthToken 里,新服务端会以 401 拒绝。
+    /// 这种情况值得尝试"按设备 ID 领取一次设备令牌";但设备已被移除/身份不匹配时不值得。
+    ///
+    /// 与 <see cref="IsDeviceAuthFailure"/> 的区别:本方法回答"要不要试着迁移",
+    /// 那个方法回答"要不要清空本地配对"。两者都依赖同一套 code 语义,避免分叉。
+    /// </summary>
     private static bool ShouldAttemptLegacyMigration(Exception ex)
     {
+        if (ex is ApiException api)
+        {
+            // 服务端明确表态时不猜
+            if (api.IsDeviceIdentityMismatch) return false;   // 403:参数问题,迁移无意义
+            if (api.IsCredentialInvalid || api.IsCredentialMissing) return true;
+            if (api.StatusCode == System.Net.HttpStatusCode.Forbidden) return false;
+            if (api.StatusCode == System.Net.HttpStatusCode.Unauthorized) return true;
+        }
+
         for (Exception? current = ex; current is not null; current = current.InnerException)
         {
-            if (current is ApiException { StatusCode: System.Net.HttpStatusCode.Unauthorized }) return true;
             var message = current.Message;
             if (message.Contains("4001", StringComparison.OrdinalIgnoreCase) ||
                 message.Contains("Device removed", StringComparison.OrdinalIgnoreCase) ||
@@ -1032,17 +1047,47 @@ public sealed class SyncEngine : IDisposable
         _ = _push?.DisposeAsync();
     }
 
-    private static bool IsDeviceAuthFailure(Exception ex) => ex is ApiException api &&
-        (api.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
-         api.StatusCode == System.Net.HttpStatusCode.Forbidden ||
-         api.StatusCode == (System.Net.HttpStatusCode)410) ||
-        ex.Message.Contains("4001", StringComparison.OrdinalIgnoreCase) ||
-        ex.Message.Contains("Device removed", StringComparison.OrdinalIgnoreCase) ||
-        ex.Message.Contains("设备已被移除", StringComparison.OrdinalIgnoreCase) ||
-        ex.Message.Contains("401", StringComparison.OrdinalIgnoreCase) ||
-        ex.Message.Contains("403", StringComparison.OrdinalIgnoreCase) ||
-        ex.Message.Contains("410", StringComparison.OrdinalIgnoreCase) ||
-        ex.Message.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) ||
-        ex.Message.Contains("Forbidden", StringComparison.OrdinalIgnoreCase) ||
-        ex.Message.Contains("设备凭证", StringComparison.OrdinalIgnoreCase);
+    /// <summary>
+    /// 判断是否属于"设备凭证已失效、需要用户重新配对"。
+    ///
+    /// 这里的语义边界非常关键:判断错了会把仍然有效的凭证清掉,用户被迫重新配对。
+    /// 2026-10-23 的线上故障就是这个模式的放大版(服务端与客户端鉴权方式不匹配造成持续 401,
+    /// 客户端据此清空 IsPaired 与 token,最终只能人工重新配对)。
+    ///
+    /// 判定规则(按优先级):
+    /// 1. 有机器可读 code 时以 code 为准 —— 服务端明确区分了四种情况;
+    /// 2. 没有 code(老服务端)时退回状态码启发式,但【403 不再算凭证失效】:
+    ///    服务端的 403 是"上传设备身份与凭证不匹配",属于客户端参数问题,
+    ///    凭证本身仍然有效,清掉只会让用户白配对一次。
+    /// </summary>
+    private static bool IsDeviceAuthFailure(Exception ex)
+    {
+        if (ex is ApiException api)
+        {
+            // 服务端说得很清楚:只有 invalid / revoked 需要重新配对
+            if (api.IsCredentialInvalid || api.IsCredentialRevoked) return true;
+            // 缺少凭证、身份不匹配都不应清空本地凭证
+            if (api.IsCredentialMissing || api.IsDeviceIdentityMismatch) return false;
+
+            // 老服务端(无 code):401/410 视为需要重新配对;403 排除
+            if (api.StatusCode == System.Net.HttpStatusCode.Unauthorized) return true;
+            if (api.StatusCode == (System.Net.HttpStatusCode)410) return true;
+            if (api.StatusCode == System.Net.HttpStatusCode.Forbidden) return false;
+        }
+
+        // 兜底:走异常链上的文案启发式(SignalR 客户端不经过 ApiException)
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+        {
+            var message = current.Message;
+            if (message.Contains("Device removed", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("设备已被移除", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("4001", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("410", StringComparison.OrdinalIgnoreCase)) return true;
+            if (message.Contains("设备凭证", StringComparison.OrdinalIgnoreCase)) return true;
+            // 403/Forbidden 刻意不计入:见方法注释
+            if (message.Contains("401", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
 }

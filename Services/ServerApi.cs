@@ -13,11 +13,36 @@ public sealed class ApiException : Exception
 {
     public HttpStatusCode? StatusCode { get; }
 
-    public ApiException(string message, HttpStatusCode? statusCode = null, Exception? inner = null)
+    /// <summary>
+    /// 服务端返回的机器可读错误码(响应体里的 code 字段),可能为 null。
+    ///
+    /// 为什么需要它:设备凭证类错误的状态码存在歧义 ——
+    /// "缺少凭证"(客户端没带) 与 "凭证无效"(真的失效) 都是 401,
+    /// 而 403 在服务端表示"上传设备身份与凭证不匹配",同样与凭证有效性无关。
+    /// 如果只看状态码就清空本地配对状态,会把仍然有效的凭证误删,
+    /// 用户被迫重新配对(2026-10-23 线上故障就是这个模式的放大版)。
+    /// 有 code 时按 code 判断,没有(老服务端)再退回状态码启发式。
+    /// </summary>
+    public string? Code { get; }
+
+    public ApiException(string message, HttpStatusCode? statusCode = null, Exception? inner = null, string? code = null)
         : base(message, inner)
     {
         StatusCode = statusCode;
+        Code = code;
     }
+
+    /// <summary>服务端"缺少设备凭证"(请求根本没带):不是凭证失效,不应清除本地状态。</summary>
+    public bool IsCredentialMissing => Code == "credential_missing";
+
+    /// <summary>服务端"设备凭证无效":需要用户重新配对。</summary>
+    public bool IsCredentialInvalid => Code == "credential_invalid";
+
+    /// <summary>服务端"设备已被移除":需要用户重新配对。</summary>
+    public bool IsCredentialRevoked => Code == "credential_revoked";
+
+    /// <summary>服务端"上传设备身份与凭证不匹配"(403):凭证本身有效,属参数问题。</summary>
+    public bool IsDeviceIdentityMismatch => Code == "device_identity_mismatch";
 }
 
 /// <summary>
@@ -76,19 +101,24 @@ public sealed class ServerApi
     private static async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken ct = default)
     {
         if (response.IsSuccessStatusCode) return;
-        var detail = await ReadErrorDetailAsync(response, ct);
-        throw new ApiException(detail, response.StatusCode);
+        var (detail, code) = await ReadErrorDetailAsync(response, ct);
+        throw new ApiException(detail, response.StatusCode, code: code);
     }
 
-    private static async Task<string> ReadErrorDetailAsync(HttpResponseMessage response, CancellationToken ct)
+    /// <summary>
+    /// 解析错误响应,返回(给用户看的描述, 机器可读的 code)。
+    ///
+    /// 注意:401 不能像以前那样直接返回固定文案 —— 那样会把响应体里的 code 丢掉,
+    /// 而调用方恰恰需要 code 来区分"缺少凭证"与"凭证无效"(两者都是 401)。
+    /// </summary>
+    private static async Task<(string Detail, string? Code)> ReadErrorDetailAsync(
+        HttpResponseMessage response, CancellationToken ct)
     {
-        if (response.StatusCode == HttpStatusCode.Unauthorized)
-        {
-            return "服务器拒绝请求：设备未配对、配对已失效或设备已被移除，请重新完成配对。";
-        }
-
         string? body = null;
         try { body = await response.Content.ReadAsStringAsync(ct); } catch { }
+
+        string? serverError = null;
+        string? code = null;
         if (!string.IsNullOrWhiteSpace(body))
         {
             try
@@ -98,10 +128,25 @@ public sealed class ServerApi
                     error.ValueKind == JsonValueKind.String &&
                     !string.IsNullOrWhiteSpace(error.GetString()))
                 {
-                    return $"服务器拒绝请求：{error.GetString()}";
+                    serverError = error.GetString();
+                }
+                if (json.RootElement.TryGetProperty("code", out var codeEl) &&
+                    codeEl.ValueKind == JsonValueKind.String)
+                {
+                    code = codeEl.GetString();
                 }
             }
             catch (JsonException) { }
+        }
+
+        if (serverError is not null)
+        {
+            return ($"服务器拒绝请求：{serverError}", code);
+        }
+
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            return ("服务器拒绝请求：设备未配对、配对已失效或设备已被移除，请重新完成配对。", code);
         }
 
         var statusMessage = response.StatusCode switch
@@ -116,7 +161,7 @@ public sealed class ServerApi
             >= HttpStatusCode.InternalServerError => "服务器内部发生错误",
             _ => $"服务器返回 {(int)response.StatusCode} {response.ReasonPhrase}".Trim(),
         };
-        return $"服务器请求失败：{statusMessage}。";
+        return ($"服务器请求失败：{statusMessage}。", code);
     }
 
     private static async Task<T> SendAsync<T>(
