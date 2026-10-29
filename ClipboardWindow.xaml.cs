@@ -102,6 +102,10 @@ public sealed partial class ClipboardWindow : Window
                 if (DateTime.UtcNow < _showGuardUntil) return;
                 // 置顶时点击外部仅失去焦点,不自动隐藏;用户可继续浏览/操作条目。
                 if (IsTopmost) return;
+                // 粘贴进行中:本窗口的隐藏由 HideAndInjectPasteAsync 自己安排
+                // (它要精确控制隐藏→目标回焦→注入→按需恢复的时序),
+                // 这里再挂一个隐藏定时器会与那条流程打架。
+                if (_isPasting) return;
                 // 注意:此处不能就地判断"焦点是否被自家浮窗接走"。
                 // WM_ACTIVATE(WA_INACTIVE) 处理期间 GetForegroundWindow() 未必已切到新前台,
                 // 一旦误判就直接跳过启动定时器,而 Deactivated 不会再来第二次,
@@ -258,6 +262,10 @@ public sealed partial class ClipboardWindow : Window
             _hidePending = false;
             _hideTimer?.Stop();
             if (App.IsExiting) return;
+            // 置顶模式下永不自动隐藏 —— 与 Activated 事件里的守卫保持一致。
+            // 缺了这句的后果:粘贴流程 Hide 再 Show 之后,若 Timer 仍在跑,
+            // 会把刚恢复的窗口又隐藏一次,用户看到"双击粘贴后窗口还是关了"。
+            if (IsTopmost) return;
             // 焦点被复制直达浮窗接走时取消隐藏:浮窗是复制的即时反馈,
             // 不应把用户正在浏览的剪贴板窗口顶掉。50ms 后前台句柄已稳定,此处判定可靠。
             if (IsFocusTakenByLinkToast()) return;
@@ -909,6 +917,13 @@ public sealed partial class ClipboardWindow : Window
             return false;
         }
 
+        // 粘贴必须先隐藏本窗口,才能让目标窗口成为前台并接收注入的按键。
+        //
+        // 但**置顶模式下用户期望窗口一直可见** —— 剪贴板窗口置顶的用途就是
+        // "对照着往别处粘贴/连续粘贴多次",此时把窗口关掉等于把置顶功能废掉了。
+        // 因此记录置顶状态,粘贴完成后按原位恢复显示(不抢焦点,见下方恢复段)。
+        var wasTopmost = IsTopmost;
+
         // PastePaw 的可靠路径:先隐藏选择窗,让 Windows 按原激活顺序自然恢复目标窗口及其内部焦点。
         // 对 Chromium/Electron 尤其重要:仅 SetForegroundWindow 能恢复顶层窗口,不能保证 DOM 输入框回焦。
         AppWindow.Hide();
@@ -965,6 +980,12 @@ public sealed partial class ClipboardWindow : Window
         if (!NativeMethods.IsSameRootWindow(foregroundAtInject, target))
         {
             Log.Warn($"粘贴:目标未成为前台,取消按键注入 target={target}, fg={foregroundAtInject} ({context})");
+            // 注入被取消时也必须把置顶窗口放回来,否则用户看到的是"点了粘贴,窗口凭空消失"
+            if (wasTopmost)
+            {
+                NativeMethods.ShowWindow(hwnd, 8 /* SW_SHOWNOACTIVATE */);
+                Log.Debug($"粘贴:注入取消后已恢复置顶窗口显示, {context}");
+            }
             return false;
         }
 
@@ -1004,8 +1025,21 @@ public sealed partial class ClipboardWindow : Window
                 : NativeMethods.SendInputShiftInsert();
         }
 
+        // 置顶模式:粘贴完把窗口放回原位。
+        //
+        // 关键约束:**绝不能抢焦点**。
+        // 目标窗口刚被粘贴逻辑激活、输入框刚回焦,此时若本窗口抢回前台,
+        // 用户接下来打的字会进剪贴板窗口 —— 比"窗口被关掉"更糟。
+        // 因此用 ShowWindow(SW_SHOWNOACTIVATE) 显示而不用 AppWindow.Show/Activate,
+        // 并保持 WS_EX_TOPMOST(置顶属性在 Hide/Show 之间不会丢,无需重新设置)。
+        if (wasTopmost)
+        {
+            NativeMethods.ShowWindow(hwnd, 8 /* SW_SHOWNOACTIVATE */);
+            Log.Debug($"粘贴:置顶模式下已恢复窗口显示(不抢焦点), {context}");
+        }
+
         Log.Debug($"粘贴:{strategy} (natural={restoredNaturally}, activated={activated}, focusIntact={focusIntact}, focusRestored={focusRestored}, " +
-                  $"modifiersReleased={modifiersReleased}, injected={injected}, 回焦耗时={focusElapsed}ms, control={focusControl}, {context})");
+                  $"modifiersReleased={modifiersReleased}, injected={injected}, topmostRestored={wasTopmost}, 回焦耗时={focusElapsed}ms, control={focusControl}, {context})");
         return true;
     }
 
