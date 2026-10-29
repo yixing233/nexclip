@@ -48,6 +48,13 @@ public sealed partial class ClipboardWindow : Window
     /// <summary>粘贴时回焦的硬超时:回焦只是"锦上添花",绝不允许它拖住粘贴。</summary>
     private const int FocusRestoreTimeoutMs = 800;
 
+    /// <summary>
+    /// 注入粘贴键前等待用户松开修饰键的上限。
+    /// 300ms 是权衡:太短则热键(Alt+V)的按键还按着,叠加成 Ctrl+Alt+V;
+    /// 太长则用户感到迟滞。超时后仍继续粘贴,不牺牲成功率。
+    /// </summary>
+    private const int ModifierReleaseTimeoutMs = 300;
+
     /// <summary>窗口显示完成事件(页面订阅:聚焦列表支持键盘操作)。</summary>
     public event Action? Shown;
 
@@ -429,8 +436,20 @@ public sealed partial class ClipboardWindow : Window
     public void CapturePasteTarget()
     {
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        var target = NativeMethods.GetRootWindow(NativeMethods.GetForegroundWindow());
+        var foreground = NativeMethods.GetForegroundWindow();
+        var target = NativeMethods.GetRootWindow(foreground);
         if (target == IntPtr.Zero || target == hwnd || !NativeMethods.IsWindow(target)) return;
+
+        // 窗口合法性校验:不是所有"可见窗口"都适合当粘贴目标。
+        // 参考 CopyQ 的 isAltTabWindow:排除 DWM cloaked(用户看不见但仍 IsWindowVisible)、
+        // 工具窗口(WS_EX_TOOLWINDOW)与无标题的空壳窗口。
+        // 不做这层过滤时,呼出瞬间可能抓到输入法候选栏、屏幕键盘、托盘气泡这类
+        // "看得见却无法粘贴"的辅助窗口,粘贴会注入到错误目标而用户完全无从察觉。
+        if (!NativeMethods.IsValidPasteTarget(target))
+        {
+            Log.Debug($"粘贴目标被过滤:target={target} 类={NativeMethods.GetWindowClassName(target)}");
+            return;
+        }
 
         _pasteTarget = target;
         _pasteFocus = NativeMethods.GetFocusedControl();
@@ -949,16 +968,44 @@ public sealed partial class ClipboardWindow : Window
             return false;
         }
 
-        // 成熟剪贴板管理器会按目标应用选择粘贴键。Chromium/Electron 的
-        // contenteditable/ProseMirror 对 Ctrl+V 更可靠,不能套用全局 Shift+Insert。
-        var useCtrlV = isChromium || App.Services.Settings.PasteKey == "CtrlV";
-        var keyName = useCtrlV ? "Ctrl+V" : "Shift+Insert";
-        var strategy = isChromium ? "chromium" : "configured";
-        var injected = useCtrlV
-            ? NativeMethods.SendInputCtrlV()
-            : NativeMethods.SendInputShiftInsert();
-        Log.Debug($"粘贴:SendInput {keyName} (strategy={strategy}, natural={restoredNaturally}, activated={activated}, focusIntact={focusIntact}, focusRestored={focusRestored}, injected={injected}, " +
-                  $"回焦耗时={focusElapsed}ms, {context})");
+        // 注入前必须等用户真正松开修饰键(热键 Alt+V 的 Alt 常常还按着)。
+        // 只补发 KEYUP 事件(AllKeysUp)改变不了物理按键状态,叠加后会变成 Ctrl+Alt+V、
+        // 或让目标应用收到两次粘贴。CopyQ 同样在注入前做这个等待。
+        var modifiersReleased = await NativeMethods.WaitForModifiersReleasedAsync(ModifierReleaseTimeoutMs);
+        if (!modifiersReleased)
+        {
+            // 超时不放弃粘贴:宁可冒按键叠加的风险,也好过让用户觉得"点了没反应"
+            Log.Warn($"粘贴:等待修饰键释放超时({ModifierReleaseTimeoutMs}ms),仍继续注入 ({context})");
+        }
+
+        // 第一优先:标准编辑控件走 WM_PASTE 直达消息。
+        // 它不依赖前台窗口、不受修饰键影响、也不会与用户占用的热键冲突,
+        // 是记事本/旧版 Office/各类 Win32 输入框上最可靠的路径。
+        // Chromium/Electron 的自绘输入框不响应 WM_PASTE,直接跳过(避免一次无谓的跨进程 SendMessage)。
+        string strategy;
+        bool injected;
+        var focusControl = focus != IntPtr.Zero ? focus : NativeMethods.GetFocusedControlOf(target);
+        if (!isChromium && focusControl != IntPtr.Zero && focusControl != target &&
+            NativeMethods.IsPasteMessageTarget(focusControl) &&
+            NativeMethods.TryPasteViaMessage(focusControl))
+        {
+            strategy = "WM_PASTE";
+            injected = true;
+        }
+        else
+        {
+            // 回退:模拟按键。成熟剪贴板管理器会按目标应用选择粘贴键 ——
+            // Chromium/Electron 的 contenteditable/ProseMirror 对 Ctrl+V 更可靠,
+            // 不能套用全局 Shift+Insert。
+            var useCtrlV = isChromium || App.Services.Settings.PasteKey == "CtrlV";
+            strategy = isChromium ? "chromium" : "configured";
+            injected = useCtrlV
+                ? NativeMethods.SendInputCtrlV()
+                : NativeMethods.SendInputShiftInsert();
+        }
+
+        Log.Debug($"粘贴:{strategy} (natural={restoredNaturally}, activated={activated}, focusIntact={focusIntact}, focusRestored={focusRestored}, " +
+                  $"modifiersReleased={modifiersReleased}, injected={injected}, 回焦耗时={focusElapsed}ms, control={focusControl}, {context})");
         return true;
     }
 

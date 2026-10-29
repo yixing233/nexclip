@@ -52,13 +52,69 @@ internal static class NativeMethods
     }
 
     /// <summary>释放可能残留的修饰键(Ctrl/Alt/Shift/Win)。热键触发时这些键可能仍在按下状态,
-    /// 残留状态会干扰后续注入的 Ctrl+V(如 Alt 残留会激活 Chromium 菜单栏)。</summary>
+    /// 残留状态会干扰后续注入的 Ctrl+V(如 Alt 残留会激活 Chromium 菜单栏)。
+    ///
+    /// 注意:这只是**往输入流里补发 KEYUP 事件**,并不能改变用户手指仍按着物理键的事实。
+    /// 若用户还按着 Ctrl,注入的 Ctrl+V 会与物理 Ctrl 叠加成 Ctrl+V+V。
+    /// 因此注入前必须用 <see cref="WaitForModifiersReleased"/> 等待真实松开。</summary>
     internal static void AllKeysUp()
     {
         foreach (var vk in new byte[] { 0x10 /* Shift */, 0x11 /* Ctrl */, 0x12 /* Alt */, 0x5B /* LWin */, 0x5C /* RWin */ })
         {
             keybd_event(vk, 0, 0x0002 /* KEYEVENTF_KEYUP */, UIntPtr.Zero);
         }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern short GetKeyState(int nVirtKey);
+
+    /// <summary>修饰键是否被物理按下(GetKeyState 最高位为 1)。</summary>
+    private static bool IsModifierDown(int vk) => (GetKeyState(vk) & 0x8000) != 0;
+
+    /// <summary>
+    /// 当前是否有任何修饰键处于真实按下状态。
+    /// 覆盖 Ctrl/Shift/Alt/Win 的左右两侧,与 CopyQ 的 isModifierPressed 等价。
+    /// </summary>
+    internal static bool IsAnyModifierDown() =>
+        IsModifierDown(0x11 /* VK_CONTROL */) || IsModifierDown(0xA2 /* VK_LCONTROL */) ||
+        IsModifierDown(0xA3 /* VK_RCONTROL */) ||
+        IsModifierDown(0x10 /* VK_SHIFT */) || IsModifierDown(0xA0 /* VK_LSHIFT */) ||
+        IsModifierDown(0xA1 /* VK_RSHIFT */) ||
+        IsModifierDown(0x12 /* VK_MENU */) || IsModifierDown(0xA4 /* VK_LMENU */) ||
+        IsModifierDown(0xA5 /* VK_RMENU */) ||
+        IsModifierDown(0x5B /* VK_LWIN */) || IsModifierDown(0x5C /* VK_RWIN */);
+
+    /// <summary>
+    /// 等待用户松开所有修饰键,最多等 <paramref name="timeoutMilliseconds"/>。
+    /// 返回 true 表示可以安全注入粘贴键。
+    ///
+    /// <para>为什么粘贴前必须等:热键(如 Alt+V)呼出选择窗后,用户手指常常还停在 Alt 上。
+    /// 此时注入 Ctrl+V,系统收到的是"Ctrl+Alt+V"或与物理键叠加的双击,目标应用可能
+    /// 执行到其它命令、或粘贴两次。CopyQ 对同一问题也做了等待
+    /// (winplatformwindow.cpp 的 waitForModifiersReleased)。</para>
+    ///
+    /// <para>轮询间隔 10ms、默认上限 300ms:既不让用户感到迟滞,又覆盖了绝大多数人
+    /// 松开按键所需的时间。超时后仍然继续粘贴 —— 宁可冒叠加风险,也不要让粘贴失败。</para>
+    /// </summary>
+    internal static async Task<bool> WaitForModifiersReleasedAsync(
+        int timeoutMilliseconds = 300, CancellationToken cancellationToken = default)
+    {
+        if (!IsAnyModifierDown())
+        {
+            return true;
+        }
+
+        var deadline = Environment.TickCount64 + timeoutMilliseconds;
+        while (Environment.TickCount64 < deadline)
+        {
+            await Task.Delay(10, cancellationToken).ConfigureAwait(false);
+            if (!IsAnyModifierDown())
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -397,17 +453,47 @@ internal static class NativeMethods
     }
 
     /// <summary>
-    /// 向目标控件直接发送 WM_PASTE(编辑框粘贴)。返回 true 表示控件处理了粘贴(返回值非 0);
-    /// 现代框架(浏览器等自绘输入框)不响应 WM_PASTE,返回 false 由调用方回退模拟 Ctrl+V。
+    /// 判断某控件是否值得尝试 WM_PASTE。
+    ///
+    /// 只在"标准 Win32 编辑控件"上尝试:Ctrl+V 在这些控件里同样有效,
+    /// 但 WM_PASTE 少一次全局按键注入,不受修饰键与前台状态影响。
+    /// 自绘输入框(Chrome_WidgetWin_*/RichEdit 的复杂变体)一律返回 false,
+    /// 让调用方直接走按键注入,避免白白浪费一次跨进程 SendMessage。
+    /// </summary>
+    internal static bool IsPasteMessageTarget(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return false;
+
+        // 判定规则交给共享策略(与单元测试覆盖的规则完全一致)
+        return NexClip.Tray.PasteTargetPolicy.ShouldTryPasteMessage(GetWindowClassName(hwnd));
+    }
+
+    /// <summary>
+    /// 向目标控件直接发送 WM_PASTE(编辑框粘贴)。
+    ///
+    /// <para><b>注意返回值不可信</b>:实测 <c>RichEditD2DPT</c>(Win11 记事本)收到 WM_PASTE
+    /// 后**确实粘贴成功了**,但返回 0。旧实现用"返回值非 0"判断成功,
+    /// 于是误判为失败并回退去注入 Ctrl+V —— 目标应用因此粘贴了两次,
+    /// 用户看到内容重复(实测复现:内容变为 "XXX XXX")。</para>
+    ///
+    /// <para>因此判定标准改为**消息是否送达**而不是返回值:
+    /// SendMessageTimeout 返回非 0 表示消息已被控件处理(即使它返回 0);
+    /// 返回 0 表示超时或窗口无响应,此时才回退按键注入。</para>
+    ///
+    /// <para>调用方必须先通过 <see cref="IsPasteMessageTarget"/> 确认控件类型,
+    /// 只有确定支持 WM_PASTE 的标准编辑控件才走到这里 ——
+    /// 对不支持的控件发消息不会粘贴,而我们又没有可靠的"没粘贴"信号,
+    /// 那种情况下宁可不用这条路。</para>
     /// </summary>
     internal static bool TryPasteViaMessage(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return false;
-        if (SendMessageTimeout(hwnd, WM_PASTE, UIntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 500, out var result) != IntPtr.Zero)
-        {
-            return result != UIntPtr.Zero;
-        }
-        return false;
+
+        var delivered = SendMessageTimeout(
+            hwnd, WM_PASTE, UIntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG | SMTO_BLOCK, 500, out _);
+
+        // 只有"超时/无响应"才算失败;返回值是否为 0 不作为判断依据(见方法注释)
+        return delivered != IntPtr.Zero;
     }
 
     // ---- 焦点控件跟踪(呼出时记录输入框,恢复时精确回焦) ----
@@ -518,6 +604,78 @@ internal static class NativeMethods
         }
 
         return FindRenderWidgetChild(topLevel) != IntPtr.Zero;
+    }
+
+    // ---- 粘贴目标窗口合法性判定 ----
+
+    [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+    private static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
+
+    private const int WsExToolWindow = 0x00000080;
+    private const int DwmwaCloaked = 14;  // DWMWA_CLOAKED
+
+    /// <summary>读取窗口类名(仅用于日志,失败返回空串)。</summary>
+    internal static string GetWindowClassName(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return string.Empty;
+        var sb = new System.Text.StringBuilder(128);
+        return GetClassName(hwnd, sb, sb.Capacity) != 0 ? sb.ToString() : string.Empty;
+    }
+
+    /// <summary>
+    /// 该窗口是否是**可见但被 DWM 隐藏**(cloaked)。
+    ///
+    /// Win10+ 的 UWP、部分商店应用与虚拟桌面里"已切走"的窗口会处于此状态:
+    /// IsWindowVisible 返回 true,用户却完全看不见。往这类窗口注入粘贴键没有任何意义。
+    /// </summary>
+    internal static bool IsWindowCloaked(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        try
+        {
+            // DWMWA_CLOAKED 非 0 表示被遮蔽;旧系统不支持该属性时返回非 0 HRESULT,按"未遮蔽"处理
+            var hr = DwmGetWindowAttribute(hwnd, DwmwaCloaked, out var cloaked, sizeof(int));
+            return hr == 0 && cloaked != 0;
+        }
+        catch (System.DllNotFoundException)
+        {
+            return false;
+        }
+        catch (System.EntryPointNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>是否带 WS_EX_TOOLWINDOW(输入法候选栏、托盘气泡、屏幕键盘等辅助窗口)。</summary>
+    internal static bool IsToolWindow(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        var exStyle = (int)GetWindowLongPtr(hwnd, GwlExStyle);
+        return (exStyle & WsExToolWindow) != 0;
+    }
+
+    /// <summary>
+    /// 判断窗口能否作为粘贴目标。参考 CopyQ 的 isAltTabWindow。
+    ///
+    /// 规则(任一不满足即拒绝):
+    /// 1. 必须是有效窗口且可见;
+    /// 2. 不能是 DWM cloaked(用户看不见的窗口);
+    /// 3. 不能是工具窗口(辅助 UI,不是用户正在编辑的应用窗口);
+    /// 4. 排除几个已知系统壳类(与 CopyQ 一致)。
+    ///
+    /// 刻意**不**检查"是否有标题":部分正常应用的主窗口标题为空
+    /// (例如某些 Electron 应用的初始帧),硬性要求标题会误杀。
+    /// </summary>
+    internal static bool IsValidPasteTarget(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero || !IsWindow(hwnd)) return false;
+        if (!IsWindowVisible(hwnd)) return false;
+        if (IsWindowCloaked(hwnd)) return false;
+        if (IsToolWindow(hwnd)) return false;
+
+        // 系统壳类判定交给共享策略(与单元测试覆盖的规则完全一致,避免两处分叉)
+        return !NexClip.Tray.PasteTargetPolicy.IsShellWindowClass(GetWindowClassName(hwnd));
     }
 
     /// <summary>
