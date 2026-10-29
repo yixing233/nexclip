@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using NexClip.Tray;
 
 /// <summary>
 /// 剪贴板条目来源应用信息
@@ -252,6 +253,21 @@ public static class SourceAppDetector
                 return null;
             }
 
+            // 处理 WebView2 宿主 (msedgewebview2.exe)：
+            // 很多现代桌面应用(DSH-X / GameViewer / Widgets / Antigravity 等)用 WebView2 承载界面，
+            // 剪贴板写入实际发生在 msedgewebview2.exe 的子进程里，于是来源被误识别成
+            // "Microsoft Edge WebView2"。必须回溯到真正的宿主应用。
+            var (hostHwnd, hostPid) = ResolveRealWebView2Host(hwnd, pid);
+            if (hostPid != 0 && hostPid != pid)
+            {
+                if (hostPid == currentPid)
+                {
+                    return null;
+                }
+                hwnd = hostHwnd;
+                pid = hostPid;
+            }
+
             using var process = Process.GetProcessById((int)pid);
             var processName = process.ProcessName;
 
@@ -294,6 +310,228 @@ public static class SourceAppDetector
     {
         var owner = CaptureOwnerHandle();
         return owner is null ? null : ResolveSourceApp(owner.Value);
+    }
+
+    /// <summary>
+    /// 若来源进程是 WebView2（msedgewebview2.exe），回溯到真正承载它的宿主应用。
+    ///
+    /// <para>为什么需要：WebView2 把「浏览器内核」与「宿主应用」拆成两个进程。
+    /// 用户在 DSH-X / GameViewer 里复制文本时，实际调用剪贴板 API 的是
+    /// msedgewebview2.exe 的子进程，所以直接取进程名会得到
+    /// "Microsoft Edge WebView2" —— 对用户毫无意义，因为界面上根本没有这个程序。</para>
+    ///
+    /// <para>识别依据是**父进程链**：WebView2 的浏览器进程由宿主应用直接创建，
+    /// 中间没有额外转发进程，因此"父进程 = 宿主"这条规则稳定可靠。
+    /// 实测确认：DSH-X 的 msedgewebview2(18528) 父进程正是 DSH.exe(28300)，
+    /// GameViewer / Widgets / Antigravity 同样成立。</para>
+    ///
+    /// <para>不用命令行 <c>--webview-exe-name</c> 的原因：读取命令行需要 WMI
+    /// (System.Management) 或解析远程 PEB，前者要多一个包引用、后者过于复杂，
+    /// 而父进程链用 CreateToolhelp32Snapshot 即可，零额外依赖且更快。</para>
+    ///
+    /// <para>回溯失败时保持原值，退回显示 WebView2 —— 至少不丢信息。</para>
+    /// </summary>
+    private static (IntPtr Hwnd, uint Pid) ResolveRealWebView2Host(IntPtr hwnd, uint pid)
+    {
+        try
+        {
+            if (!IsWebView2Process(pid))
+            {
+                return (hwnd, pid);
+            }
+
+            // 沿父进程链上溯，跳过所有 msedgewebview2 进程，拿到真正的宿主
+            var ancestor = TryGetUltimateHostPid(pid);
+            if (ancestor != 0 && ancestor != pid)
+            {
+                return (TryGetMainWindowOfProcess(ancestor, hwnd), ancestor);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"解析 WebView2 宿主失败: {ex.Message}");
+        }
+
+        return (hwnd, pid);
+    }
+
+    /// <summary>判断指定进程是否为 WebView2 宿主进程（msedgewebview2.exe）。</summary>
+    private static bool IsWebView2Process(uint pid)
+    {
+        try
+        {
+            using var process = Process.GetProcessById((int)pid);
+            return SourceAppClassifier.IsWebView2Process(process.ProcessName);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 按进程名查找第一个同名进程。
+    /// 作为 <c>--webview-exe-name</c> 的匹配入口保留，但**不依赖命令行读取**：
+    /// 主路径是父进程链（见 <see cref="ResolveRealWebView2Host"/>）。
+    /// </summary>
+    private static uint TryFindProcessByName(string processName)
+    {
+        try
+        {
+            var normalized = processName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+                ? processName[..^4]
+                : processName;
+
+            foreach (var process in Process.GetProcessesByName(normalized))
+            {
+                using (process)
+                {
+                    if (string.Equals(process.ProcessName, "msedgewebview2", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                    return (uint)process.Id;
+                }
+            }
+        }
+        catch
+        {
+            // 忽略
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// 沿父进程链上溯，跳过连续的 msedgewebview2 进程，返回第一个非 WebView2 祖先。
+    ///
+    /// <para>这是识别 WebView2 宿主最可靠也最廉价的方式，实测数据：
+    /// DSH-X 的 <c>msedgewebview2.exe</c>(PID 18528) 父进程正是宿主
+    /// <c>DSH.exe</c>(PID 28300)；GameViewer、Widgets、Antigravity 同样如此。
+    /// WebView2 的浏览器进程由宿主直接创建，中间没有额外转发进程，
+    /// 因此"父进程 = 宿主"这条规则足够稳定，无需解析命令行。</para>
+    /// </summary>
+    private static uint TryGetUltimateHostPid(uint pid)
+    {
+        var current = pid;
+        for (var depth = 0; depth < 8; depth++)
+        {
+            var parent = TryGetParentProcessId(current);
+            if (parent == 0 || parent == current)
+            {
+                break;
+            }
+
+            // 用共享分类器判断"能否作为宿主"：排除内核自身与 System/Idle 等伪进程
+            if (!IsWebView2Process(parent) && !IsSystemPseudoProcess(parent))
+            {
+                return parent;
+            }
+
+            current = parent;
+        }
+
+        return 0;
+    }
+
+    /// <summary>System / Idle 是内核伪进程，回溯到它们没有任何意义。</summary>
+    private static bool IsSystemPseudoProcess(uint pid)
+    {
+        try
+        {
+            using var process = Process.GetProcessById((int)pid);
+            return !SourceAppClassifier.CanBeWebView2Host(process.ProcessName);
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    /// <summary>用 CreateToolhelp32Snapshot 取父进程 Id（纯 Win32，无 WMI/COM 依赖）。</summary>
+    private static uint TryGetParentProcessId(uint pid)
+    {
+        IntPtr snapshot = IntPtr.Zero;
+        try
+        {
+            snapshot = CreateToolhelp32Snapshot(Th32csSnapProcess, 0);
+            if (snapshot == IntPtr.Zero || snapshot == new IntPtr(-1))
+            {
+                return 0;
+            }
+
+            var entry = new ProcessEntry32W { dwSize = (uint)Marshal.SizeOf<ProcessEntry32W>() };
+            if (!Process32FirstW(snapshot, ref entry))
+            {
+                return 0;
+            }
+
+            do
+            {
+                if (entry.th32ProcessID == pid)
+                {
+                    return entry.th32ParentProcessID;
+                }
+            }
+            while (Process32NextW(snapshot, ref entry));
+        }
+        catch
+        {
+            // 忽略
+        }
+        finally
+        {
+            if (snapshot != IntPtr.Zero && snapshot != new IntPtr(-1))
+            {
+                CloseHandle(snapshot);
+            }
+        }
+
+        return 0;
+    }
+
+    private const uint Th32csSnapProcess = 0x00000002;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ProcessEntry32W
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szExeFile;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool Process32FirstW(IntPtr hSnapshot, ref ProcessEntry32W lppe);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool Process32NextW(IntPtr hSnapshot, ref ProcessEntry32W lppe);
+
+    /// <summary>尝试取得进程的顶层主窗口；取不到时回退到原句柄。</summary>
+    private static IntPtr TryGetMainWindowOfProcess(uint pid, IntPtr fallback)
+    {
+        try
+        {
+            using var process = Process.GetProcessById((int)pid);
+            var main = process.MainWindowHandle;
+            return main != IntPtr.Zero ? main : fallback;
+        }
+        catch
+        {
+            return fallback;
+        }
     }
 
     /// <summary>

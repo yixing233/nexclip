@@ -25,11 +25,40 @@ public partial class HistoryItemViewModel : ObservableObject
     [ObservableProperty]
     private bool isBatchSelected;
 
-    partial void OnIsBatchSelectedChanged(bool value) => OnPropertyChanged(nameof(BorderBrushForBatch));
+    partial void OnIsBatchSelectedChanged(bool value)
+    {
+        OnPropertyChanged(nameof(BorderBrushForBatch));
+        OnPropertyChanged(nameof(BorderThicknessForBatch));
+    }
 
-    /// <summary>批量选择线框色。</summary>
-    public Brush BorderBrushForBatch => IsBatchSelected ? SelectedBrush : BorderBrushFor(IsSelected, IsHovered);
-    public Thickness BorderThicknessForBatch => new(IsBatchSelected ? 2 : 1);
+    /// <summary>
+    /// 单击单选的选中态变化。
+    ///
+    /// 这里曾经**漏掉通知**：IsSelected 变化时没有触发 BorderBrushForBatch /
+    /// BorderThicknessForBatch 的 PropertyChanged，于是单击选中后边框颜色与粗细
+    /// 都不会刷新 —— 表现为"点了没反应"，选中态只能靠右侧操作按钮的显隐看出来。
+    /// </summary>
+    partial void OnIsSelectedChanged(bool value)
+    {
+        OnPropertyChanged(nameof(BorderBrushForBatch));
+        OnPropertyChanged(nameof(BorderThicknessForBatch));
+    }
+
+    /// <summary>
+    /// 卡片线框：单击选中 > 批量选中 > 悬停 > 常态。
+    /// 批量选中与单击选中都用主色实线，区别在粗细（批量 2px / 单击 2px，悬停与常态 1px）。
+    /// </summary>
+    public Brush BorderBrushForBatch =>
+        IsBatchSelected || IsSelected ? SelectedBrush : BorderBrushFor(IsSelected, IsHovered);
+
+    /// <summary>
+    /// 线框粗细。选中态加粗到 2px 形成明确的"内边框"观感。
+    ///
+    /// 注意：XAML 里这个值绑在**覆盖层 Border**（IsHitTestVisible=False，叠在卡片之上），
+    /// 而不是卡片自身的 BorderThickness —— 后者会撑大布局，导致选中/取消时卡片跳动。
+    /// </summary>
+    public Thickness BorderThicknessForBatch =>
+        new(IsBatchSelected || IsSelected ? 2 : 1);
 
     [ObservableProperty]
     private bool isHovered;
@@ -40,6 +69,8 @@ public partial class HistoryItemViewModel : ObservableObject
         OnPropertyChanged(nameof(RemarkHitTest));
         OnPropertyChanged(nameof(OriginalOpacity));
         OnPropertyChanged(nameof(OriginalHitTest));
+        // 悬停也要刷新线框：否则鼠标移入/移出时边框颜色不变（悬停态是浅蓝 HoverBrush）
+        OnPropertyChanged(nameof(BorderBrushForBatch));
     }
 
     [ObservableProperty]

@@ -293,18 +293,22 @@
                 </ListView.ItemContainerStyle>
                 <ListView.ItemTemplate>
                     <DataTemplate x:DataType="vm:HistoryItemViewModel">
-                        <Border
-                            CornerRadius="8"
-                            Padding="14,10"
-                            Margin="16,6"
-                            PointerEntered="Item_PointerEntered"
-                            PointerExited="Item_PointerExited"
-                            DoubleTapped="Item_DoubleTapped"
-                            RightTapped="Item_RightTapped"
-                            ToolTipService.ToolTip="双击粘贴"
-                            BorderThickness="{x:Bind BorderThicknessForBatch, Mode=OneWay}"
-                            BorderBrush="{x:Bind BorderBrushForBatch, Mode=OneWay}"
-                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
+                        <Grid Margin="16,6">
+                            <!--
+                                选中内边框用**覆盖层**绘制，而不是设置卡片自身的 BorderThickness。
+                                原因：BorderThickness 为 2 时会同时撑大布局，选中/取消选中之间
+                                卡片内容和高度会跳动。覆盖层叠在卡片之上、不参与布局，
+                                因此边框粗细变化对排版零影响，视觉上也更像"内嵌描边"。
+                            -->
+                            <Border
+                                CornerRadius="8"
+                                Padding="14,10"
+                                PointerEntered="Item_PointerEntered"
+                                PointerExited="Item_PointerExited"
+                                DoubleTapped="Item_DoubleTapped"
+                                RightTapped="Item_RightTapped"
+                                ToolTipService.ToolTip="双击粘贴"
+                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
                             <Border.ContextFlyout>
                                 <MenuFlyout Opening="EntryMenu_Opening">
                                     <!-- 智能直达动态菜单项 (根据条目内容智能识别并呈现，保持条目卡片轻量不加多余徽标) -->
@@ -614,7 +618,14 @@
                                     </Button>
                                 </StackPanel>
                             </StackPanel>
-                        </Border>
+                            </Border>
+                            <!-- 选中内边框覆盖层：IsHitTestVisible=False 不遮挡点击 -->
+                            <Border
+                                CornerRadius="8"
+                                IsHitTestVisible="False"
+                                BorderThickness="{x:Bind BorderThicknessForBatch, Mode=OneWay}"
+                                BorderBrush="{x:Bind BorderBrushForBatch, Mode=OneWay}" />
+                        </Grid>
                     </DataTemplate>
                 </ListView.ItemTemplate>
                 <ListView.Footer>
@@ -672,9 +683,13 @@
                 </StackPanel>
             </StackPanel>
 
-            <!-- 回到顶部悬浮按钮:下滑超过阈值后,上滑时出现;点击回到列表顶部 -->
+            <!-- 回到顶部悬浮按钮:下滑超过阈值后,上滑时出现;点击回到列表顶部
+                 必须显式指定 Grid.Row="1":ListHost 有两行(批量选择栏 + 列表),
+                 不指定时默认落在 Row 0,按钮会被压扁到批量栏那一行的高度里,
+                 表现为"贴着标签栏右侧的圆形按钮",而不是悬浮在列表上方。 -->
             <Button
                 x:Name="BackToTopButton"
+                Grid.Row="1"
                 AutomationProperties.AutomationId="BackToTopButton"
                 Width="36"
                 Height="36"
