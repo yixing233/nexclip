@@ -917,14 +917,44 @@ public sealed partial class ClipboardWindow : Window
             return false;
         }
 
-        // 粘贴必须先隐藏本窗口,才能让目标窗口成为前台并接收注入的按键。
+        // ── 置顶模式:窗口全程不隐藏 ────────────────────────────────────
         //
-        // 但**置顶模式下用户期望窗口一直可见** —— 剪贴板窗口置顶的用途就是
-        // "对照着往别处粘贴/连续粘贴多次",此时把窗口关掉等于把置顶功能废掉了。
-        // 因此记录置顶状态,粘贴完成后按原位恢复显示(不抢焦点,见下方恢复段)。
+        // 用户开置顶就是要窗口一直可见(对照着连续粘贴)。此前"隐藏后恢复"的做法
+        // 必然产生闪烁 —— 那就是"还是会消失一下"的直接原因。
         var wasTopmost = IsTopmost;
+        if (wasTopmost)
+        {
+            // (a) 标准编辑控件:直接发 WM_PASTE。窗口不动、前台不变、焦点不碰。
+            var topmostControl = focus != IntPtr.Zero ? focus : NativeMethods.GetFocusedControlOf(target);
+            if (topmostControl != IntPtr.Zero &&
+                topmostControl != target &&
+                NativeMethods.IsPasteMessageTarget(topmostControl) &&
+                NativeMethods.TryPasteViaMessage(topmostControl))
+            {
+                Log.Debug($"粘贴:置顶模式 WM_PASTE 直达(窗口未隐藏/前台未变), control={topmostControl}, {context}");
+                return true;
+            }
 
-        // PastePaw 的可靠路径:先隐藏选择窗,让 Windows 按原激活顺序自然恢复目标窗口及其内部焦点。
+            // (b) 自绘输入框(浏览器/Electron/WebView2)不响应 WM_PASTE,
+            // 必须让目标成为前台才能接收 SendInput。但本窗口是 topmost,
+            // 切前台后依然浮在最上层 —— 用户不会看到它消失。
+            // 且绝不强制回焦:UIA SetFocus 会让目标 TSF 焦点文档与 Win32 焦点脱节,
+            // 输入法查不到插入符矩形,候选栏直接飞到屏幕左上角(用户实测反馈)。
+            if (!await WaitAndActivateAsync(target, 700))
+            {
+                Log.Warn($"粘贴:置顶模式下目标未成为前台 target={target}, {context}");
+                return false;
+            }
+
+            await NativeMethods.WaitForModifiersReleasedAsync(ModifierReleaseTimeoutMs);
+            var topmostInjected = App.Services.Settings.PasteKey == "ShiftInsert"
+                ? NativeMethods.SendInputShiftInsert()
+                : NativeMethods.SendInputCtrlV();
+            Log.Debug($"粘贴:置顶模式 SendInput(窗口全程可见/未强制回焦), injected={topmostInjected}, {context}");
+            return topmostInjected;
+        }
+
+        // 非置顶:隐藏选择窗,让 Windows 按原激活顺序自然恢复目标窗口及其内部焦点。
         // 对 Chromium/Electron 尤其重要:仅 SetForegroundWindow 能恢复顶层窗口,不能保证 DOM 输入框回焦。
         AppWindow.Hide();
         NativeMethods.ShowWindow(hwnd, 0 /* SW_HIDE */);
@@ -980,12 +1010,6 @@ public sealed partial class ClipboardWindow : Window
         if (!NativeMethods.IsSameRootWindow(foregroundAtInject, target))
         {
             Log.Warn($"粘贴:目标未成为前台,取消按键注入 target={target}, fg={foregroundAtInject} ({context})");
-            // 注入被取消时也必须把置顶窗口放回来,否则用户看到的是"点了粘贴,窗口凭空消失"
-            if (wasTopmost)
-            {
-                NativeMethods.ShowWindow(hwnd, 8 /* SW_SHOWNOACTIVATE */);
-                Log.Debug($"粘贴:注入取消后已恢复置顶窗口显示, {context}");
-            }
             return false;
         }
 
@@ -1025,22 +1049,23 @@ public sealed partial class ClipboardWindow : Window
                 : NativeMethods.SendInputShiftInsert();
         }
 
-        // 置顶模式:粘贴完把窗口放回原位。
-        //
-        // 关键约束:**绝不能抢焦点**。
-        // 目标窗口刚被粘贴逻辑激活、输入框刚回焦,此时若本窗口抢回前台,
-        // 用户接下来打的字会进剪贴板窗口 —— 比"窗口被关掉"更糟。
-        // 因此用 ShowWindow(SW_SHOWNOACTIVATE) 显示而不用 AppWindow.Show/Activate,
-        // 并保持 WS_EX_TOPMOST(置顶属性在 Hide/Show 之间不会丢,无需重新设置)。
-        if (wasTopmost)
-        {
-            NativeMethods.ShowWindow(hwnd, 8 /* SW_SHOWNOACTIVATE */);
-            Log.Debug($"粘贴:置顶模式下已恢复窗口显示(不抢焦点), {context}");
-        }
-
         Log.Debug($"粘贴:{strategy} (natural={restoredNaturally}, activated={activated}, focusIntact={focusIntact}, focusRestored={focusRestored}, " +
-                  $"modifiersReleased={modifiersReleased}, injected={injected}, topmostRestored={wasTopmost}, 回焦耗时={focusElapsed}ms, control={focusControl}, {context})");
+                  $"modifiersReleased={modifiersReleased}, injected={injected}, 回焦耗时={focusElapsed}ms, control={focusControl}, {context})");
         return true;
+    }
+
+    /// <summary>
+    /// 置顶粘贴专用:确保目标窗口成为前台,但**不隐藏本窗口、不强制回焦**。
+    ///
+    /// 本窗口是 topmost,切前台后依然浮在最上层,用户看不到"消失再出现"。
+    /// 先等自然恢复,失败才显式激活 —— 走 ActivateWindow(带线程响应探测),
+    /// 且不触碰目标内部的焦点控件,因此不会造成 TSF 焦点脱节。
+    /// </summary>
+    private static async Task<bool> WaitAndActivateAsync(IntPtr target, int timeoutMilliseconds)
+    {
+        if (await WaitForForegroundAsync(target, 250)) return true;
+        NativeMethods.ActivateWindow(target);
+        return await WaitForForegroundAsync(target, timeoutMilliseconds);
     }
 
     private static async Task<bool> WaitForForegroundAsync(IntPtr target, int timeoutMilliseconds)
@@ -1103,7 +1128,11 @@ public sealed partial class ClipboardWindow : Window
         AutomationElement? automationFocus,
         bool isChromium)
     {
-        if (isChromium && TrySetAutomationFocus(target, automationFocus)) return true;
+        // Chromium/Electron 不再用 UIA SetFocus 兜底。
+        // 跨进程 UIA SetFocus 只改 Win32 焦点,目标 TSF 焦点文档不会重走获焦握手,
+        // 输入法查不到插入符矩形 → 候选栏飞到屏幕左上角(用户实测)。
+        // 牺牲极少数"DOM 焦点没回来"场景的成功率,换回正常输入法行为。
+        if (isChromium) return false;
 
         var focusTarget = focus;
         if (focusTarget == IntPtr.Zero || focusTarget == target)
