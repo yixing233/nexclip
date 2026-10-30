@@ -131,8 +131,13 @@ public static class Lucide
     public static ImageSource MonitorSmartphone => Get("monitor-smartphone", "primary");
     public static ImageSource MonitorSmartphoneWhite => Get("monitor-smartphone", "#FFFFFF");
     public static ImageSource Smartphone => Get("smartphone", "primary");
+    public static ImageSource SmartphoneWhite => Get("smartphone", "#FFFFFF");
     public static ImageSource Laptop => Get("laptop", "primary");
+    public static ImageSource LaptopWhite => Get("laptop", "#FFFFFF");
     public static ImageSource Monitor => Get("monitor", "primary");
+    public static ImageSource MonitorWhite => Get("monitor", "#FFFFFF");
+    public static ImageSource Globe => Get("globe", "primary");
+    public static ImageSource GlobeWhite => Get("globe", "#FFFFFF");
     public static ImageSource Database => Get("database", "primary");
     public static ImageSource Palette => Get("palette", "primary");
     public static ImageSource Info => Get("info", "primary");

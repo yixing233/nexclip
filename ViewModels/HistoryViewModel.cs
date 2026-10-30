@@ -141,8 +141,23 @@ public partial class HistoryViewModel : ObservableObject
 
     partial void OnFilterIndexChanged(int value)
     {
+        // 只刷新派生状态,不在这里触发数据加载。
+        //
+        // 原因:界面切换分类时需要一个明确的"刷新完成"点来衔接转场动画
+        // (见 ClipboardMainPage.RefreshThenTransitionAsync)。若此处也自动刷新,
+        // 同一个切换会触发两次 RefreshAsync —— 实测日志里每次切标签都出现
+        // 两条"刷新耗时",第二次是纯重复劳动,还会让第一次的动画时序失准。
+        //
+        // 现在由调用方显式 await RefreshAsync(),刷新时机只有一个来源。
+        // 其它修改 FilterIndex 的地方(若有)需自行刷新。
         NotifyStateChanged();
-        _ = RefreshAsync();
+    }
+
+    /// <summary>设置分类并按需刷新。界面切分类时应走这个方法,而不是直接赋值 FilterIndex。</summary>
+    public async Task SetFilterAndRefreshAsync(int filterIndex)
+    {
+        FilterIndex = filterIndex;
+        await RefreshAsync();
     }
 
     partial void OnIsBusyChanged(bool value)
@@ -164,6 +179,13 @@ public partial class HistoryViewModel : ObservableObject
     private int _refreshing;
     private bool _refreshPending;
 
+    /// <summary>
+    /// 最近一次 <see cref="RefreshAsync"/> 是否真正完成了列表更新。
+    /// 若调用时已有刷新在进行,会走 pending 分支立即返回(此时为 false),
+    /// 调用方据此避免在数据未就绪时播放转场动画。
+    /// </summary>
+    public bool RefreshCompleted { get; private set; } = true;
+
     public async Task RefreshAsync()
     {
         if (_engine is null) return;
@@ -171,6 +193,9 @@ public partial class HistoryViewModel : ObservableObject
         if (Interlocked.Exchange(ref _refreshing, 1) == 1)
         {
             _refreshPending = true;
+            // 返回未完成:调用方(切分类的动画协调)需要据此决定是等还是跳过转场,
+            // 否则会在数据还没换好的时候就把动画播完。
+            RefreshCompleted = false;
             return;
         }
 
@@ -222,6 +247,7 @@ public partial class HistoryViewModel : ObservableObject
         {
             IsBusy = false;
             Interlocked.Exchange(ref _refreshing, 0);
+            RefreshCompleted = true;
         }
     }
 
@@ -252,10 +278,20 @@ public partial class HistoryViewModel : ObservableObject
         while (suffix < oldCount - prefix && suffix < newCount - prefix &&
                ReferenceEquals(Items[oldCount - 1 - suffix], target[newCount - 1 - suffix])) suffix++;
 
-        var removeCount = oldCount - prefix - suffix;
-        for (var i = 0; i < removeCount; i++) Items.RemoveAt(prefix);
+        // 先插入差异段,再删除尾部多余项 —— 顺序很重要。
+        //
+        // 旧实现是"先删后插":切换分类时新旧条目几乎不重叠,prefix/suffix 均为 0,
+        // 于是先把 50 条全部删掉、再逐条插入。删除完成到插入开始之间存在一个
+        // 集合为空的瞬间,ListView 当场渲染成空白 —— 这就是用户看到的
+        // "旧内容消失、新内容不即时出现"。
+        //
+        // 改成先插后删后,任意时刻集合都非空(最坏情况是短暂混合新旧内容),
+        // 视觉上不再有空白帧。
+        var insertCount = newCount - prefix - suffix;
+        for (var i = 0; i < insertCount; i++) Items.Insert(prefix + i, target[prefix + i]);
 
-        for (var i = prefix; i < newCount - suffix; i++) Items.Insert(i, target[i]);
+        var removeCount = oldCount - prefix - suffix;
+        for (var i = 0; i < removeCount; i++) Items.RemoveAt(prefix + insertCount);
     }
 
     public async Task LoadMoreAsync()

@@ -250,7 +250,6 @@ public sealed partial class ClipboardMainPage : Page
         {
             ListHost.Visibility = Visibility.Visible;
             TransferChatHost.Visibility = Visibility.Collapsed;
-            PlayTransition(ListHost, ListTranslateTransform, oldVisualIndex, visualIndex);
 
             // 重置列表滚动条到顶部
             if (_listScroller is not null && _listScroller.VerticalOffset > 0)
@@ -258,8 +257,46 @@ public sealed partial class ClipboardMainPage : Page
                 _listScroller.ChangeView(null, 0, null, true);
             }
 
-            _history.FilterIndex = filterIndex;
+            // 先触发数据刷新,等集合更新完再播动画。
+            //
+            // 原先是"先播动画、后触发刷新":动画 120ms 就跑完了,而数据在 Task.Run
+            // 里查库 + 重建 VM,通常要 15~35ms 起步、首次更久。动画结束时内容往往
+            // 还没换好,于是"旧内容已经淡出、新内容还没上"中间出现空档 ——
+            // 用户感知就是旧内容消失、新内容迟了一步才出现。
+            //
+            // 现在改为等刷新完成再播,动画的淡入正好覆盖新内容的第一帧。
+            _ = RefreshThenTransitionAsync(filterIndex, oldVisualIndex, visualIndex);
         }
+    }
+
+    /// <summary>
+    /// 切分类:先等数据刷新完成,再播转场动画。
+    ///
+    /// 这样动画的淡入正好覆盖新内容的第一帧,不会出现"旧内容已淡出、新内容还没到"的空档。
+    /// 刷新是异步的,期间保持旧内容可见(而不是先清空),用户看到的是内容"直接换成新的"。
+    /// </summary>
+    private async Task RefreshThenTransitionAsync(int filterIndex, int oldVisualIndex, int newVisualIndex)
+    {
+        try
+        {
+            _history.FilterIndex = filterIndex;
+            await _history.RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("切换分类后刷新列表失败", ex);
+        }
+
+        // 刷新期间用户可能又点了别的标签,此时 _lastVisualIndex 已经变了,
+        // 本次转场已过期,直接放弃,避免动画方向错乱或闪回。
+        if (_lastVisualIndex != newVisualIndex) return;
+
+        // 若 RefreshAsync 走到"已有刷新在进行"的 pending 分支,数据此刻还没换好。
+        // 这种情况下不播转场 —— 播了也只会出现旧内容淡出、新内容未到的空档。
+        // 数据会在当前批次结束后由 pending 机制自动刷新,内容直接替换,同样没有空窗。
+        if (!_history.RefreshCompleted) return;
+
+        PlayTransition(ListHost, ListTranslateTransform, oldVisualIndex, newVisualIndex);
     }
 
     /// <summary>分类切换转场动效:根据左右切换方向,执行平滑位移 + 淡入淡出动画。</summary>
@@ -267,7 +304,9 @@ public sealed partial class ClipboardMainPage : Page
     {
         if (oldVisualIndex == newVisualIndex) return;
 
-        double fromX = newVisualIndex > oldVisualIndex ? 26.0 : -26.0;
+        // 位移幅度 26 -> 14、时长 200 -> 120ms:原来的 200ms + 26px 位移感太"拖",
+        // 切分类是个高频操作,动画应该快到几乎无感,只起"内容换了"的提示作用。
+        double fromX = newVisualIndex > oldVisualIndex ? 14.0 : -14.0;
 
         _transitionStoryboard?.Stop();
 
@@ -275,7 +314,7 @@ public sealed partial class ClipboardMainPage : Page
         {
             From = fromX,
             To = 0.0,
-            Duration = TimeSpan.FromMilliseconds(200),
+            Duration = TimeSpan.FromMilliseconds(120),
             EasingFunction = new ExponentialEase { EasingMode = EasingMode.EaseOut, Exponent = 4.5 },
             EnableDependentAnimation = true,
         };
@@ -284,9 +323,10 @@ public sealed partial class ClipboardMainPage : Page
 
         var fadeAnim = new DoubleAnimation
         {
-            From = 0.2,
+            // 起始透明度 0.2 -> 0.55:配合更短的时长,避免"先空一下再出现"的观感
+            From = 0.55,
             To = 1.0,
-            Duration = TimeSpan.FromMilliseconds(200),
+            Duration = TimeSpan.FromMilliseconds(120),
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
             EnableDependentAnimation = true,
         };

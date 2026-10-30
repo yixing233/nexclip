@@ -15,7 +15,13 @@ namespace NexClip.Desktop;
 /// </summary>
 public sealed partial class ClipboardWindow : Window
 {
-    private const double MinWidthDips = 440;
+    /// <summary>
+    /// 窗口最小宽度。配合把 SelectorBarItem 内边距压到 10,0,从 440 收到 400。
+    /// 这个值不是随便定的:顶部 7 个分类标签(全部/文本/图片/文件/链接/收藏/即时互传)
+    /// 文字总宽约 300px,加上必要内边距与左右页边距(16×2)后接近 400。
+    /// 再往下压会开始裁切标签,需先改成横向滚动或精简标签。
+    /// </summary>
+    private const double MinWidthDips = 400;
     private const double MinHeightDips = 400;
 
     private DispatcherQueueTimer? _hideTimer;

@@ -146,7 +146,16 @@
                                         Background="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToPillBg}}"
                                         Click="DevicePill_Click">
                                         <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
-                                            <Ellipse Width="6" Height="6" Fill="{x:Bind StatusBrush, Mode=OneWay}" VerticalAlignment="Center" />
+                                            <!-- 平台图标替代原来的在线状态圆点:
+                                                 那个点信息量太低(在线与否看消息能否收到就知道),
+                                                 换成手机/电脑/网页图标后一眼能分辨设备类型。
+                                                 离线设备用半透明表示,状态信息没有丢。 -->
+                                            <Image
+                                                Source="{x:Bind DeviceIcon, Mode=OneWay}"
+                                                Width="13"
+                                                Height="13"
+                                                Opacity="{x:Bind IconOpacity}"
+                                                VerticalAlignment="Center" />
                                             <TextBlock
                                                 Text="{x:Bind Name}"
                                                 VerticalAlignment="Center"
@@ -176,7 +185,7 @@
             Grid.Row="1"
             ItemsSource="{x:Bind ViewModel.Messages}"
             SelectionMode="None"
-            Padding="12,12,12,12">
+            Padding="14,12,16,12">
             <ListView.ItemsPanel>
                 <ItemsPanelTemplate>
                     <ItemsStackPanel ItemsUpdatingScrollMode="KeepLastItemInView" />
@@ -212,8 +221,12 @@
                         </Border>
 
                         <!-- 消息项布局: 根据 Alignment 决定靠右还是靠左 -->
-                        <Grid HorizontalAlignment="{x:Bind Alignment}" Margin="0,2" MaxWidth="360">
+                        <!-- MaxWidth 由 360 收到 300:窗口最小宽度降到 400 后,
+                             360 + 左右列表内边距几乎占满整行,气泡看起来贴边。
+                             300 让两侧都留出呼吸感,长文本靠换行而不是横向铺满。 -->
+                        <Grid HorizontalAlignment="{x:Bind Alignment}" Margin="0,2" MaxWidth="300">
                             <Grid.RowDefinitions>
+                                <!-- Row0: 时间戳(两侧统一在上方) / Row1: 气泡 -->
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
@@ -278,16 +291,20 @@
                                             Stretch="Uniform" />
                                     </Border>
 
-                                    <!-- 本机发送时间 -->
-                                    <TextBlock
-                                        Text="{x:Bind TimeText}"
-                                        FontSize="10"
-                                        HorizontalAlignment="Right"
-                                        Margin="0,3,0,0"
-                                        Visibility="{x:Bind FromSelfVisibility}"
-                                        Foreground="{x:Bind TimeForeground, Mode=OneWay}" />
                                 </StackPanel>
                             </Border>
+
+                            <!-- 本机发送时间:与远端消息统一放在**气泡上方**。
+                                 远端那条是「设备名 · 时间」横排;本机没有设备名(就是自己),
+                                 所以只显示时间,右对齐跟随气泡方向。 -->
+                            <TextBlock
+                                Grid.Row="0"
+                                Text="{x:Bind TimeText}"
+                                FontSize="11"
+                                HorizontalAlignment="{x:Bind Alignment}"
+                                Margin="4,0,4,3"
+                                Visibility="{x:Bind FromSelfVisibility}"
+                                Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
                         </Grid>
                     </StackPanel>
                 </DataTemplate>

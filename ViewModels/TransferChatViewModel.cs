@@ -35,10 +35,74 @@ public partial class DeviceSelectViewModel : ObservableObject
     /// 之所以放在属性回调而不是点击事件里: ToggleButton.OnClick 是"先抛 Click、后执行 OnToggle",
     /// 在 Click 阶段改状态会被其随后的翻转覆盖, 只有属性回调不依赖任何事件顺序。
     /// </summary>
-    partial void OnIsSelectedChanged(bool value) => Owner?.OnDeviceSelectionChanged(this);
+    partial void OnIsSelectedChanged(bool value)
+    {
+        // DeviceIcon 会按选中态切白色/主色图标,不通知的话切了还是旧图标
+        OnPropertyChanged(nameof(DeviceIcon));
+        Owner?.OnDeviceSelectionChanged(this);
+    }
 
     public Brush StatusBrush => IsOnline ? OnlineBrush : OfflineBrush;
     public string DisplayText => IsOnline ? $"{Name} (在线)" : $"{Name} (离线)";
+
+    /// <summary>
+    /// 按设备平台选图标:手机 / 电脑 / 网页。
+    ///
+    /// 原来胶囊里是个 6px 圆点表示在线状态,信息量太低 ——
+    /// "在线/离线"从气泡能否收到消息本来就能看出来,这个点基本没意义。
+    /// 换成平台图标后,一眼就能分辨对面是手机还是电脑。
+    ///
+    /// 在线状态没有丢:离线设备的图标降低不透明度(见 IconOpacity),
+    /// 比一个灰点更直观。
+    ///
+    /// 平台字符串是服务端自由文本(Android / Windows / Unknown 等),
+    /// 这里做模糊匹配并给未知值兜底,不假设固定枚举。
+    /// </summary>
+    public ImageSource DeviceIcon
+    {
+        get
+        {
+            var p = Platform ?? string.Empty;
+
+            // 手机 / 平板
+            if (p.Contains("Android", StringComparison.OrdinalIgnoreCase) ||
+                p.Contains("iOS", StringComparison.OrdinalIgnoreCase) ||
+                p.Contains("iPhone", StringComparison.OrdinalIgnoreCase) ||
+                p.Contains("iPad", StringComparison.OrdinalIgnoreCase))
+            {
+                return IsSelected ? Lucide.SmartphoneWhite : Lucide.Smartphone;
+            }
+
+            // 网页端:必须排在 Windows 判断**之前**。
+            // 浏览器上报的 Platform 常见为 "Web" / "Browser" / "Edge (Windows)" 之类,
+            // 后者含 "Windows" 字样 —— 先判 Windows 会把网页端误显示成电脑。
+            if (p.Contains("Web", StringComparison.OrdinalIgnoreCase) ||
+                p.Contains("Browser", StringComparison.OrdinalIgnoreCase) ||
+                p.Contains("Edge", StringComparison.OrdinalIgnoreCase) ||
+                p.Contains("Chrome", StringComparison.OrdinalIgnoreCase) ||
+                p.Contains("Firefox", StringComparison.OrdinalIgnoreCase) ||
+                p.Contains("Safari", StringComparison.OrdinalIgnoreCase))
+            {
+                return IsSelected ? Lucide.GlobeWhite : Lucide.Globe;
+            }
+
+            // 桌面系统
+            if (p.Contains("Windows", StringComparison.OrdinalIgnoreCase) ||
+                p.Contains("macOS", StringComparison.OrdinalIgnoreCase) ||
+                p.Contains("Mac", StringComparison.OrdinalIgnoreCase) ||
+                p.Contains("Linux", StringComparison.OrdinalIgnoreCase))
+            {
+                return IsSelected ? Lucide.LaptopWhite : Lucide.Laptop;
+            }
+
+            // 其余(Unknown 等)用显示器图标兜底
+            return IsSelected ? Lucide.MonitorWhite : Lucide.Monitor;
+        }
+    }
+
+    /// <summary>离线设备图标半透明,替代原来的灰色状态点。</summary>
+    public double IconOpacity => IsOnline ? 1.0 : 0.45;
+
 }
 
 public partial class ChatMessageItem : ObservableObject
@@ -73,8 +137,12 @@ public partial class ChatMessageItem : ObservableObject
     public Visibility TextVisibility => IsText ? Visibility.Visible : Visibility.Collapsed;
     public Visibility ImageVisibility => IsImage ? Visibility.Visible : Visibility.Collapsed;
 
+    /// <summary>本机气泡品牌蓝(#2563EB),与 App.xaml 的 AccentBlueBrush 保持一致。</summary>
+    private static readonly SolidColorBrush SelfBubbleBrush =
+        new(ColorHelper.FromArgb(255, 0x25, 0x63, 0xEB));
+
     public Brush BubbleBackground => IsFromSelf
-        ? (Application.Current.Resources["AccentFillColorDefaultBrush"] as Brush ?? new SolidColorBrush(ColorHelper.FromArgb(255, 0, 120, 212)))
+        ? SelfBubbleBrush
         : (Application.Current.Resources["CardBackgroundFillColorDefaultBrush"] as Brush ?? new SolidColorBrush(ColorHelper.FromArgb(255, 243, 243, 243)));
 
     public Brush BubbleForeground => IsFromSelf
@@ -90,6 +158,11 @@ public partial class ChatMessageItem : ObservableObject
         : (Application.Current.Resources["TextFillColorTertiaryBrush"] as Brush ?? new SolidColorBrush(ColorHelper.FromArgb(150, 0, 0, 0)));
 
     public Thickness BubbleThickness => IsFromSelf ? new Thickness(0) : new Thickness(1);
+
+    /// <summary>
+    /// 气泡内边距。图片消息只留 4(缩略图自带圆角);
+    /// 文本消息四边均匀,时间戳已移到气泡外侧,不需要额外留白避让。
+    /// </summary>
     public Thickness BubblePadding => IsImage ? new Thickness(4) : new Thickness(12, 8, 12, 8);
 
     public string TimeText => CreatedAt.ToLocalTime().ToString("HH:mm");
@@ -332,6 +405,38 @@ public partial class TransferChatViewModel : ObservableObject
         if (date == now.Date.AddDays(-2)) return "前天";
         if (date.Year == now.Year) return localTime.ToString("M月d日");
         return localTime.ToString("yyyy年M月d日");
+    }
+
+    /// <summary>
+    /// 把本机发出的消息写入本地历史,使其在页面切换/重启后仍然存在。
+    ///
+    /// 记到 <paramref name="entry"/> 的服务端信息(Id/CreatedAt)优先:
+    /// 用同一个 ServerId 去重,避免网络回包与本地插入产生两条重复记录。
+    /// </summary>
+    private void PersistSentMessage(ClipboardEntry? entry, bool isImage, string text, string deviceId, string deviceName)
+    {
+        try
+        {
+            var createdAt = entry?.CreatedAt is { } t && t != default ? t : DateTime.UtcNow;
+            _services.History.Insert(new Models.HistoryItem
+            {
+                ServerId = entry?.Id,
+                Type = isImage ? "Image" : "Text",
+                Text = !string.IsNullOrEmpty(text) ? text : (isImage ? "已发送图片" : null),
+                DeviceId = deviceId,
+                DeviceName = deviceName,
+                CreatedAt = createdAt,
+                // 2 = 本端主动同步,HistoryItem.IsManual 因此为 true,
+                // 重新加载时不会被 Where(h => h.IsManual) 过滤掉。
+                Origin = 2,
+                SourceAppName = "即时互传",
+            });
+        }
+        catch (Exception ex)
+        {
+            // 落库失败不应影响发送结果,只记日志
+            Log.Error("保存已发送的互传消息到本地历史失败", ex);
+        }
     }
 
     private void AppendMessage(ChatMessageItem msg)
@@ -692,9 +797,10 @@ public partial class TransferChatViewModel : ObservableObject
             ClearSelectedImage();
 
             // 发送网络请求
+            ClipboardEntry? sentEntry = null;
             if (hasImg && imgBytesToSend != null)
             {
-                await _services.Api.UploadImageAsync(s.ServerUrl, s.AuthToken, imgBytesToSend, s.DeviceId, s.DeviceName, "Windows", Environment.OSVersion.VersionString, isManual: true);
+                sentEntry = await _services.Api.UploadImageAsync(s.ServerUrl, s.AuthToken, imgBytesToSend, s.DeviceId, s.DeviceName, "Windows", Environment.OSVersion.VersionString, isManual: true);
                 if (!string.IsNullOrEmpty(text))
                 {
                     await _services.Api.PutTextAsync(s.ServerUrl, s.AuthToken, text, s.DeviceId, s.DeviceName, "Windows", Environment.OSVersion.VersionString, isManual: true);
@@ -705,13 +811,22 @@ public partial class TransferChatViewModel : ObservableObject
                 var selectedTargets = Devices.Where(d => d.IsSelected).Select(d => d.Id).ToList();
                 if (selectedTargets.Count > 0 && selectedTargets.Count < Devices.Count)
                 {
-                    await _services.Api.SendToDevicesAsync(s.ServerUrl, s.AuthToken, text, s.DeviceId, s.DeviceName, selectedTargets.ToArray());
+                    sentEntry = await _services.Api.SendToDevicesAsync(s.ServerUrl, s.AuthToken, text, s.DeviceId, s.DeviceName, selectedTargets.ToArray());
                 }
                 else
                 {
-                    await _services.Api.PutTextAsync(s.ServerUrl, s.AuthToken, text, s.DeviceId, s.DeviceName, "Windows", Environment.OSVersion.VersionString, isManual: true);
+                    sentEntry = await _services.Api.PutTextAsync(s.ServerUrl, s.AuthToken, text, s.DeviceId, s.DeviceName, "Windows", Environment.OSVersion.VersionString, isManual: true);
                 }
             }
+
+            // 把本机发出的消息写入本地历史。
+            //
+            // 此前只 AppendMessage 加到内存,从不落库 —— 页面切走再回来(或重启应用)时
+            // 内存列表被清空、重新 Query 时自然查不到,表现就是"自己发的消息凭空消失"。
+            // 远端消息由 SyncEngine 入库(Origin=1 + SourceAppName="即时互传"),所以能留下。
+            //
+            // Origin=2 表示"本端主动同步",IsManual 因此为 true,重载时不会被过滤。
+            PersistSentMessage(sentEntry, hasImg, text, s.DeviceId, s.DeviceName);
         }
         catch (Exception ex)
         {
