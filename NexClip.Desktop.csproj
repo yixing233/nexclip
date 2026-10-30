@@ -15,10 +15,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
-    <Version>20261029.01</Version>
-    <AssemblyVersion>2026.10.29.1</AssemblyVersion>
-    <FileVersion>2026.10.29.1</FileVersion>
-    <InformationalVersion>20261029.01</InformationalVersion>
+    <Version>20261030.01</Version>
+    <AssemblyVersion>2026.10.30.1</AssemblyVersion>
+    <FileVersion>2026.10.30.1</FileVersion>
+    <InformationalVersion>20261030.01</InformationalVersion>
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
     <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
     <SatelliteResourceLanguages>zh-Hans;zh-CN;en-US;en</SatelliteResourceLanguages>
