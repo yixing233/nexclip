@@ -18,6 +18,7 @@ import clip.yixing.sync.MainActivity
 import clip.yixing.sync.R
 import clip.yixing.sync.data.PushClient
 import clip.yixing.sync.data.SyncApi
+import clip.yixing.sync.root.AccessibilityGuard
 import clip.yixing.sync.util.AppSourceHelper
 import clip.yixing.sync.util.ImageLoader
 import clip.yixing.sync.util.NotificationStyle
@@ -45,6 +46,25 @@ class ClipboardMonitorService : Service() {
         CONNECTED,
     }
 
+    /**
+     * root 守护无障碍服务的巡检任务。
+     *
+     * 刻意独立于推送心跳:无障碍服务被关闭时,推送通道可能同时也断了,
+     * 若把巡检挂在"已连接"分支里,最需要它的时候反而不跑。
+     *
+     * 30 秒一轮;$AccessibilityGuard 内部还有 60 秒节流兜底,不会频繁触发 su。
+     */
+    private var accessibilityGuardJob: Job? = null
+
+    /**
+     * 单张图片读入内存的上限。
+     *
+     * 这是防 OOM 的保护,不是上传判据 —— 上传前会把图压到服务端允许的 10MB 内
+     * (见 ImageLoader.compressForUpload)。超过此值的图会直接跳过并记录日志,
+     * 因为整张读进内存再做任何处理都已经有内存风险。
+     */
+    private val MAX_RAW_IMAGE_READ_BYTES = 64 * 1024 * 1024
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var uploadJob: Job? = null
     private var heartbeatJob: Job? = null
@@ -65,6 +85,7 @@ class ClipboardMonitorService : Service() {
         clipboard.addPrimaryClipChangedListener(listener)
         isRunning.value = true
         connectPush()
+        startAccessibilityGuard()
 
         // 初始化 Shizuku 免 Root 剪贴板监听
         clip.yixing.sync.shizuku.ShizukuClipboardManager.init(this)
@@ -110,6 +131,8 @@ class ClipboardMonitorService : Service() {
         uploadJob?.cancel()
         heartbeatJob?.cancel()
         heartbeatJob = null
+        accessibilityGuardJob?.cancel()
+        accessibilityGuardJob = null
         push?.disconnect()
         push = null
         clipboard.removePrimaryClipChangedListener(listener)
@@ -219,6 +242,45 @@ class ClipboardMonitorService : Service() {
         client.connect()
     }
 
+    /**
+     * 启动 root 守护巡检(仅当用户开启该功能时真正干活)。
+     *
+     * 所有 su 调用都在 Dispatchers.IO 上执行 —— su 可能阻塞数秒等用户授权,
+     * 放主线程会直接 ANR。
+     */
+    private fun startAccessibilityGuard() {
+        val ctx = this
+        if (!SyncSettings.accessibilityGuardEnabled(ctx)) {
+            android.util.Log.i("NexClip", "无障碍守护未启用(用户设置),跳过巡检")
+            return
+        }
+        accessibilityGuardJob?.cancel()
+        accessibilityGuardJob = scope.launch(Dispatchers.IO) {
+            // 启动时先检查一次:应用被系统重启后无障碍可能已被关掉
+            runCatching { AccessibilityGuard.ensureEnabled(ctx) }
+                .onFailure { android.util.Log.w("NexClip", "无障碍守护首次检查失败: ${it.message}") }
+
+            while (isActive) {
+                delay(30_000)
+                try {
+                    if (!SyncSettings.accessibilityGuardEnabled(ctx)) continue
+                    val result = AccessibilityGuard.ensureEnabled(ctx)
+                    when (result) {
+                        AccessibilityGuard.LastResult.Success ->
+                            android.util.Log.i("NexClip", "无障碍服务已被 root 自动重新启用")
+                        AccessibilityGuard.LastResult.NoRoot ->
+                            android.util.Log.d("NexClip", "无障碍守护:root 不可用或未授权")
+                        AccessibilityGuard.LastResult.Failed ->
+                            android.util.Log.w("NexClip", "无障碍守护:写入后仍未生效,可能被 ROM 拦截")
+                        else -> Unit // NotNeeded / Throttled / Never:无需日志
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("NexClip", "无障碍守护巡检异常: ${e.javaClass.simpleName} ${e.message}")
+                }
+            }
+        }
+    }
+
     private val listener = ClipboardManager.OnPrimaryClipChangedListener {
         if (isApplyingRemote) {
             android.util.Log.i("NexClip", "OnPrimaryClipChangedListener ignored (applying remote push)")
@@ -256,7 +318,10 @@ class ClipboardMonitorService : Service() {
                 contentResolver.openInputStream(uri)?.use { it.readBytes() }
             }.getOrNull()
 
-            if (bytes != null && bytes.isNotEmpty() && bytes.size <= 30 * 1024 * 1024) {
+            // 读入上限:这里只是防止把几百 MB 的图整体读进内存导致 OOM,
+            // 与"能否上传"无关 —— 上传前 compressForUpload 会压到服务端 10MB 以内。
+            // 服务端上限见 ImageLoader.SERVER_IMAGE_LIMIT_BYTES。
+            if (bytes != null && bytes.isNotEmpty() && bytes.size <= MAX_RAW_IMAGE_READ_BYTES) {
                 val hash = sha256Bytes(bytes)
                 // 关键防护 2: 检查是否与近期应用内点击复制的图片 Hash 一致
                 if (isRecentInternalCopy(null, hash)) {
@@ -296,14 +361,45 @@ class ClipboardMonitorService : Service() {
                     val ctx = this@ClipboardMonitorService
                     try {
                         if (!SyncSettings.isPaired(ctx) || SyncSettings.deviceToken(ctx).isBlank()) return@launch
+
+                        // 上传前压缩:服务端只收 10MB,而手机原图/长截图经常超过。
+                        // 本地缓存的仍是原图(上面已 saveBytesToDisk),这里只压上传的那份。
+                        val compressed = ImageLoader.compressForUpload(ctx, bytes, uri)
+                        if (compressed == null) {
+                            android.util.Log.w("NexClip", "图片无法压缩(可能已损坏),跳过上传: ${bytes.size} bytes")
+                            SyncNotificationManager.notifyUploadFailed(ctx, "图片过大或已损坏,未能同步")
+                            return@launch
+                        }
+                        if (compressed.degraded) {
+                            android.util.Log.i(
+                                "NexClip",
+                                "图片已压缩上传: ${compressed.originalWidth}x${compressed.originalHeight} " +
+                                    "-> ${compressed.width}x${compressed.height} " +
+                                    "(${bytes.size} -> ${compressed.bytes.size} bytes, ${compressed.mimeType})"
+                            )
+                        }
+
                         val api = SyncApi(SyncSettings.serverUrl(ctx), SyncSettings.ensureDeviceId(ctx), SyncSettings.deviceToken(ctx))
-                        api.uploadImage(bytes, SyncSettings.ensureDeviceId(ctx), SyncSettings.deviceName(ctx))
+                        api.uploadImage(
+                            compressed.bytes,
+                            SyncSettings.ensureDeviceId(ctx),
+                            SyncSettings.deviceName(ctx),
+                            mimeType = compressed.mimeType,
+                        )
                     } catch (e: clip.yixing.sync.data.ApiException) {
-                        if (e.statusCode == 401 || e.statusCode == 403 || e.statusCode == 410) {
+                        // 只有服务端明确表示"凭证失效 / 设备被移除"时才清空本地配对。
+                        // 403(身份不匹配)与"缺少凭证"都不清 —— 凭证本身可能仍然有效,
+                        // 误清会让用户白配对一次(2026-10-23 线上故障即该模式的放大版)。
+                        if (SyncSettings.shouldClearPairingOn(e)) {
+                            android.util.Log.w("NexClip", "图片上传鉴权失败,清除配对: ${e.message}")
                             SyncSettings.clearPairing(ctx)
                             connectPush()
+                        } else {
+                            android.util.Log.w("NexClip", "图片上传失败(保留配对): status=${e.statusCode} ${e.message}")
                         }
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        // 不得静默:服务端 413(体积超限)等都在这里,用户此前完全无感知
+                        android.util.Log.w("NexClip", "图片上传异常(保留配对): ${e.javaClass.simpleName} ${e.message}")
                     }
                 }
                 return
@@ -362,12 +458,16 @@ class ClipboardMonitorService : Service() {
                 val api = SyncApi(SyncSettings.serverUrl(ctx), SyncSettings.ensureDeviceId(ctx), SyncSettings.deviceToken(ctx))
                 api.putText(text, SyncSettings.ensureDeviceId(ctx), SyncSettings.deviceName(ctx))
             } catch (e: clip.yixing.sync.data.ApiException) {
-                if (e.statusCode == 401 || e.statusCode == 403 || e.statusCode == 410) {
+                if (SyncSettings.shouldClearPairingOn(e)) {
+                    android.util.Log.w("NexClip", "文本上传鉴权失败,清除配对: ${e.message}")
                     SyncSettings.clearPairing(ctx)
                     connectPush()
+                } else {
+                    // 保留配对:下一条变化会再试,不必惊动用户
+                    android.util.Log.w("NexClip", "文本上传失败(保留配对): status=${e.statusCode} ${e.message}")
                 }
-            } catch (_: Exception) {
-                // 失败静默,下一条变化再试
+            } catch (e: Exception) {
+                android.util.Log.w("NexClip", "文本上传异常(保留配对): ${e.javaClass.simpleName} ${e.message}")
             }
         }
     }

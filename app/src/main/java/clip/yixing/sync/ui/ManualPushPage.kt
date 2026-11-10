@@ -57,6 +57,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -152,7 +153,9 @@ fun ManualPushPage(
 
     // 输入框状态
     val inputTextState = rememberTextFieldState()
-    var selectedImageBytes by remember { mutableStateOf<ByteArray?>(null) }
+    // 多图上传:改为列表。每张图在发送时各自上传,互不阻塞。
+    // 用 mutableStateListOf 保证增删能触发重组。
+    val selectedImages = remember { mutableStateListOf<ByteArray>() }
     var previewImageClip by remember { mutableStateOf<CapturedClip?>(null) }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
 
@@ -165,38 +168,41 @@ fun ManualPushPage(
         }
     )
 
-    // 相册图片选择器
-    val imagePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            scope.launch {
+    /** 读取并压缩一组图片,追加到待发列表。 */
+    fun addImages(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        scope.launch {
+            var failed = 0
+            for (uri in uris) {
                 try {
-                    val bytes = withContext(Dispatchers.IO) {
-                        val stream: InputStream? = context.contentResolver.openInputStream(uri)
-                        stream?.use { input ->
-                            val bmp = BitmapFactory.decodeStream(input)
-                            if (bmp != null) {
-                                val out = ByteArrayOutputStream()
-                                bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 90, out)
-                                out.toByteArray()
-                            } else {
-                                input.readBytes()
-                            }
-                        }
+                    // 统一走 ImageLoader.compressForUpload:原图超过 10MB 也能压到可上传。
+                    // 旧实现只做 PNG 重编码,大图既不压缩也可能被服务端 413 拒绝。
+                    val compressed = withContext(Dispatchers.IO) {
+                        val raw = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                        if (raw == null || raw.isEmpty()) null
+                        else ImageLoader.compressForUpload(context, raw, uri)
                     }
-                    if (bytes != null && bytes.isNotEmpty()) {
-                        selectedImageBytes = bytes
-                    } else {
-                        snackbarHostState?.showAppSnack("无法读取选中的图片", SnackType.Error)
-                    }
+                    if (compressed != null) selectedImages.add(compressed.bytes) else failed++
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    snackbarHostState?.showAppSnack("图片加载失败: ${e.message}", SnackType.Error)
+                    failed++
                 }
             }
+            if (failed > 0) {
+                snackbarHostState?.showAppSnack(
+                    if (failed == uris.size) "图片加载失败" else "有 $failed 张图片无法读取,已跳过",
+                    SnackType.Error,
+                )
+            }
         }
+    }
+
+    // 相册图片选择器(支持多选)
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris: List<Uri> ->
+        addImages(uris)
     }
 
     // 页面进入或消息数量更新时，自动锚定滚动到底部 (reverseLayout 下 index 0 即为最底部最新消息)
@@ -247,11 +253,14 @@ fun ManualPushPage(
     }
 
     // 发送消息核心逻辑（乐观即时上屏，异步网络推送，0 界面卡顿，明确反馈送达）
+    // 多图支持:一次选中 N 张图时,逐张上传(每张是独立的剪贴板条目),
+    // 本地上屏也是 N 条消息,与远端各端收到的条数一致。
     val onSendMessage: () -> Unit = {
         val textToSend = inputTextState.text.toString().trim()
-        val imageToSend = selectedImageBytes
+        // 发送前快照,避免上传过程中列表被清空导致下标错乱
+        val imagesToSend = selectedImages.toList()
 
-        if (textToSend.isEmpty() && imageToSend == null) {
+        if (textToSend.isEmpty() && imagesToSend.isEmpty()) {
             scope.launch { snackbarHostState?.showAppSnack("请输入内容或选择图片", SnackType.Info) }
         } else if (deviceList.isNotEmpty() && selectedDeviceIds.isEmpty()) {
             scope.launch { snackbarHostState?.showAppSnack("请至少选择一台目标设备", SnackType.Info) }
@@ -271,36 +280,61 @@ fun ManualPushPage(
 
                 // 1. 立即清空输入框与选图状态，释放 UI 响应
                 inputTextState.setTextAndPlaceCursorAtEnd("")
-                selectedImageBytes = null
+                selectedImages.clear()
                 isSending = true
 
-                // 2. 乐观立即上屏：先写入本地数据库/内存流，消息瞬间出现在底部！
-                val localImageKey = if (imageToSend != null) "local_${System.currentTimeMillis()}" else null
-                if (imageToSend != null && localImageKey != null) {
-                    ImageLoader.saveBytesToDisk(context, localImageKey, imageToSend)
+                // 2. 乐观立即上屏:先写本地,消息瞬间出现
+                //    多图时第一张挂正文,其余只作图片条目(与远端收到的条数一致)。
+                val now = System.currentTimeMillis()
+                val localKeys = mutableListOf<String>()
+                imagesToSend.forEachIndexed { index, bytes ->
+                    val key = "local_${now}_$index"
+                    ImageLoader.saveBytesToDisk(context, key, bytes)
+                    localKeys.add(key)
+                    ClipboardMonitorService.addCaptured(
+                        context = context,
+                        text = if (index == 0) textToSend.ifEmpty { "[图片]" } else "[图片]",
+                        imageRef = key,
+                        sourceDevice = "本机",
+                        isManual = true,
+                    )
                 }
-                ClipboardMonitorService.addCaptured(
-                    context = context,
-                    text = textToSend.ifEmpty { "[图片]" },
-                    imageRef = localImageKey,
-                    sourceDevice = "本机",
-                    isManual = true
-                )
+                // 纯文本(无图)时也要上屏
+                if (imagesToSend.isEmpty()) {
+                    ClipboardMonitorService.addCaptured(
+                        context = context,
+                        text = textToSend,
+                        imageRef = null,
+                        sourceDevice = "本机",
+                        isManual = true,
+                    )
+                }
 
                 // 立即滚动至最底部最新消息
-                scope.launch {
-                    listState.animateScrollToItem(0)
-                }
+                scope.launch { listState.animateScrollToItem(0) }
 
                 // 3. 异步后台网络上传并反馈送达状态
                 scope.launch {
+                    var okCount = 0
+                    var failCount = 0
                     try {
                         val api = SyncApi(serverUrl, selfDeviceId, SyncSettings.deviceToken(context))
                         withContext(Dispatchers.IO) {
-                            if (imageToSend != null) {
-                                val entry = api.uploadImage(imageToSend, selfDeviceId, selfDeviceName, isManual = true)
-                                val serverKey = entry.imageRef ?: localImageKey ?: "img_${System.currentTimeMillis()}"
-                                ImageLoader.saveBytesToDisk(context, serverKey, imageToSend)
+                            if (imagesToSend.isNotEmpty()) {
+                                // 逐张上传:任意一张失败不影响其余
+                                imagesToSend.forEachIndexed { index, bytes ->
+                                    try {
+                                        val entry = api.uploadImage(
+                                            bytes, selfDeviceId, selfDeviceName, isManual = true,
+                                        )
+                                        val serverKey = entry.imageRef ?: localKeys.getOrNull(index)
+                                        if (serverKey != null) ImageLoader.saveBytesToDisk(context, serverKey, bytes)
+                                        okCount++
+                                    } catch (e: Exception) {
+                                        android.util.Log.w("NexClip", "第 ${index + 1} 张图片上传失败: ${e.message}")
+                                        failCount++
+                                    }
+                                }
                             } else {
                                 if (selectedDeviceIds.isNotEmpty() && selectedDeviceIds.size < deviceList.size) {
                                     api.sendToDevices(textToSend, selfDeviceId, selfDeviceName, selectedDeviceIds.toList())
@@ -309,7 +343,14 @@ fun ManualPushPage(
                                 }
                             }
                         }
-                        snackbarHostState?.showAppSnack("已成功送达至 $targetSummary", SnackType.Success)
+                        // 汇总反馈:多图时说明成功/失败张数
+                        val msg = when {
+                            imagesToSend.isEmpty() -> "已成功送达至 $targetSummary"
+                            failCount == 0 && imagesToSend.size > 1 -> "已成功送达 ${okCount} 张图片至 $targetSummary"
+                            failCount > 0 -> "送达 $okCount 张,失败 $failCount 张"
+                            else -> "已成功送达至 $targetSummary"
+                        }
+                        snackbarHostState?.showAppSnack(msg, if (failCount > 0) SnackType.Error else SnackType.Success)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -546,9 +587,10 @@ fun ManualPushPage(
             BarBlurSurface(backdrop = pageBackdrop) {
                 SurfaceBottomInputBar(
                     inputTextState = inputTextState,
-                    selectedImageBytes = selectedImageBytes,
+                    selectedImages = selectedImages,
                     isSending = isSending,
-                    onClearSelectedImage = { selectedImageBytes = null },
+                    onRemoveImage = { index -> if (index in selectedImages.indices) selectedImages.removeAt(index) },
+                    onClearAllImages = { selectedImages.clear() },
                     onPickImage = { imagePickerLauncher.launch("image/*") },
                     onSend = onSendMessage
                 )
@@ -1026,9 +1068,10 @@ private fun ChatMessageItem(
 @Composable
 private fun SurfaceBottomInputBar(
     inputTextState: TextFieldState,
-    selectedImageBytes: ByteArray?,
+    selectedImages: List<ByteArray>,
     isSending: Boolean,
-    onClearSelectedImage: () -> Unit,
+    onRemoveImage: (Int) -> Unit,
+    onClearAllImages: () -> Unit,
     onPickImage: () -> Unit,
     onSend: () -> Unit
 ) {
@@ -1039,62 +1082,90 @@ private fun SurfaceBottomInputBar(
             .then(if (imeBottom == 0.dp) Modifier.navigationBarsPadding() else Modifier)
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        // 1. 待发图片预览条（支持上传中动态转圈与状态提示）
-        if (selectedImageBytes != null) {
-            val previewBitmap = remember(selectedImageBytes) {
-                BitmapFactory.decodeByteArray(selectedImageBytes, 0, selectedImageBytes.size)?.asImageBitmap()
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(56.dp)
-                        .clip(RoundedCornerShape(8.dp))
+        // 1. 待发图片预览(横向列表,支持多张)
+        if (selectedImages.isNotEmpty()) {
+            Column(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (previewBitmap != null) {
-                        Image(
-                            bitmap = previewBitmap,
-                            contentDescription = "待发图片",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                    }
-                    if (isSending) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.5f)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            LoadingSpinner(
-                                modifier = Modifier.size(22.dp),
-                                color = Color.White,
-                                strokeWidth = 2.dp
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.width(8.dp))
-                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = if (isSending) "正在上传并推送图片…" else "已选择图片 (${selectedImageBytes.size / 1024} KB)",
+                        text = if (isSending) "正在上传 ${selectedImages.size} 张图片…"
+                               else "已选择 ${selectedImages.size} 张图片 (" +
+                                   "${selectedImages.sumOf { it.size } / 1024} KB)",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
-                        color = if (isSending) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface
+                        color = if (isSending) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
                     )
-                    Text(
-                        text = if (isSending) "正在向所选设备传输中…" else "点击右侧发送按钮立即推送",
-                        fontSize = 11.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant
-                    )
+                    if (!isSending) {
+                        Text(
+                            text = "全部移除",
+                            fontSize = 12.sp,
+                            color = MiuixTheme.colorScheme.error,
+                            modifier = Modifier.clickable { onClearAllImages() }.padding(4.dp),
+                        )
+                    }
                 }
-                if (!isSending) {
-                    IconButton(onClick = onClearSelectedImage) {
-                        Icon(imageVector = LucideIcons.X, contentDescription = "移除图片", tint = MiuixTheme.colorScheme.error)
+                Spacer(Modifier.height(6.dp))
+                // 缩略图横向滚动列表
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    selectedImages.forEachIndexed { index, bytes ->
+                        Box(
+                            modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)),
+                        ) {
+                            val bmp = remember(bytes) {
+                                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                            }
+                            if (bmp != null) {
+                                Image(
+                                    bitmap = bmp,
+                                    contentDescription = "待发图片 ${index + 1}",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop,
+                                )
+                            }
+                            // 序号角标
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(2.dp)
+                                    .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 4.dp, vertical = 1.dp),
+                            ) {
+                                Text("${index + 1}", fontSize = 10.sp, color = Color.White)
+                            }
+                            // 单张移除按钮
+                            if (!isSending) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(2.dp)
+                                        .size(16.dp)
+                                        .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
+                                        .clickable { onRemoveImage(index) },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        imageVector = LucideIcons.X,
+                                        contentDescription = "移除第 ${index + 1} 张",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(11.dp),
+                                    )
+                                }
+                            }
+                            if (isSending) {
+                                Box(
+                                    modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    LoadingSpinner(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1113,7 +1184,7 @@ private fun SurfaceBottomInputBar(
                 Icon(
                     imageVector = LucideIcons.ImagePlus,
                     contentDescription = "选择图片",
-                    tint = if (selectedImageBytes != null) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface
+                    tint = if (selectedImages.isNotEmpty()) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface
                 )
             }
 

@@ -39,6 +39,8 @@ object SyncNotificationManager {
 
     const val NOTIFICATION_ID_FOREGROUND = 1001
     const val NOTIFICATION_ID_PUSH = 2001
+    /** 上传失败提示(独立 ID,不覆盖前台常驻通知与推送通知)。 */
+    const val NOTIFICATION_ID_UPLOAD_FAILED = 3001
 
     /**
      * 初始化全部通知渠道
@@ -424,6 +426,42 @@ object SyncNotificationManager {
         }
 
         return builder.build()
+    }
+
+    /**
+     * 上传失败提示。
+     *
+     * 为什么需要它:图片上传失败此前被 catch {} 完全吞掉,用户以为已同步,
+     * 直到换设备粘贴时才发现内容不在。这里用一个独立通知 ID 做提示,
+     * 不弹胶囊、不打断操作,只在通知栏留一条。
+     */
+    fun notifyUploadFailed(context: Context, reason: String) {
+        try {
+            if (Build.VERSION.SDK_INT >= 33 &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val openAppPi = PendingIntent.getActivity(
+                context,
+                0,
+                Intent(context, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            val notification = NotificationCompat.Builder(context, CHANNEL_MONITOR)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle("剪贴板同步失败")
+                .setContentText(reason)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(reason))
+                .setContentIntent(openAppPi)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .build()
+            nm.notify(NOTIFICATION_ID_UPLOAD_FAILED, notification)
+        } catch (e: Exception) {
+            android.util.Log.w("SyncNotification", "notifyUploadFailed 失败: ${e.message}")
+        }
     }
 
     /**

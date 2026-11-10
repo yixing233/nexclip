@@ -41,7 +41,29 @@ data class PairStatus(val status: String, val deviceToken: String? = null)
 /** 6 位纯数字配对码(POST /api/pairing-codes → { code, expiresAt, userId }) */
 data class PairingCode(val code: String, val expiresAt: String, val userId: String, val deviceToken: String? = null, val qrPayload: String? = null)
 
-class ApiException(message: String, val statusCode: Int? = null) : Exception(message)
+/**
+ * 服务端返回的错误。
+ *
+ * [code] 是服务端给出的机器可读错误码(响应体的 code 字段),可能为 null(老服务端)。
+ * 需要它的原因:凭证类错误的状态码有歧义 ——
+ *   "缺少凭证"(客户端没带) 与 "凭证无效"(真的失效) 都是 401;
+ *   而 403 表示"上传设备身份与凭证不匹配",与凭证有效性无关。
+ * 只看状态码就清空本地配对,会把仍然有效的凭证误删,用户被迫重新配对。
+ */
+class ApiException(
+    message: String,
+    val statusCode: Int? = null,
+    val code: String? = null,
+) : Exception(message) {
+    /** 服务端"缺少设备凭证":不是凭证失效,不应清除本地状态。 */
+    val isCredentialMissing: Boolean get() = code == "credential_missing"
+    /** 服务端"设备凭证无效":需要用户重新配对。 */
+    val isCredentialInvalid: Boolean get() = code == "credential_invalid"
+    /** 服务端"设备已被移除":需要用户重新配对。 */
+    val isCredentialRevoked: Boolean get() = code == "credential_revoked"
+    /** 服务端"上传设备身份与凭证不匹配"(403):凭证本身有效,属参数问题。 */
+    val isDeviceIdentityMismatch: Boolean get() = code == "device_identity_mismatch"
+}
 
 /** REST 客户端:设备同步接口使用 X-Device-Id/X-Device-Token 凭证。 */
 class SyncApi(
@@ -78,14 +100,17 @@ class SyncApi(
         val resp = client.newCall(req).execute()
         if (!resp.isSuccessful) {
             val body = resp.body?.string()
-            val serverMsg = try {
+            var serverMsg: String? = null
+            var errorCode: String? = null
+            try {
                 val o = JSONObject(body ?: "{}")
-                o.optString("error").takeIf { it.isNotBlank() }
+                serverMsg = o.optString("error").takeIf { it.isNotBlank() }
+                errorCode = o.optString("code").takeIf { it.isNotBlank() }
             } catch (_: Exception) {
-                null
+                // 响应体不是 JSON:保持两个字段为 null
             }
             val finalMsg = serverMsg ?: httpStatusText(resp.code)
-            throw ApiException(finalMsg, resp.code)
+            throw ApiException(finalMsg, resp.code, errorCode)
         }
         resp
     } catch (e: ApiException) {
@@ -281,9 +306,24 @@ class SyncApi(
         = pair(code, deviceId, deviceName, platform)
 
     /** POST /api/clipboard/image(multipart) */
-    fun uploadImage(pngBytes: ByteArray, deviceId: String, deviceName: String, isManual: Boolean = false): ClipboardEntry {
+    /**
+     * 上传图片。
+     *
+     * [mimeType] 决定 multipart 的 Content-Type 与文件名后缀 —— 服务端按扩展名选择
+     * 存储文件名与响应 Content-Type,所以压缩成 JPEG 后必须传 "image/jpeg",
+     * 否则会被当成 png 存下来,下载端拿到错误的类型。
+     */
+    fun uploadImage(
+        bytes: ByteArray,
+        deviceId: String,
+        deviceName: String,
+        isManual: Boolean = false,
+        mimeType: String = "image/png",
+    ): ClipboardEntry {
+        val isJpeg = mimeType.contains("jpeg", ignoreCase = true)
+        val fileName = if (isJpeg) "clipboard.jpg" else "clipboard.png"
         val builder = MultipartBody.Builder().setType(MultipartBody.FORM)
-            .addFormDataPart("file", "clipboard.png", pngBytes.toRequestBody("image/png".toMediaType()))
+            .addFormDataPart("file", fileName, bytes.toRequestBody(mimeType.toMediaType()))
             .addFormDataPart("deviceId", deviceId)
             .addFormDataPart("deviceName", deviceName)
             .addFormDataPart("platform", "Android")

@@ -1257,12 +1257,17 @@ internal fun RecordsPage(
                                     val api = SyncApi(url, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
                                     withContext(Dispatchers.IO) {
                                         if (detailClip.isImage) {
-                                            val bytes = ImageLoader.getImageBytes(context, detailClip.imageRef, detailClip.text)
-                                            if (bytes != null) {
+                                            val raw = ImageLoader.getImageBytes(context, detailClip.imageRef, detailClip.text)
+                                            if (raw != null) {
+                                                // 手动推送同样要走压缩:此前直接上传原图,
+                                                // 超过服务端 10MB 上限会被 413 拒绝。
+                                                val compressed = ImageLoader.compressForUpload(context, raw)
+                                                    ?: throw Exception("图片过大或已损坏,无法上传")
                                                 api.uploadImage(
-                                                    pngBytes = bytes,
+                                                    bytes = compressed.bytes,
                                                     deviceId = SyncSettings.ensureDeviceId(context),
-                                                    deviceName = SyncSettings.deviceName(context)
+                                                    deviceName = SyncSettings.deviceName(context),
+                                                    mimeType = compressed.mimeType,
                                                 )
                                             } else {
                                                 throw Exception("图片数据无法读取")
