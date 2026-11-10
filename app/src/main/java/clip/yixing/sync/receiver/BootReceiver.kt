@@ -19,5 +19,20 @@ class BootReceiver : BroadcastReceiver() {
             context.startService(svc)
         }
         clip.yixing.sync.paste.FloatingBubbleService.sync(context)
+
+        // 开机阶段部分 ROM 会把无障碍服务重置为关闭。用 goAsync 短暂延长广播生命周期,
+        // 让 root 检查能在后台完成(su 调用可能耗时,不能阻塞 onReceive)。
+        if (SyncSettings.accessibilityGuardEnabled(context)) {
+            val pending = goAsync()
+            Thread {
+                try {
+                    clip.yixing.sync.root.AccessibilityGuard.ensureEnabled(context, force = true)
+                } catch (e: Exception) {
+                    android.util.Log.w("NexClip", "开机无障碍守护失败: ${e.message}")
+                } finally {
+                    pending.finish()
+                }
+            }.start()
+        }
     }
 }

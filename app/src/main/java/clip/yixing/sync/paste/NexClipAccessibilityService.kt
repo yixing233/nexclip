@@ -11,6 +11,7 @@ import android.text.TextUtils
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -164,16 +165,64 @@ class NexClipAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** 轮询等待可编辑焦点出现 */
+    /**
+     * 轮询等待可编辑焦点出现。
+     *
+     * Android 14+ 起 findFocus(FOCUS_INPUT) 在部分场景(尤其 HyperOS 多窗口、
+     * 输入法弹出时机)会返回 null,即使屏幕上确有输入框。因此分三级降级:
+     *   1) findFocus(FOCUS_INPUT) —— 标准路径
+     *   2) 遍历活动窗口节点树,找 focused=true 且可编辑的节点
+     *   3) 树上第一个可编辑节点(有些 App 焦点在容器上,不在 EditText 本身)
+     */
     private suspend fun awaitFocusedEditable(): AccessibilityNodeInfo? {
         repeat(FOCUS_RETRY_TIMES) { attempt ->
-            val node = runCatching { findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }.getOrNull()
-            if (node != null && node.isEditable) return node
+            // 1) 标准焦点查询
+            runCatching { findFocus(AccessibilityNodeInfo.FOCUS_INPUT) }.getOrNull()?.let {
+                if (it.isEditable) return it
+            }
+            // 2) / 3) 遍历窗口找可编辑节点
+            findEditableInWindows()?.let { return it }
+
             if (attempt < FOCUS_RETRY_TIMES - 1) delay(FOCUS_RETRY_INTERVAL_MILLIS)
         }
         Log.d(TAG, "no editable focus after ${FOCUS_RETRY_TIMES * FOCUS_RETRY_INTERVAL_MILLIS}ms")
         return null
     }
+
+    /**
+     * 遍历当前活动窗口的节点树查找可编辑节点。
+     *
+     * 优先返回 focused=true 的节点(用户正在输入的那个),
+     * 否则返回第一个可编辑节点兜底 —— 有些 App 把焦点放在外层容器上。
+     */
+    private fun findEditableInWindows(): AccessibilityNodeInfo? {
+        val roots = runCatching { windows }.getOrNull() ?: return null
+        var fallback: AccessibilityNodeInfo? = null
+        for (w in roots) {
+            if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
+            val root = runCatching { w.root }.getOrNull() ?: continue
+            val found = collectEditable(root, 0) ?: continue
+            if (runCatching { found.isFocused }.getOrDefault(false)) return found
+            if (fallback == null) fallback = found
+        }
+        return fallback
+    }
+
+    /** 深度优先查找可编辑节点;限制深度与访问数,避免在超大页面树上卡住。 */
+    private fun collectEditable(node: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {
+        if (depth > MAX_TREE_DEPTH) return null
+        if (nodeVisits > MAX_NODE_VISITS) return null
+        nodeVisits++
+        if (node.isEditable) return node
+        for (i in 0 until node.childCount) {
+            val child = runCatching { node.getChild(i) }.getOrNull() ?: continue
+            collectEditable(child, depth + 1)?.let { return it }
+        }
+        return null
+    }
+
+    /** 单次查找的节点访问计数,防止在巨树上无限遍历。 */
+    private var nodeVisits = 0
 
     private fun isEditableClassName(className: CharSequence): Boolean =
         TextUtils.indexOf(className, "EditText") >= 0 ||
@@ -186,6 +235,10 @@ class NexClipAccessibilityService : AccessibilityService() {
         /** 100ms × 12 ≈ 1.2s,覆盖通知栏收起 / 悬浮面板消失后焦点回归目标输入框的延迟 */
         private const val FOCUS_RETRY_TIMES = 12
         private const val FOCUS_RETRY_INTERVAL_MILLIS = 100L
+
+        /** 节点树遍历上限:深度 30 层、单次最多访问 2000 个节点 */
+        private const val MAX_TREE_DEPTH = 30
+        private const val MAX_NODE_VISITS = 2000
 
         @Volatile
         var instance: NexClipAccessibilityService? = null

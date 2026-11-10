@@ -1,4 +1,4 @@
-﻿package clip.yixing.sync.paste
+package clip.yixing.sync.paste
 
 import android.content.Context
 import android.content.Intent
@@ -31,13 +31,18 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import clip.yixing.sync.SnackType
+import clip.yixing.sync.root.AccessibilityGuard
 import clip.yixing.sync.shizuku.ShizukuPermission
 import clip.yixing.sync.showAppSnack
 import clip.yixing.sync.ui.PageShell
 import clip.yixing.sync.ui.SectionBlock
 import clip.yixing.sync.util.PasteMethod
 import clip.yixing.sync.util.SyncSettings
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -71,6 +76,15 @@ fun PasteSettingsPage(
     }
     var isShizukuReady by remember { mutableStateOf(ShizukuPermission.isGranted()) }
     var showRestrictedSettingsGuide by remember { mutableStateOf(false) }
+
+    // ---- root 守护无障碍服务 ----
+    var guardEnabled by remember { mutableStateOf(SyncSettings.accessibilityGuardEnabled(context)) }
+    // root 可用性需要执行 su,不能在组合期同步调用 —— 先给 null 表示"检测中"
+    var isRootReady by remember { mutableStateOf<Boolean?>(null) }
+    var guardBusy by remember { mutableStateOf(false) }
+    var guardLastResult by remember { mutableStateOf(AccessibilityGuard.lastResult(context)) }
+    /** root 探测任务引用:用于防重入,并在页面销毁时取消。 */
+    var rootProbeJob by remember { mutableStateOf<Job?>(null) }
     var accessibilitySettingsRequested by remember { mutableStateOf(false) }
 
     fun openAccessibilitySettings() {
@@ -96,10 +110,31 @@ fun PasteSettingsPage(
         }
     }
 
+    /**
+     * 后台探测 root 可用性(会执行 su,不能在主线程做)。
+     *
+     * 注意:这里刻意【不在进入页面时自动执行】。
+     * su 调用会 fork 进程并等待 root 管理器授权,期间若页面正在播放退场动画,
+     * 回调里的状态回写会触发重组、打断 subPageAnimProgress 的动画,
+     * 表现为"返回时先闪一下设置主页再进入下一页"。
+     * 改为只在用户点击"Root 权限"或开启开关时按需探测。
+     */
+    fun probeRoot() {
+        if (rootProbeJob?.isActive == true) return
+        rootProbeJob = scope.launch(Dispatchers.IO) {
+            val ready = AccessibilityGuard.isRootAvailable()
+            // 任务被取消(页面已销毁)时协程会在此抛出 CancellationException,
+            // 不会执行下面的状态写入 —— 这正是避免"退场时闪设置主页"的关键。
+            ensureActive()
+            withContext(Dispatchers.Main) { isRootReady = ready }
+        }
+    }
+
     fun refreshBackendStatus() {
         isAccessibilityOn = NexClipAccessibilityService.isEnabledInSystem(context)
         canDrawOverlays = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) Settings.canDrawOverlays(context) else true
         isShizukuReady = ShizukuPermission.isGranted()
+        guardLastResult = AccessibilityGuard.lastResult(context)
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -121,6 +156,10 @@ fun PasteSettingsPage(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            // 退场时取消仍在跑的 root 探测,避免它稍后回写状态触发重组。
+            // 这正是"从本页返回时先闪一下设置主页"的直接成因。
+            rootProbeJob?.cancel()
+            rootProbeJob = null
         }
     }
 
@@ -232,6 +271,76 @@ fun PasteSettingsPage(
                             FloatingBubbleService.sync(context)
                         }
                     )
+                }
+            }
+
+            item {
+                Spacer(Modifier.height(16.dp))
+                SectionBlock(title = "无障碍守护 (Root)", insideMargin = PaddingValues()) {
+                    SwitchPreference(
+                        title = "自动保持无障碍开启",
+                        summary = "无障碍权限常被系统自动关闭。开启后,检测到被关会用 root 自动重新启用",
+                        checked = guardEnabled,
+                        onCheckedChange = { checked ->
+                            guardEnabled = checked
+                            SyncSettings.setAccessibilityGuardEnabled(context, checked)
+                            scope.launch {
+                                if (checked) {
+                                    snackbarHostState.showAppSnack("已开启。首次运行会请求 root 授权", SnackType.Info)
+                                    probeRoot()
+                                } else {
+                                    snackbarHostState.showAppSnack("已关闭无障碍守护", SnackType.Info)
+                                }
+                            }
+                        }
+                    )
+
+                    // 仅在功能开启时展示状态与操作,避免干扰不用 root 的用户
+                    if (guardEnabled) {
+                        val rootText = when (isRootReady) {
+                            null -> "正在检测…"
+                            true -> "已授权"
+                            false -> "未授权或设备未 root"
+                        }
+                        ArrowPreference(
+                            title = "Root 权限",
+                            summary = "当前状态:$rootText",
+                            onClick = { probeRoot() }
+                        )
+
+                        val resultText = when (guardLastResult) {
+                            AccessibilityGuard.LastResult.Never -> "尚未执行"
+                            AccessibilityGuard.LastResult.Success -> "最近一次:已自动恢复无障碍"
+                            AccessibilityGuard.LastResult.NotNeeded -> "最近一次:无需修复"
+                            AccessibilityGuard.LastResult.NoRoot -> "最近一次:root 未授权"
+                            AccessibilityGuard.LastResult.Failed -> "最近一次:写入后未生效(可能被 ROM 拦截)"
+                            AccessibilityGuard.LastResult.Throttled -> "最近一次:已跳过(节流中)"
+                        }
+                        ArrowPreference(
+                            title = "立即修复",
+                            summary = if (guardBusy) "正在修复…" else resultText + " · 点击立即用 root 修复",
+                            onClick = {
+                                if (guardBusy) return@ArrowPreference
+                                guardBusy = true
+                                scope.launch {
+                                    val result = withContext(Dispatchers.IO) {
+                                        AccessibilityGuard.ensureEnabled(context, force = true)
+                                    }
+                                    guardBusy = false
+                                    guardLastResult = result
+                                    refreshBackendStatus()
+                                    val (msg, type) = when (result) {
+                                        AccessibilityGuard.LastResult.Success -> "无障碍服务已通过 root 恢复" to SnackType.Success
+                                        AccessibilityGuard.LastResult.NotNeeded -> "无障碍服务本来就是开启的" to SnackType.Info
+                                        AccessibilityGuard.LastResult.NoRoot -> "root 未授权,请在 root 管理器中允许本应用" to SnackType.Error
+                                        AccessibilityGuard.LastResult.Failed -> "写入后未生效,可能被系统策略拦截" to SnackType.Error
+                                        else -> "已跳过" to SnackType.Info
+                                    }
+                                    snackbarHostState.showAppSnack(msg, type)
+                                }
+                            }
+                        )
+                    }
                 }
             }
 
