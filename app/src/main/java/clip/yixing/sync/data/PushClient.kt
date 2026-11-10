@@ -100,13 +100,26 @@ class PushClient(
         return true
     }
 
+    /**
+     * 判断一次 SignalR 失败是否意味着"凭证已失效、需要重新配对"。
+     *
+     * 与 SyncApi 的 shouldClearPairingOn 保持同一套语义:
+     *   - 403 / Forbidden:服务端表示"设备身份与凭证不匹配",凭证本身有效,不清空
+     *   - 401 / Unauthorized:凭证无效或缺失,需要重新配对
+     *   - 410 / Device removed:设备被移除,需要重新配对
+     * 以前把 403 也算进来,会在参数问题下把用户仍然有效的凭证删掉。
+     */
     private fun isAuthFailure(error: Throwable): Boolean {
         var current: Throwable? = error
         while (current != null) {
             val text = current.message.orEmpty()
-            if (Regex("(^|\\D)(401|403|410|4001)(\\D|$)").containsMatchIn(text) ||
+            // 先排除身份不匹配:它携带 403,但语义与凭证失效无关
+            if (text.contains("device_identity_mismatch", ignoreCase = true) ||
+                text.contains("Forbidden", ignoreCase = true)) {
+                return false
+            }
+            if (Regex("(^|\\D)(401|410|4001)(\\D|$)").containsMatchIn(text) ||
                 text.contains("Unauthorized", ignoreCase = true) ||
-                text.contains("Forbidden", ignoreCase = true) ||
                 text.contains("Device removed", ignoreCase = true) ||
                 text.contains("设备已被移除") ||
                 text.contains("设备凭证")) {

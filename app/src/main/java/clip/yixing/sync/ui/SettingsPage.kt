@@ -29,10 +29,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.TransformOrigin
@@ -85,6 +83,7 @@ import clip.yixing.sync.shizuku.ShizukuClipboardManager
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -188,39 +187,29 @@ internal fun SettingsPage(
     val prefs = remember { SyncSettings.prefs(context) }
     val scope = rememberCoroutineScope()
 
-    // 当前所处二级子页面（null 为一级设置主页）
-    var currentSubPage by remember { mutableStateOf<SettingsSubPage?>(null) }
-    var displayedSubPage by remember { mutableStateOf<SettingsSubPage?>(null) }
-    var parentSubPage by remember { mutableStateOf<SettingsSubPage?>(null) }
-    var isReturningToParent by remember { mutableStateOf(false) }
-    val subPageAnimProgress = remember { Animatable(1f) } // 0f: 完全展开展示, 1f: 退出到屏幕右侧
+    // ---- 二级页导航栈 ----
+    // 照 HyperChanger 的实现:整个栈里的页面都保持组合,栈顶页是覆盖层。
+    // 返回时直接出栈,下面那页本就在屏幕里,因此不需要任何退出动画,
+    // 也不存在"旧页已消失、新页还在屏外"的空档(那正是旧实现 3→1→2 闪烁的根因)。
+    //
+    // 用栈而非单个 parentSubPage:设置页实际是多层的,
+    // 设置主页 → 通知与隐私 → 短信验证码 → 短信记录,必须支持任意深度回退。
+    val subPageStack = remember { mutableStateListOf<SettingsSubPage>() }
+    val currentSubPage = subPageStack.lastOrNull()
 
+    /** 进入下一级(压栈)。栈内页面全部保留组合。 */
     fun openSubPage(page: SettingsSubPage) {
-        isReturningToParent = false
-        parentSubPage = currentSubPage
-        displayedSubPage = page
-        currentSubPage = page
-        scope.launch {
-            subPageAnimProgress.snapTo(1f)
-            subPageAnimProgress.animateTo(0f, animationSpec = tween(280, easing = FastOutSlowInEasing))
+        if (subPageStack.lastOrNull() != page) {
+            subPageStack += page
         }
     }
 
+    /** 返回上一级(出栈)。栈底时清空,回到一级设置主页。 */
     fun closeSubPage() {
-        val returnPage = parentSubPage
-        isReturningToParent = returnPage != null
-        scope.launch {
-            subPageAnimProgress.animateTo(1f, animationSpec = tween(240, easing = FastOutSlowInEasing))
-            currentSubPage = returnPage
-            parentSubPage = null
-            if (returnPage != null) {
-                displayedSubPage = returnPage
-                subPageAnimProgress.snapTo(1f)
-                subPageAnimProgress.animateTo(0f, animationSpec = tween(280, easing = FastOutSlowInEasing))
-            } else {
-                displayedSubPage = null
-            }
-            isReturningToParent = false
+        if (subPageStack.size > 1) {
+            subPageStack.removeAt(subPageStack.lastIndex)
+        } else {
+            subPageStack.clear()
         }
     }
 
@@ -327,36 +316,13 @@ internal fun SettingsPage(
         }
     }
 
-    // 2. 预测返回手势监听（无缝连贯跟手，二级页面退出）
-    PredictiveBackHandler(enabled = currentSubPage != null && !isAnyOverlayOpen && !isGlobalOverlayActive) { progress ->
-        if (!predictiveBackEnabled) {
-            closeSubPage()
-            return@PredictiveBackHandler
-        }
-        isReturningToParent = parentSubPage != null
-        try {
-            progress.collect { event ->
-                val p = FastOutSlowInEasing.transform(SyncSettings.mapPredictiveBackProgress(context, event.progress))
-                subPageAnimProgress.snapTo(p)
-            }
-            // 手势正常完成（松手）：从当前手势位移继续平滑滑动退出
-            subPageAnimProgress.animateTo(1f, animationSpec = tween(200, easing = LinearOutSlowInEasing))
-            val returnPage = parentSubPage
-            currentSubPage = returnPage
-            parentSubPage = null
-            if (returnPage != null) {
-                displayedSubPage = returnPage
-                subPageAnimProgress.snapTo(1f)
-                subPageAnimProgress.animateTo(0f, animationSpec = tween(280, easing = FastOutSlowInEasing))
-            } else {
-                displayedSubPage = null
-            }
-            isReturningToParent = false
-        } catch (e: CancellationException) {
-            // 用户取消手势（滑回边缘）：从当前位置平滑弹回复原
-            subPageAnimProgress.animateTo(0f, animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
-            isReturningToParent = false
-        }
+    // 返回键/手势:直接拦截并出栈。
+    // 不启用 PredictiveBackHandler —— 跟手动画在本页的页面栈结构下始终难以做好
+    // (曾被状态机卡住导致页面错位),去掉后返回行为简单可靠。
+    BackHandler(
+        enabled = currentSubPage != null && !isAnyOverlayOpen && !isGlobalOverlayActive,
+    ) {
+        closeSubPage()
     }
 
     var devices by remember { mutableStateOf<List<DeviceInfo>>(emptyList()) }
@@ -621,13 +587,15 @@ internal fun SettingsPage(
 
     Box(modifier = Modifier.fillMaxSize()) {
         // ---- 1. 底层：一级设置主页 ----
-        // 返回三级页时保持一级页面下沉，避免当前页移出后一级页面先闪现，再切换到二级页。
-        val baseProgress = if (isReturningToParent) 0f else subPageAnimProgress.value // 0f: 底层下沉, 1f: 底层复原
+        // 照 HyperChanger:底层不做位移动画,只用模糊表达"被覆盖"。
+        // 位移方案需要精确计算两层互补,稍有偏差就露底;模糊没有这个问题。
+        val hasSubPage = currentSubPage != null
+        val baseProgress = if (hasSubPage) 0f else 1f
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    if (displayedSubPage != null) {
+                    if (hasSubPage) {
                         translationX = -(1f - baseProgress) * size.width * 0.15f
                         val s = 0.94f + 0.06f * baseProgress
                         scaleX = s
@@ -671,7 +639,7 @@ internal fun SettingsPage(
             }
 
             // 黑色半透明遮罩层（视差下沉感）
-            if (displayedSubPage != null && (1f - baseProgress) > 0.001f) {
+            if (hasSubPage && (1f - baseProgress) > 0.001f) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -680,32 +648,35 @@ internal fun SettingsPage(
             }
         }
 
-        // ---- 2. 顶层：当前激活的二级子页面 ----
-        displayedSubPage?.let { subPage ->
-            val p = subPageAnimProgress.value // 0f (显示) -> 1f (退出到右侧)
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        translationX = p * size.width
-                        val s = 1f - p * 0.05f
-                        scaleX = s
-                        scaleY = s
-                        transformOrigin = TransformOrigin(0f, 0.5f)
-                        clip = true
-                        val corner = screenCornerRadius + (p * 4).dp
-                        shape = RoundedCornerShape(corner)
-                        shadowElevation = (1f - p) * 24f
-                    }
-            ) {
-                when (subPage) {
+        // ---- 2. 二级页转场 ----
+        // 照 XiaomiHelper(hyperx-compose 的 NavDisplay)的做法:
+        // 用 AnimatedContent 做"两个页面同时对向移动"的转场 ——
+        //   进入: 新页整屏从右滑入 + 旧页向左移出 1/4
+        //   返回: 上一级从左 1/4 处滑回 + 当前页整屏向右滑出
+        // 两页位移互补,任何一帧都被填满,既不露底也不会"瞬间跳变"。
+        //
+        // 之前用 forEach + AnimatedVisibility 的问题:一次只动一页,
+        // 返回时靠"旧页消失、下面那页显露",观感就是没有动画。
+        AnimatedContent(
+            targetState = currentSubPage,
+            transitionSpec = {
+                val goingForward = (targetState?.ordinal ?: -1) >= (initialState?.ordinal ?: -1)
+                if (goingForward) SettingsNavTransitions.push() else SettingsNavTransitions.pop()
+            },
+            label = "settingsSubPage",
+            modifier = Modifier.fillMaxSize(),
+        ) { animatedPage ->
+            // 一级主页(无子页)时这一层不渲染内容,由底层设置页承担
+            if (animatedPage != null) {
+                Box(Modifier.fillMaxSize()) {
+                    when (animatedPage) {
                     SettingsSubPage.Basic,
                     SettingsSubPage.Sync,
                     SettingsSubPage.Notifications,
                     SettingsSubPage.Storage,
                     SettingsSubPage.Permissions -> {
                         PageShell(
-                            title = subPage.title,
+                            title = animatedPage.title,
                             bottomInnerPadding = bottomInnerPadding,
                             navigationIcon = {
                                 IconButton(onClick = { closeSubPage() }) {
@@ -719,7 +690,7 @@ internal fun SettingsPage(
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 // 基础与界面
-                    if (subPage == SettingsSubPage.Basic) item {
+                    if (animatedPage == SettingsSubPage.Basic) item {
                         SectionBlock(title = "基础与界面", insideMargin = PaddingValues()) {
                             ArrowPreference(
                                 title = "设备名称",
@@ -828,7 +799,7 @@ internal fun SettingsPage(
                     }
 
                     // 同步服务
-                    if (subPage == SettingsSubPage.Sync) item {
+                    if (animatedPage == SettingsSubPage.Sync) item {
                         SectionBlock(title = "同步服务") {
                             TextField(
                                 state = urlState,
@@ -889,7 +860,7 @@ internal fun SettingsPage(
                         }
                     }
 
-                    if (subPage == SettingsSubPage.Sync) item {
+                    if (animatedPage == SettingsSubPage.Sync) item {
                         SectionBlock(title = "配对管理") {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -948,7 +919,7 @@ internal fun SettingsPage(
                         }
                     }
 
-                    if (subPage == SettingsSubPage.Sync) item {
+                    if (animatedPage == SettingsSubPage.Sync) item {
                         SectionBlock(
                             title = "设备列表",
                             trailing = {
@@ -990,7 +961,7 @@ internal fun SettingsPage(
                     }
 
                     // 通知与隐私
-                    if (subPage == SettingsSubPage.Notifications) item {
+                    if (animatedPage == SettingsSubPage.Notifications) item {
                         SectionBlock(title = "通知与隐私", insideMargin = PaddingValues()) {
                             SwitchPreference(
                                 checked = syncNotificationEnabled,
@@ -1140,7 +1111,7 @@ internal fun SettingsPage(
                     }
 
                     // 数据与存储
-                    if (subPage == SettingsSubPage.Storage) item {
+                    if (animatedPage == SettingsSubPage.Storage) item {
                         SectionBlock(title = "数据与存储", insideMargin = PaddingValues()) {
                             WindowDropdownPreference(
                                 items = historyLabels,
@@ -1205,7 +1176,7 @@ internal fun SettingsPage(
                     }
 
                     // 权限与保活
-                    if (subPage == SettingsSubPage.Permissions) item {
+                    if (animatedPage == SettingsSubPage.Permissions) item {
                         val moduleStatus by ModuleStatusStore.moduleStatus.collectAsState()
                         val isModuleActivated = moduleStatus.activated
                         val shizukuStatus by ShizukuClipboardManager.status.collectAsState()
@@ -2154,6 +2125,7 @@ internal fun SettingsPage(
                                 }
                             }
                         }
+                    }
                     }
                 }
             }

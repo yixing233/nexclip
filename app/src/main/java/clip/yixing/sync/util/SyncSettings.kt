@@ -32,6 +32,10 @@ object SyncSettings {
     const val KEY_MAX_HISTORY = "max_history"
     const val KEY_SEARCH_HISTORY = "search_history"
 
+    // ---- 无障碍守护(root 自动重新启用无障碍服务) ----
+    /** 是否启用 root 守护。默认关闭:root 属敏感权限,必须由用户显式开启。 */
+    const val KEY_ACCESSIBILITY_GUARD_ENABLED = "accessibility_guard_enabled"
+
     // ---- 一键粘贴与悬浮球 ----
     const val KEY_PASTE_METHOD = "paste_method"
     const val KEY_FLOATING_BUBBLE = "floating_bubble"
@@ -232,6 +236,18 @@ object SyncSettings {
         prefs(context).getString(KEY_SERVER_URL, "http://192.168.0.102:5033") ?: "http://192.168.0.102:5033"
 
     /** 是否已完成配对且拥有有效设备凭证。 */
+    /**
+     * 是否启用"root 守护无障碍服务"。
+     *
+     * 默认 false —— 这个功能会执行 su 命令,必须由用户在设置页显式打开。
+     */
+    fun accessibilityGuardEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_ACCESSIBILITY_GUARD_ENABLED, false)
+
+    fun setAccessibilityGuardEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_ACCESSIBILITY_GUARD_ENABLED, enabled).apply()
+    }
+
     fun isPaired(context: Context): Boolean =
         prefs(context).getBoolean(KEY_PAIRED, false)
 
@@ -251,6 +267,33 @@ object SyncSettings {
     /** 服务端撤销设备后统一清理本地凭证，防止后台服务继续重连。 */
     fun clearPairing(context: Context) {
         prefs(context).edit().putBoolean(KEY_PAIRED, false).remove(KEY_DEVICE_TOKEN).apply()
+    }
+
+    /**
+     * 判断一次 API 失败是否意味着"本地凭证已失效、必须重新配对"。
+     *
+     * 这是三端统一后的判定规则(服务端在错误响应里给出 code 字段):
+     *   credential_invalid / credential_revoked  -> 需要重新配对(清空本地凭证)
+     *   credential_missing                       -> 客户端没带凭证(自身 bug),不清空
+     *   device_identity_mismatch (403)           -> 参数问题,凭证有效,不清空
+     *
+     * 为什么不能只看状态码:401 同时表示"缺少凭证"与"凭证无效",
+     * 403 与凭证有效性无关。以前无条件清空,会把仍然有效的凭证删掉,
+     * 用户被迫重新配对(2026-10-23 线上故障即该模式的放大版)。
+     *
+     * 老服务端没有 code 时退回状态码启发式,但 403 一律不清空。
+     */
+    fun shouldClearPairingOn(error: clip.yixing.sync.data.ApiException): Boolean {
+        // 有 code:以服务端表态为准
+        if (error.isCredentialInvalid || error.isCredentialRevoked) return true
+        if (error.isCredentialMissing || error.isDeviceIdentityMismatch) return false
+
+        // 无 code(老服务端)
+        return when (error.statusCode) {
+            401, 410 -> true
+            403 -> false   // 凭证有效,属身份参数不匹配
+            else -> false  // 网络异常时 statusCode 为 null,到这里说明不是鉴权问题
+        }
     }
 
     fun ensureDeviceId(context: Context): String {
