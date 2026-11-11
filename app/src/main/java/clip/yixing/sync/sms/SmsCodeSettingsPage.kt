@@ -31,6 +31,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import clip.yixing.sync.SnackType
 import clip.yixing.sync.paste.NexClipAccessibilityService
 import clip.yixing.sync.showAppSnack
+import clip.yixing.sync.sms.rules.SmsCodeRuleStore
 import clip.yixing.sync.ui.PageShell
 import clip.yixing.sync.ui.SectionBlock
 import clip.yixing.sync.util.SyncSettings
@@ -62,6 +63,10 @@ fun SmsCodeSettingsPage(
 
     var smsEnabled by remember { mutableStateOf(SyncSettings.smsCodeEnabled(context)) }
     var autofillEnabled by remember { mutableStateOf(SyncSettings.smsCodeAutofill(context)) }
+
+    // 规则库:条数摘要 + 更新中状态
+    var updatingRules by remember { mutableStateOf(false) }
+    var ruleSummary by remember { mutableStateOf(buildRuleSummary(context)) }
 
     fun hasSmsPermission(): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) ==
@@ -171,6 +176,33 @@ fun SmsCodeSettingsPage(
 
             item {
                 Spacer(Modifier.height(16.dp))
+                SectionBlock(title = "识别规则库", insideMargin = PaddingValues()) {
+                    ArrowPreference(
+                        title = if (updatingRules) "正在更新规则库…" else "更新识别规则库",
+                        summary = ruleSummary,
+                        onClick = {
+                            if (updatingRules) return@ArrowPreference
+                            updatingRules = true
+                            scope.launch {
+                                val count = SmsCodeRuleStore.updateFromRemote(
+                                    context,
+                                    SyncSettings.smsCodeRuleSourceUrl(context)
+                                )
+                                updatingRules = false
+                                snackbarHostState.showAppSnack(
+                                    if (count != null) "规则库已更新: $count 条规则"
+                                    else "更新失败,继续使用当前规则",
+                                    if (count != null) SnackType.Success else SnackType.Error
+                                )
+                                ruleSummary = buildRuleSummary(context)
+                            }
+                        }
+                    )
+                }
+            }
+
+            item {
+                Spacer(Modifier.height(16.dp))
                 SectionBlock(title = "短信记录", insideMargin = PaddingValues()) {
                     ArrowPreference(
                         title = "查看短信识别记录",
@@ -234,4 +266,16 @@ fun SmsCodeSettingsPage(
             }
         }
     }
+}
+
+/**
+ * 规则库状态摘要:让用户知道当前是内置快照还是已更新过。
+ *
+ * 规则条数能直接反映"更新是否真的生效" —— 只看一条"更新成功"的提示
+ * 无法区分"拉到的是同一个版本"和"换了一份新规则"。
+ */
+private fun buildRuleSummary(context: android.content.Context): String {
+    val count = runCatching { SmsCodeRuleStore.rules(context).size }.getOrDefault(0)
+    val source = if (SmsCodeRuleStore.hasRemoteCache(context)) "已更新的远端规则" else "内置快照"
+    return "当前 $count 条规则 · $source。规则库决定能从短信中提取出哪些验证码模板"
 }

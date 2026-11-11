@@ -1,0 +1,28 @@
+{
+  "specVersion": 1,
+  "id": "cn.carrier.china-mobile",
+  "name": "中国移动",
+  "description": "Rules for China Mobile verification SMS templates.",
+  "locale": "zh-CN",
+  "updatedAt": "2026-10-05T00:00:00+08:00",
+  "rules": [
+    {
+      "id": "verification-password-after-label",
+      "company": "中国移动",
+      "codeKeyword": "验证密码",
+      "codeRegex": "(?<=验证密码[:：])\\d{4,8}",
+      "priority": 120,
+      "notes": "命中中国移动客户端、线上渠道业务办理中的‘验证密码：xxxxxx’短信。",
+      "examples": [
+        {
+          "body": "【中国移动客户端】验证密码：037481。尊敬的客户，您好！您正在中国移动线上渠道为     号码兑换流量红包100MB（24小时），资费0元，包含流量100MB，办理成功后立即生效，24小时后失效，验证码有效期2分钟，若非本人操作请勿泄露，任何索取行为均可能涉嫌诈骗。",
+          "expectedCode": "037481"
+        },
+        {
+          "body": "【中国移动客户端】验证密码：130298。尊敬的客户，您好！您正在中国移动线上渠道为业务办理验证，资费0元，验证码有效期2分钟。",
+          "expectedCode": "130298"
+        }
+      ]
+    }
+  ]
+}

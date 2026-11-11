@@ -1,0 +1,2744 @@
+{
+  "specVersion": 1,
+  "id": "cn.general.default",
+  "name": "中文通用验证码规则",
+  "description": "中文短信环境的验证码兜底规则：覆盖原 SmsCodeConst 简繁关键词清单，一词一条规则（引擎对 OFFICIAL 规则按字面量包含匹配关键词）。",
+  "locale": "zh-CN",
+  "updatedAt": "2026-10-06T00:58:39+08:00",
+  "rules": [
+    {
+      "id": "cn-default-numeric-code",
+      "company": null,
+      "codeKeyword": "验证码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文场景下的 4-8 位纯数字验证码兜底规则。",
+      "examples": [
+        {
+          "body": "【招商银行】您的验证码是 839201，切勿泄露给他人。",
+          "expectedCode": "839201"
+        },
+        {
+          "body": "【中国移动】验证码：194820，用于办理业务，2分钟内有效。",
+          "expectedCode": "194820"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-code",
+      "company": null,
+      "codeKeyword": "验证码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文场景下的 4-8 位混合验证码兜底规则。",
+      "examples": [
+        {
+          "body": "【腾讯科技】您的动态密码为 K9X2P4，请在验证码框中输入。",
+          "expectedCode": "K9X2P4"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-jiaoyanma",
+      "company": null,
+      "codeKeyword": "校验码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的校验码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-jiaoyanma",
+      "company": null,
+      "codeKeyword": "校验码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的校验码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-jianyanma",
+      "company": null,
+      "codeKeyword": "检验码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的检验码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-jianyanma",
+      "company": null,
+      "codeKeyword": "检验码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的检验码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-querenma",
+      "company": null,
+      "codeKeyword": "确认码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的确认码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-querenma",
+      "company": null,
+      "codeKeyword": "确认码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的确认码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-jihuoma",
+      "company": null,
+      "codeKeyword": "激活码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的激活码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-jihuoma",
+      "company": null,
+      "codeKeyword": "激活码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的激活码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-dongtaima",
+      "company": null,
+      "codeKeyword": "动态码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的动态码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-dongtaima",
+      "company": null,
+      "codeKeyword": "动态码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的动态码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-anquanma",
+      "company": null,
+      "codeKeyword": "安全码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的安全码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-anquanma",
+      "company": null,
+      "codeKeyword": "安全码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的安全码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-yanzhengdaima",
+      "company": null,
+      "codeKeyword": "验证代码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的验证代码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-yanzhengdaima",
+      "company": null,
+      "codeKeyword": "验证代码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的验证代码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-jiaoyandaima",
+      "company": null,
+      "codeKeyword": "校验代码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的校验代码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-jiaoyandaima",
+      "company": null,
+      "codeKeyword": "校验代码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的校验代码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-jianyandaima",
+      "company": null,
+      "codeKeyword": "检验代码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的检验代码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-jianyandaima",
+      "company": null,
+      "codeKeyword": "检验代码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的检验代码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-jihuodaima",
+      "company": null,
+      "codeKeyword": "激活代码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的激活代码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-jihuodaima",
+      "company": null,
+      "codeKeyword": "激活代码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的激活代码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-querendaima",
+      "company": null,
+      "codeKeyword": "确认代码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的确认代码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-querendaima",
+      "company": null,
+      "codeKeyword": "确认代码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的确认代码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-dongtaidaima",
+      "company": null,
+      "codeKeyword": "动态代码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的动态代码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-dongtaidaima",
+      "company": null,
+      "codeKeyword": "动态代码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的动态代码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-anquandaima",
+      "company": null,
+      "codeKeyword": "安全代码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的安全代码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-anquandaima",
+      "company": null,
+      "codeKeyword": "安全代码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的安全代码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-dengruma",
+      "company": null,
+      "codeKeyword": "登入码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的登入码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-dengruma",
+      "company": null,
+      "codeKeyword": "登入码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的登入码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-renzhengma",
+      "company": null,
+      "codeKeyword": "认证码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的认证码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-renzhengma",
+      "company": null,
+      "codeKeyword": "认证码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的认证码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-shibiema",
+      "company": null,
+      "codeKeyword": "识别码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的识别码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-shibiema",
+      "company": null,
+      "codeKeyword": "识别码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的识别码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-duanxinkouling",
+      "company": null,
+      "codeKeyword": "短信口令",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的短信口令是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-duanxinkouling",
+      "company": null,
+      "codeKeyword": "短信口令",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的短信口令为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-dongtaimima",
+      "company": null,
+      "codeKeyword": "动态密码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的动态密码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-dongtaimima",
+      "company": null,
+      "codeKeyword": "动态密码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的动态密码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-yanzhengmima",
+      "company": null,
+      "codeKeyword": "验证密码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的验证密码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-yanzhengmima",
+      "company": null,
+      "codeKeyword": "验证密码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的验证密码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-jiaoyima",
+      "company": null,
+      "codeKeyword": "交易码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的交易码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-jiaoyima",
+      "company": null,
+      "codeKeyword": "交易码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的交易码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-shangwangmima",
+      "company": null,
+      "codeKeyword": "上网密码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的上网密码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-shangwangmima",
+      "company": null,
+      "codeKeyword": "上网密码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的上网密码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-suijima",
+      "company": null,
+      "codeKeyword": "随机码",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的随机码是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-suijima",
+      "company": null,
+      "codeKeyword": "随机码",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的随机码为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-dongtaikouling",
+      "company": null,
+      "codeKeyword": "动态口令",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的动态口令是 482910，请勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-dongtaikouling",
+      "company": null,
+      "codeKeyword": "动态口令",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服务】您的动态口令为 AB12CD，请勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-t-yanzhengma",
+      "company": null,
+      "codeKeyword": "驗證碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的驗證碼是 482910，請勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-t-yanzhengma",
+      "company": null,
+      "codeKeyword": "驗證碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的驗證碼為 AB12CD，請勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-t-jiaoyanma",
+      "company": null,
+      "codeKeyword": "校驗碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的校驗碼是 482910，請勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-t-jiaoyanma",
+      "company": null,
+      "codeKeyword": "校驗碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的校驗碼為 AB12CD，請勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-t-jianyanma",
+      "company": null,
+      "codeKeyword": "檢驗碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的檢驗碼是 482910，請勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-t-jianyanma",
+      "company": null,
+      "codeKeyword": "檢驗碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的檢驗碼為 AB12CD，請勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-t-querenma",
+      "company": null,
+      "codeKeyword": "確認碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的確認碼是 482910，請勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-t-querenma",
+      "company": null,
+      "codeKeyword": "確認碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的確認碼為 AB12CD，請勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-t-jihuoma",
+      "company": null,
+      "codeKeyword": "激活碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的激活碼是 482910，請勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-t-jihuoma",
+      "company": null,
+      "codeKeyword": "激活碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的激活碼為 AB12CD，請勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-t-dongtaima",
+      "company": null,
+      "codeKeyword": "動態碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的動態碼是 482910，請勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-t-dongtaima",
+      "company": null,
+      "codeKeyword": "動態碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的動態碼為 AB12CD，請勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-t-yanzhengdaima",
+      "company": null,
+      "codeKeyword": "驗證代碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的驗證代碼是 482910，請勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-t-yanzhengdaima",
+      "company": null,
+      "codeKeyword": "驗證代碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的驗證代碼為 AB12CD，請勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-t-jiaoyandaima",
+      "company": null,
+      "codeKeyword": "校驗代碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的校驗代碼是 482910，請勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-t-jiaoyandaima",
+      "company": null,
+      "codeKeyword": "校驗代碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的校驗代碼為 AB12CD，請勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-t-jianyandaima",
+      "company": null,
+      "codeKeyword": "檢驗代碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的檢驗代碼是 482910，請勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-t-jianyandaima",
+      "company": null,
+      "codeKeyword": "檢驗代碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的檢驗代碼為 AB12CD，請勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-t-querendaima",
+      "company": null,
+      "codeKeyword": "確認代碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的確認代碼是 482910，請勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-t-querendaima",
+      "company": null,
+      "codeKeyword": "確認代碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的確認代碼為 AB12CD，請勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-t-jihuodaima",
+      "company": null,
+      "codeKeyword": "激活代碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的激活代碼是 482910，請勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-t-jihuodaima",
+      "company": null,
+      "codeKeyword": "激活代碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的激活代碼為 AB12CD，請勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-t-dongtaidaima",
+      "company": null,
+      "codeKeyword": "動態代碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的動態代碼是 482910，請勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-t-dongtaidaima",
+      "company": null,
+      "codeKeyword": "動態代碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的動態代碼為 AB12CD，請勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-t-dengruma",
+      "company": null,
+      "codeKeyword": "登入碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的登入碼是 482910，請勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-t-dengruma",
+      "company": null,
+      "codeKeyword": "登入碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的登入碼為 AB12CD，請勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-t-renzhengma",
+      "company": null,
+      "codeKeyword": "認證碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的認證碼是 482910，請勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-t-renzhengma",
+      "company": null,
+      "codeKeyword": "認證碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的認證碼為 AB12CD，請勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-numeric-t-shibiema",
+      "company": null,
+      "codeKeyword": "識別碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的識別碼是 482910，請勿泄露。",
+          "expectedCode": "482910"
+        }
+      ]
+    },
+    {
+      "id": "cn-default-alphanumeric-t-shibiema",
+      "company": null,
+      "codeKeyword": "識別碼",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes",
+        "元",
+        "角",
+        "分",
+        "块",
+        "年",
+        "月",
+        "日",
+        "号",
+        "时",
+        "点",
+        "點",
+        "秒"
+      ],
+      "notes": "中文关键词字面量兜底规则（OFFICIAL 规则按包含匹配，一词一条）。",
+      "examples": [
+        {
+          "body": "【示例服務】您的識別碼為 AB12CD，請勿泄露。",
+          "expectedCode": "AB12CD"
+        }
+      ]
+    }
+  ]
+}

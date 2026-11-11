@@ -11,6 +11,185 @@
 
 ---
 
+## 2026-11-11 · 短信验证码提取改用规则库引擎
+
+### 背景
+
+要求参考 https://github.com/magisk317/xinyi-relay 完善验证码提取。
+
+改造前的提取逻辑在 `SmartActionEngine.extractVerificationCode`，是「关键字 + 抓最近的
+4~8 位数字」的启发式。实测下来有两类系统性漏报：
+
+| 短信 | 旧实现 | 问题 |
+|---|---|---|
+| `【支付宝】验证码 839201，请勿泄露。` | 取不到 | 关键字与码之间的分隔符处理不足 |
+| `【美团】动态密码 K9X2P4` | 取不到 | **字母数字混合码完全不支持** |
+| `【京东】订单金额 2000元，验证码为 883921。` | 取到 2000 | 码前有无关数字时按"最近距离"取错 |
+
+参考项目的核心是 `smscode-core`（GitLab 子模块），采用**规则库**模型：
+每条规则是「关键字 + 取码正则 + 后缀黑名单」三元组，只在自己那条短信模板命中时
+才产出候选，而不是"全文本抓数字再挑最近的"。
+
+### 关键发现:smscode-core 无法作为 Gradle 依赖引入
+
+先验证了三种引入方式，结论是**只能源码内置**：
+
+- GitLab packages API 返回空 —— 没有发布过任何 Maven 构件；
+- Maven Central 搜 `magisk317` 零结果；
+- 仓库只有源码 + release tag，且 `rule` 模块依赖自定义 convention 插件
+  (`magisk.kotlin.library`) 与 `build-logic` 子模块，直接作为 composite build
+  引入要把整套构建体系一起搬进来。
+
+所以采用**源码级内置**：把 `rule` 模块里实际需要的 8 个文件拷进
+`app/src/main/java/clip/yixing/sync/sms/rules/`，包名改为本地包。算法逻辑一行未改，
+这样行为与参考项目严格一致，也不需要重写。
+
+### 方案
+
+1. **内置引擎** `sms/rules/`（8 个文件，来自 smscode-core 的 `rule` 模块）：
+   `SmsCodeUtils`（规则流水线）、`SmsCodeRuleSpec` / `SmsCodeParseResult` /
+   `SmsCodeRuleSetModels` / `SmsCodeRuleCatalogModels`（模型）、
+   `BuiltinSmsCodeRuleSpec`、`AppLabelResolver`、`SmsCodeRuleMerger`。
+   只依赖 `kotlinx-serialization-json`，无 Android 依赖。
+
+2. **规则库** `assets/smscode-rules/`：从 `magisk-smscode-rules` 仓库取中文规则集
+   共 6 个文件、**84 条规则、86 条官方样例**（通用兜底 78 条 + 银行/运营商/门户定向规则）。
+
+3. **规则库加载与更新** `SmsCodeRuleStore`：
+   - 优先级：远端缓存 > 内置快照；
+   - `updateFromRemote()` 从可配置 URL 拉取并落盘，失败静默回退；
+   - 任何一步失败都回退到内置快照 —— 规则库缺失会让所有短信都提取不到，
+     比"规则稍旧"严重得多。
+
+4. **接入** `SmsCodeHandler`：改为规则库优先，规则库不可用时回退旧的启发式。
+   回退不是摆设：assets 被裁剪或远端规则格式变更时，没有回退等于全线失效。
+
+5. **设置页** 新增「识别规则库」区块：显示当前规则条数与来源（内置/远端），
+   提供「更新识别规则库」入口。
+
+### 验证
+
+新增 `app/src/test/.../SmsCodeRuleEngineTest.kt`，**跑真实 Kotlin 引擎**（非复刻）：
+
+| 用例 | 结果 |
+|---|---|
+| 规则集加载 | **84 条规则**成功加载 |
+| 全部内置官方样例 | **86/86 通过** |
+| 真实短信与噪声场景 | **10/10 通过**（含 4 个必须拒绝：尾号、订单号、带链接营销、快递单号） |
+
+`./gradlew :app:testDebugUnitTest` 通过，`assembleDebug` 通过，规则集确认已打进
+APK（`assets/smscode-rules/*.json`）。
+
+对照：同一批场景下旧启发式通过 5/9，主要失分在字母数字混合码与"码前有干扰数字"。
+
+### 验证边界
+
+**已验证**：规则引擎语义（86 官方样例 + 10 真实场景）、构建产物、规则打包。
+
+**未验证**：
+- **端到端真机链路未跑**：验证期间设备断开（`adb devices` 为空），
+  未能用 `adb` 构造 `SMS_RECEIVED` 广播实际触发 `SmsCodeReceiver → SmsCodeHandler`。
+  单测覆盖的是解析逻辑，接收器/权限/通知链路属既有代码，本次未改。
+- **远端更新未实测**：`updateFromRemote` 的网络拉取未在真机跑过，
+  默认源 URL 是否可达未确认（GitLab raw 地址，国内网络可能需代理）。
+- 规则库只内置了中文（`rules/cn`），未包含 `global`/`ru`/`ar`/`fa`/`vi` 等其他语种。
+
+### 遗留问题
+
+- `SmsCodeRuleMerger` 已内置但当前未被调用；它服务于"用户自定义规则与官方规则合并"，
+  本次未做自定义规则 UI，留作后续。
+- 规则源 URL 目前只能通过 `SyncSettings.setSmsCodeRuleSourceUrl` 改，
+  设置页还没有输入框（只用默认源）。
+- 无校验和：`updateFromRemote` 刻意没做 SHA-256 比对，理由写在代码注释里。
+  若要收紧，应补的就是这个。
+
+---
+
+## 2026-11-11 · 层级页面导航动画统一为 HyperIsland 模型
+
+### 背景
+
+要求「完全按照 https://github.com/1812z/HyperIsland 设计」。核对后发现，改造前项目里
+**同一个动作有四种不同实现**，参数各写各的：
+
+| 位置 | 原实现 | 问题 |
+|---|---|---|
+| `ui/SettingsPage.kt` | `AnimatedContent` + `SettingsNavTransitions.push/pop()`：新页整屏滑入、旧页只退 `-it/4` | 底层不缩放不暗化，`baseProgress` 是 0/1 二值跳变；**完全没有跟手返回**（旧注释明写"放弃"） |
+| `ui/RecordsPage.kt` 记录详情 | `Animatable` + 手搓 `graphicsLayer` `translationX = p*width` | 跟手有，但缓动在 `snapTo` 前手动套 `FastOutSlowInEasing`，与设置页不同源 |
+| `MainActivity.kt` 扫码页 / 即时互传页 | 同样的 `p*width` recipe | 底层 pager 完全不动，观感是「盖上来」而非「推进」 |
+| `ui/RecordsPage.kt` 全屏搜索页 | `PageShell.predictiveBackAnimation`（唯一使用者） | 又一套曲线：0.28 视差、缩放到 0.92、圆角裁切 |
+
+### 方案
+
+新增 `ui/nav/PredictiveNavigation.kt`，把 HyperIsland 的三个文件合并移植：
+`PredictiveBackMotion.kt`（速度跟踪 + 结算缓动）、`PredictiveNavigationLayer.kt`
+（层状态机 + 变换 + 返回处理）、`BlurBars.kt` 的 `PredictiveBackBackdrop`（暗化）。
+
+参数逐条照搬参考实现：进入 420ms / 退出 380ms + `FastOutSlowInEasing`；
+底层 `scale → 0.965`、`translationX → -2.5%`；手势期用 `smootherStep` 驱动暗化
+（`windowDimming × 0.16`，有 backdrop 时叠加 blur 12dp）；松手用释放速度算
+`CubicBezierEasing(0.3, ≤0.42, 0.35, 1)` 结算，取消 280ms。
+
+**三处有意偏离参考实现**（均已写进文件头注释）：
+
+1. `maxTranslationPercent` 复用已有的 `SyncSettings.predictiveBackMaxProgressPercent`
+   （默认 40%），而不是 HyperIsland 的固定 50%。
+2. 背景 backdrop 走**显式传参**而非 CompositionLocal —— NexClip 全项目只用显式传参。
+   传 `null` 时暗化退化为纯色遮罩，与 miuix 在无 RuntimeShader 时的降级一致。
+3. 栈宿主泛化为**任意深度**。HyperIsland 只有固定 2~3 层，而设置页最长四级
+   （设置→通知与隐私→短信验证码→短信记录），所以改成按"深度槽位"渲染：
+   槽位长期保留，压栈时内容不变，出栈时 `visible` 变 false 让退场页滑完。
+
+### 改动清单（仅 Android 端）
+
+- 新增 `ui/nav/PredictiveNavigation.kt`
+- `ui/SettingsPage.kt`：`AnimatedContent` 块 + 二值 recede + 黑遮罩 → `PredictiveNavigationStack`
+- `ui/RecordsPage.kt`：记录详情改用 `PredictiveNavigationLayer`；搜索页改用
+  `predictiveNavigationTransform` 统一曲线
+- `MainActivity.kt`：扫码页 / 即时互传页改用 `PredictiveNavigationLayer`，
+  底层 pager 加 `predictiveNavigationBackground` + 暗化
+- 删除 `ui/SettingsNavTransitions.kt`（`DampedEasing` + `push/pop` 失去唯一调用点）
+- 删除 `PageShell.predictiveBackAnimation`（搜索页是唯一使用者）
+
+### 验证边界
+
+**已验证**：
+- `./gradlew :app:assembleDebug` 构建成功。
+- `:app:compileDebugKotlin` 零新增警告（现存 8 条全部在本次未触碰的文件里）。
+- 真机（`8d5e85d9`）安装 + 启动通过：`adb install -r` 成功，`MainActivity` 正常起来，
+  logcat 无 FATAL / hwui 崩溃，设置页二级页面（通知与隐私）显示与导航正常。
+
+**未验证（重要）**：
+- 仅做了目视确认，**没有逐项跑完下面的清单**。位移/缩放的中间帧、跟手跟手性、
+  松手结算曲线没有抓帧或录屏核对过。
+- `PredictiveBackBackdrop` 目前**只走纯色降级分支**：`SettingsPage` 等调用点没有传
+  `backdropFor`，取默认值 `{ null }`，所以 `textureBlur` 那条路一次都没执行过。
+  叠加的 `windowDimming × 0.16` 观感上几乎不可见 —— 即「返回时底层暗化/模糊」目前
+  实际上没生效。这是已知且**有意保留**的状态（用户确认无所谓，不强改）。
+  若要真正启用模糊，需要给 base 页单独包一份 `rememberLayerBackdrop`
+  再通过 `backdropFor` 传入；注意 `MainActivity` 注释里记录的 hwui `GraphicsLayer`
+  自引用崩溃约束。
+- 四级链路（短信验证码 → 短信记录）的实际逐级返回未测。
+
+**真机需逐项确认**：
+1. 设置：主页 → 通知与隐私 → 短信验证码 → 短信记录，逐级返回不露底、不闪烁
+2. 记录详情返回；详情内编辑态返回应先退编辑再退页面
+3. 首页 → 扫一扫 / 即时互传；剪贴板 → 搜索页（有键盘时先收键盘）
+4. 关闭「预测返回手势」后，上述返回应退回普通进出场动画
+5. 拖动「预测返回最大进度」滑块（10%/40%/100%）后位移幅度随之变化
+6. 底层应出现 `scale 0.965` + 左移 + 暗化；慢拖到一半松手回弹、快甩直接退场
+7. 回归：底栏在二级页期间隐藏、退回一级后恢复；无 hwui 崩溃
+
+### 遗留问题
+
+- `PredictiveNavigationStack` 里 `retained` 快照在组合期写入（不是 state），
+  这违反了 Compose 的"组合期不应有副作用"约束。当前依赖 `stack` 变化触发重组
+  才成立，属于能用但不干净；若后续出现退场页空白，应改为在 `LaunchedEffect` 里更新。
+- `ui/HomePage.kt` 的 `onOverlayActiveChanged` 声明后从未被调用（改造前就是这样），
+  `isOverlayActiveHome` 恒为 false。本次未动，但与导航状态有关，留作待办。
+
+---
+
 ## 2026-10-23 · 服务端部署目录纳入 git 管理
 
 ### 背景

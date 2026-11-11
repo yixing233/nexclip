@@ -2,6 +2,7 @@ plugins {
     alias(libs.plugins.agp.app)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.compose.compiler)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -75,6 +76,10 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.signalr)
     implementation(libs.kotlinx.coroutines.android)
+    // 短信验证码规则库的 JSON 反序列化(见 sms/rules)
+    implementation(libs.kotlinx.serialization.json)
+
+    testImplementation("junit:junit:4.13.2")
     implementation("com.xzakota.hyper.notification:focus-api:1.4")
 
     // Miuix

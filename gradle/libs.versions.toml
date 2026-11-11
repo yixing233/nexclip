@@ -23,6 +23,7 @@ shizuku = "13.1.5"
 agp-app = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 
 [libraries]
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity-compose" }
@@ -55,3 +56,4 @@ miuix-blur = { group = "top.yukonga.miuix.kmp", name = "miuix-blur-android", ver
 navigationevent-compose = { group = "androidx.navigationevent", name = "navigationevent-compose-android", version.ref = "navigationevent" }
 tabler-icons-outline = { group = "com.composables", name = "icons-tabler-outline-cmp", version.ref = "compose-icons" }
 tabler-icons-filled = { group = "com.composables", name = "icons-tabler-filled-cmp", version.ref = "compose-icons" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version = "1.9.0" }

@@ -1,0 +1,24 @@
+{
+  "specVersion": 1,
+  "id": "cn.portal.unified-login",
+  "name": "统一门户登录",
+  "description": "Rules for enterprise or campus unified portal login verification messages.",
+  "locale": "zh-CN",
+  "updatedAt": "2026-06-13T00:00:00+08:00",
+  "rules": [
+    {
+      "id": "sdp-login-code-after-label",
+      "company": "SDP统一门户",
+      "codeKeyword": "登录验证码",
+      "codeRegex": "(?:(?<=登录验证码[:：])|(?<=登录验证码为[:：]))\\d{4,8}",
+      "priority": 120,
+      "notes": "命中“登录验证码:123456”或“登录验证码为:123456”这类统一门户登录短信。",
+      "examples": [
+        {
+          "body": "您好, 请确认是您本人操作，用户150********登录验证码为:203497，有效期5分钟。[SDP统一门户]",
+          "expectedCode": "203497"
+        }
+      ]
+    }
+  ]
+}

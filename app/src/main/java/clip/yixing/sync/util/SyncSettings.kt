@@ -70,6 +70,7 @@ object SyncSettings {
     // 这里管的是「接收短信并提取」, 两者独立开关, 改动其一不影响既有的用户设置。
     const val KEY_SMS_CODE_ENABLED = "sms_code_enabled"
     const val KEY_SMS_CODE_AUTOFILL = "sms_code_autofill"
+    const val KEY_SMS_CODE_RULE_SOURCE = "sms_code_rule_source"
 
     val GLOW_COLORS = listOf(
         "#006EFF" to "经典科技蓝",
@@ -226,6 +227,16 @@ object SyncSettings {
 
     fun setSmsCodeAutofill(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_SMS_CODE_AUTOFILL, enabled).apply()
+    }
+
+    /** 验证码规则库的远端地址;未设置时用内置默认源 */
+    fun smsCodeRuleSourceUrl(context: Context): String =
+        prefs(context).getString(KEY_SMS_CODE_RULE_SOURCE, null)
+            ?: clip.yixing.sync.sms.rules.SmsCodeRuleStore.DEFAULT_RULE_SOURCE_URL
+
+    fun setSmsCodeRuleSourceUrl(context: Context, url: String) {
+        prefs(context).edit().putString(KEY_SMS_CODE_RULE_SOURCE, url).apply()
+        clip.yixing.sync.sms.rules.SmsCodeRuleStore.invalidate()
     }
 
     fun prefs(context: Context): SharedPreferences =

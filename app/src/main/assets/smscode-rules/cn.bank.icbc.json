@@ -1,0 +1,24 @@
+{
+  "specVersion": 1,
+  "id": "cn.bank.icbc",
+  "name": "中国工商银行",
+  "description": "工商银行验证密码类短信模板。",
+  "locale": "zh-CN",
+  "updatedAt": "2026-10-22T10:55:00+08:00",
+  "rules": [
+    {
+      "id": "verification-password-after-label",
+      "company": "工商银行",
+      "codeKeyword": "验证密码",
+      "codeRegex": "(?<=验证密码[:：])\\d{4,8}",
+      "priority": 120,
+      "notes": "优先于通用“验证码”规则，避免把“短信编号”当成验证码。",
+      "examples": [
+        {
+          "body": "您的手机号验证业务短信验证密码：123456，（短信编号：1001），请勿泄露短信验证码。【工商银行】",
+          "expectedCode": "123456"
+        }
+      ]
+    }
+  ]
+}

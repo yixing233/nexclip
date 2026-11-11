@@ -8,6 +8,8 @@ import clip.yixing.sync.service.CapturedClip
 import clip.yixing.sync.service.ClipboardMonitorService
 import clip.yixing.sync.service.SyncNotificationManager
 import clip.yixing.sync.smartaction.SmartActionEngine
+import clip.yixing.sync.sms.rules.SmsCodeRuleStore
+import clip.yixing.sync.sms.rules.SmsCodeUtils
 import clip.yixing.sync.util.SyncSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -68,7 +70,7 @@ object SmsCodeHandler {
 
         // 记录仅包含处理状态与验证码，不保存短信正文或发件人。
         // 未命中的短信也入记录，方便用户确认系统广播是否到达。
-        val code = SmartActionEngine.extractVerificationCode(body) ?: run {
+        val code = extractCode(appContext, body) ?: run {
             SmsCodeRecordStore.add(appContext, SmsCodeRecordStore.Status.NOT_FOUND)
             Log.d(TAG, "sms received but no verification code matched")
             return null
@@ -91,8 +93,38 @@ object SmsCodeHandler {
         return code
     }
 
-    private fun isDuplicate(code: String): Boolean {
-        val now = System.currentTimeMillis()
+    /**
+     * 用规则库引擎提取验证码,规则库不可用时回退到 SmartActionEngine 的启发式。
+     *
+     * 为什么以规则库为主:规则库是「关键字 + 取码正则」成对匹配,每条规则只在
+     * 对应短信模板命中时才产出候选;而启发式是"找离关键字最近的 4~8 位数字",
+     * 在含多个数字的营销短信上容易取错。参考实现(短信中继类项目)实测语料覆盖
+     * 得比启发式好得多。
+     *
+     * 回退路径不是摆设:规则库全部解析失败(如 assets 被裁剪、远端规则格式变更)
+     * 时,没有回退就等于所有短信都提取不到,这比"偶尔取错"严重。
+     */
+    private fun extractCode(context: Context, body: String): String? {
+        val rules = runCatching { SmsCodeRuleStore.rules(context) }.getOrDefault(emptyList())
+        if (rules.isNotEmpty()) {
+            val parsed = runCatching {
+                SmsCodeUtils.parseSmsCode(
+                    content = body,
+                    // 内置规则的 codeKeywordHint 是占位符,真实关键字由规则自身携带;
+                    // 这里传空串避免追加多余的"用户自定义关键字"通用规则。
+                    keywordsRegex = "",
+                    rules = rules,
+                )
+            }.onFailure { Log.w(TAG, "rule engine parse failed: ${it.message}") }
+                .getOrNull()
+            if (!parsed.isNullOrBlank()) return parsed
+        } else {
+            Log.w(TAG, "no rules available, falling back to heuristic extractor")
+        }
+        return runCatching { SmartActionEngine.extractVerificationCode(body) }.getOrNull()
+    }
+
+    private fun isDuplicate(code: String): Boolean {        val now = System.currentTimeMillis()
         recentCodes.entries.removeIf { now - it.value > DEDUP_WINDOW_MILLIS }
         val last = recentCodes[code]
         if (last != null && now - last <= DEDUP_WINDOW_MILLIS) return true

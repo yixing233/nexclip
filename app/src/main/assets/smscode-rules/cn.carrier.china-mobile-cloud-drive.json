@@ -1,0 +1,38 @@
+{
+  "specVersion": 1,
+  "id": "cn.carrier.china-mobile-cloud-drive",
+  "name": "中国移动云盘",
+  "description": "Rules for China Mobile Cloud Drive activity and account verification messages.",
+  "locale": "zh-CN",
+  "updatedAt": "2026-05-01T00:00:00+08:00",
+  "rules": [
+    {
+      "id": "reward-code-after-label",
+      "company": "中国移动云盘",
+      "codeKeyword": "领奖验证码",
+      "codeRegex": "(?<=领奖验证码[:：])\\d{4,8}",
+      "priority": 110,
+      "notes": "命中会员日等活动领奖激活短信中的领奖验证码。",
+      "examples": [
+        {
+          "body": "【验证密码】领奖验证码:1234，5分钟有效；尊敬的用户，您正在中国移动互联网自有渠道“移动云盘会员日”系列活动领取活动奖品，资费0元，领取成功后，请在本月内前往“移动云盘APP-我的-领奖专区”进行领奖激活，请保管好您的验证码切勿泄露给他人。如非本人操作请忽略。逾期未激活则视为放弃奖品。【中国移动云盘】",
+          "expectedCode": "1234"
+        }
+      ]
+    },
+    {
+      "id": "generic-verification-code",
+      "company": "中国移动云盘",
+      "codeKeyword": "验证密码",
+      "codeRegex": "\\d{4,8}",
+      "priority": 90,
+      "notes": "兜底规则，用于品牌位于正文尾部且前缀写作“验证密码”的模板。",
+      "examples": [
+        {
+          "body": "【验证密码】领奖验证码:1234，5分钟有效；尊敬的用户，您正在中国移动互联网自有渠道“移动云盘会员日”系列活动领取活动奖品，资费0元，领取成功后，请在本月内前往“移动云盘APP-我的-领奖专区”进行领奖激活，请保管好您的验证码切勿泄露给他人。如非本人操作请忽略。逾期未激活则视为放弃奖品。【中国移动云盘】",
+          "expectedCode": "1234"
+        }
+      ]
+    }
+  ]
+}

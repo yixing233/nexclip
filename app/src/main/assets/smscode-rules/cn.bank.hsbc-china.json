@@ -1,0 +1,24 @@
+{
+  "specVersion": 1,
+  "id": "cn.bank.hsbc-china",
+  "name": "汇丰银行中国",
+  "description": "Rules for HSBC China verification SMS templates.",
+  "locale": "zh-CN",
+  "updatedAt": "2026-05-01T00:00:00+08:00",
+  "rules": [
+    {
+      "id": "verification-code-after-label",
+      "company": "汇丰银行中国",
+      "codeKeyword": "验证码",
+      "codeRegex": "(?<=验证码[:：])\\d{4,8}",
+      "priority": 100,
+      "notes": "命中“验证码:123456”这类标准银行短信格式。",
+      "examples": [
+        {
+          "body": "【汇丰银行中国】验证码:961886。该验证码用于购买特惠商品，五分钟内输入有效，任何人索取验证码均为诈骗，切勿泄露。",
+          "expectedCode": "961886"
+        }
+      ]
+    }
+  ]
+}
