@@ -6,14 +6,22 @@ import android.content.pm.PackageManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -24,6 +32,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -33,6 +42,9 @@ import clip.yixing.sync.paste.NexClipAccessibilityService
 import clip.yixing.sync.showAppSnack
 import clip.yixing.sync.sms.rules.SmsCodeRuleStore
 import clip.yixing.sync.ui.PageShell
+import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.window.WindowDialog
 import clip.yixing.sync.ui.SectionBlock
 import clip.yixing.sync.util.SyncSettings
 import kotlinx.coroutines.launch
@@ -67,6 +79,15 @@ fun SmsCodeSettingsPage(
     // 规则库:条数摘要 + 更新中状态
     var updatingRules by remember { mutableStateOf(false) }
     var ruleSummary by remember { mutableStateOf(buildRuleSummary(context)) }
+
+    // 诊断日志弹窗
+    var showDiagLog by remember { mutableStateOf(false) }
+    var diagLogText by remember { mutableStateOf("") }
+
+    // 每次打开弹窗时重新读取(日志是追加写的,不在组合期缓存)
+    LaunchedEffect(showDiagLog) {
+        if (showDiagLog) diagLogText = SmsDiagLog.readAll(context)
+    }
 
     fun hasSmsPermission(): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.RECEIVE_SMS) ==
@@ -209,6 +230,12 @@ fun SmsCodeSettingsPage(
                         summary = "确认短信接收与验证码提取是否正常",
                         onClick = onOpenRecords
                     )
+                    ArrowPreference(
+                        title = "查看诊断日志",
+                        summary = "日用几天后回看：每条短信走到了哪一步、命中哪条规则。" +
+                            "只记录统计特征（长度/关键字有无/数字个数），不含短信正文",
+                        onClick = { showDiagLog = true }
+                    )
                 }
             }
 
@@ -262,6 +289,54 @@ fun SmsCodeSettingsPage(
                             "短信正文既不落盘也不上传，未识别出验证码的短信会被直接丢弃",
                         onClick = {}
                     )
+                }
+            }
+        }
+    }
+
+    // 诊断日志弹窗:日用几天后回看用
+    if (showDiagLog) {
+        WindowDialog(
+            show = true,
+            title = "短信诊断日志",
+            summary = "只记录结构化特征，不含短信正文。可复制后反馈给开发者。",
+            onDismissRequest = { showDiagLog = false },
+        ) {
+            Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                val scrollState = rememberScrollState()
+                Text(
+                    text = diagLogText.ifBlank { "暂无日志。收到短信后这里会出现记录。" },
+                    fontSize = 11.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp)
+                        .verticalScroll(scrollState),
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            runCatching {
+                                val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                    as android.content.ClipboardManager
+                                cm.setPrimaryClip(
+                                    android.content.ClipData.newPlainText("diag", diagLogText)
+                                )
+                            }
+                            showDiagLog = false
+                            scope.launch {
+                                snackbarHostState.showAppSnack("日志已复制", SnackType.Success)
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("复制") }
+                    Button(
+                        onClick = {
+                            SmsDiagLog.clear(context)
+                            diagLogText = ""
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("清空") }
                 }
             }
         }

@@ -65,23 +65,45 @@ object SmsCodeHandler {
      */
     fun handle(context: Context, body: String): String? {
         val appContext = context.applicationContext
-        if (!SyncSettings.smsCodeEnabled(appContext)) return null
-        if (body.isBlank()) return null
+        if (!SyncSettings.smsCodeEnabled(appContext)) {
+            SmsDiagLog.log(appContext, SmsDiagLog.Stage.IGNORED_ACTION, "sms disabled by setting")
+            return null
+        }
+        if (body.isBlank()) {
+            SmsDiagLog.log(appContext, SmsDiagLog.Stage.EMPTY_BODY, "blank body")
+            return null
+        }
 
         // 记录仅包含处理状态与验证码，不保存短信正文或发件人。
         // 未命中的短信也入记录，方便用户确认系统广播是否到达。
-        val code = extractCode(appContext, body) ?: run {
+        val extraction = extractCodeWithSource(appContext, body)
+        val code = extraction.code ?: run {
             SmsCodeRecordStore.add(appContext, SmsCodeRecordStore.Status.NOT_FOUND)
+            SmsDiagLog.log(
+                appContext,
+                SmsDiagLog.Stage.NOT_FOUND,
+                "engine=${extraction.engine} rules=${extraction.ruleCount}",
+            )
             Log.d(TAG, "sms received but no verification code matched")
             return null
         }
 
         if (isDuplicate(code)) {
             SmsCodeRecordStore.add(appContext, SmsCodeRecordStore.Status.DUPLICATE, code)
+            SmsDiagLog.log(
+                appContext,
+                SmsDiagLog.Stage.DUPLICATE,
+                "engine=${extraction.engine} code=$code",
+            )
             Log.d(TAG, "duplicate code within dedup window, ignored")
             return null
         }
         SmsCodeRecordStore.add(appContext, SmsCodeRecordStore.Status.EXTRACTED, code)
+        SmsDiagLog.log(
+            appContext,
+            SmsDiagLog.Stage.EXTRACTED,
+            "engine=${extraction.engine} rules=${extraction.ruleCount} code=$code",
+        )
 
         writeToClipboard(appContext, code)
         notifyCode(appContext, code)
@@ -94,6 +116,18 @@ object SmsCodeHandler {
     }
 
     /**
+     * 提取结果 + 来源信息。来源用于诊断日志,不影响提取逻辑本身。
+     *
+     * @param engine 实际产出结果的引擎:rules / heuristic / none
+     * @param ruleCount 当次可用的规则条数(0 表示规则库整体不可用)
+     */
+    private data class Extraction(
+        val code: String?,
+        val engine: String,
+        val ruleCount: Int,
+    )
+
+    /**
      * 用规则库引擎提取验证码,规则库不可用时回退到 SmartActionEngine 的启发式。
      *
      * 为什么以规则库为主:规则库是「关键字 + 取码正则」成对匹配,每条规则只在
@@ -104,7 +138,7 @@ object SmsCodeHandler {
      * 回退路径不是摆设:规则库全部解析失败(如 assets 被裁剪、远端规则格式变更)
      * 时,没有回退就等于所有短信都提取不到,这比"偶尔取错"严重。
      */
-    private fun extractCode(context: Context, body: String): String? {
+    private fun extractCodeWithSource(context: Context, body: String): Extraction {
         val rules = runCatching { SmsCodeRuleStore.rules(context) }.getOrDefault(emptyList())
         if (rules.isNotEmpty()) {
             val parsed = runCatching {
@@ -115,13 +149,32 @@ object SmsCodeHandler {
                     keywordsRegex = "",
                     rules = rules,
                 )
-            }.onFailure { Log.w(TAG, "rule engine parse failed: ${it.message}") }
+            }.onFailure {
+                Log.w(TAG, "rule engine parse failed: ${it.message}")
+                SmsDiagLog.log(context, SmsDiagLog.Stage.ERROR, "ruleEngine=${it.javaClass.simpleName}")
+            }
                 .getOrNull()
-            if (!parsed.isNullOrBlank()) return parsed
-        } else {
-            Log.w(TAG, "no rules available, falling back to heuristic extractor")
+            if (!parsed.isNullOrBlank()) {
+                return Extraction(parsed, engine = "rules", ruleCount = rules.size)
+            }
+            // 规则库没命中:继续走启发式,但把 "rules 未命中" 记进日志,
+            // 这样能区分「规则库没覆盖」和「规则库根本没有加载」
+            val heuristic = runCatching { SmartActionEngine.extractVerificationCode(body) }.getOrNull()
+            return if (heuristic.isNullOrBlank()) {
+                Extraction(null, engine = "none", ruleCount = rules.size)
+            } else {
+                Extraction(heuristic, engine = "heuristic", ruleCount = rules.size)
+            }
         }
-        return runCatching { SmartActionEngine.extractVerificationCode(body) }.getOrNull()
+
+        Log.w(TAG, "no rules available, falling back to heuristic extractor")
+        SmsDiagLog.log(context, SmsDiagLog.Stage.ERROR, "no rules loaded, heuristic only")
+        val heuristic = runCatching { SmartActionEngine.extractVerificationCode(body) }.getOrNull()
+        return if (heuristic.isNullOrBlank()) {
+            Extraction(null, engine = "none", ruleCount = 0)
+        } else {
+            Extraction(heuristic, engine = "heuristic", ruleCount = 0)
+        }
     }
 
     private fun isDuplicate(code: String): Boolean {

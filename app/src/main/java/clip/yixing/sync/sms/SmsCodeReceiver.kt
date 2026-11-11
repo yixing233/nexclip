@@ -18,13 +18,31 @@ import android.util.Log
 class SmsCodeReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent?) {
-        if (intent?.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
+        if (intent?.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {
+            SmsDiagLog.log(context, SmsDiagLog.Stage.IGNORED_ACTION, "action=${intent?.action}")
+            return
+        }
 
         val body = runCatching { extractBody(intent) }.getOrElse {
             Log.w(TAG, "parse sms intent failed: ${it.message}")
+            SmsDiagLog.log(context, SmsDiagLog.Stage.ERROR, "extractBody=${it.javaClass.simpleName}")
             return
         }
-        if (body.isNullOrBlank()) return
+        if (body.isNullOrBlank()) {
+            // 区分「广播没到」与「到了但没解析出正文」——排查漏报时这是第一个分叉点。
+            // 不打印正文(隐私边界),只记录 PDU 段数与关键 extra 是否存在。
+            val segments = intent.getSerializableExtra("pdus")?.let { (it as? Array<*>)?.size } ?: 0
+            SmsDiagLog.log(
+                context,
+                SmsDiagLog.Stage.EMPTY_BODY,
+                "seg=$segments hasBodyExtra=${intent.hasExtra("body")}",
+            )
+            Log.w(TAG, "sms body empty, segments=$segments")
+            return
+        }
+
+        val segments = intent.getSerializableExtra("pdus")?.let { (it as? Array<*>)?.size } ?: 1
+        SmsDiagLog.log(context, SmsDiagLog.Stage.RECEIVED, SmsDiagLog.fingerprint(body, segments))
 
         // goAsync 让接收器在 onReceive 返回后仍能完成异步工作, 否则进程可能在
         // 写剪贴板/发通知前被回收
@@ -33,6 +51,7 @@ class SmsCodeReceiver : BroadcastReceiver() {
             SmsCodeHandler.handle(context.applicationContext, body)
         } catch (t: Throwable) {
             Log.w(TAG, "handle sms failed: ${t.message}")
+            SmsDiagLog.log(context, SmsDiagLog.Stage.ERROR, "handle=${t.javaClass.simpleName}")
         } finally {
             pendingResult.finish()
         }
