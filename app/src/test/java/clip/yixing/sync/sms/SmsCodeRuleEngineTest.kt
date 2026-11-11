@@ -78,6 +78,56 @@ class SmsCodeRuleEngineTest {
         assertEquals("失败用例:\n" + failures.joinToString("\n"), 0, failures.size)
     }
 
+    /** 边界场景:这些是已知容易漏报的形态,用来固定改进结果 */
+    @Test
+    fun `边界形态适配`() {
+        val cases = listOf(
+            // 空格分隔的数字
+            "【微信】你正在登录，验证码 8 9 2 1 4 3，10分钟内有效。" to "892143",
+            // 全角数字
+            "【某App】验证码为１２３４５６，请勿泄露。" to "123456",
+            // 全角 + 中文关键字
+            "您的验证码是６７８９０１" to "678901",
+            // 英文全称
+            "Your verification code is 556677" to "556677",
+            // 英文 OTP
+            "Your OTP is 778899, valid for 5 minutes" to "778899",
+            // 阿拉伯数字全角混排
+            "验证码 48２913" to "482913",
+        )
+        val failures = mutableListOf<String>()
+        for ((body, expected) in cases) {
+            val got = SmsCodeUtils.parseSmsCode(body, "", rules)
+            if (got != expected) {
+                failures += "期望[$expected] 实际[${got.ifEmpty { "空" }}] : $body"
+            }
+        }
+        assertEquals("边界形态失败:\n" + failures.joinToString("\n"), 0, failures.size)
+    }
+
+    /**
+     * 英文补充规则不能把无关数字当验证码。
+     *
+     * `code:` / `code is` 这类短关键字极易误命中,必须确认以下场景仍然拒绝。
+     */
+    @Test
+    fun `英文规则不应引入误提取`() {
+        val shouldReject = listOf(
+            "Your zip code: 100085 is registered.",
+            "Area code: 010 is Beijing.",
+            "Postal code: 200000, Shanghai.",
+            "The discount code: 20% off this week.",
+            "Your order number is 556677, track it online.",
+            "Call us at 400-800-8888 for help.",
+        )
+        val wrong = mutableListOf<String>()
+        for (body in shouldReject) {
+            val got = SmsCodeUtils.parseSmsCode(body, "", rules)
+            if (got.isNotEmpty()) wrong += "误提取[$got] : $body"
+        }
+        assertEquals("英文规则误提取:\n" + wrong.joinToString("\n"), 0, wrong.size)
+    }
+
     /**
      * 从规则集 JSON 中抽出 body/expectedCode 对。
      *

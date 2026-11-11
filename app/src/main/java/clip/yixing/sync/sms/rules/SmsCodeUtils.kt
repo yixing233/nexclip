@@ -75,6 +75,13 @@ object SmsCodeUtils {
         return executeRulePipeline(normalizedContent, effectiveRules, source)
     }
 
+    /**
+     * 数字归一化:把各种非 ASCII 数字转成 ASCII 数字。
+     *
+     * 中文短信里全角数字很常见(输入法全角状态、部分银行的模板化下发),
+     * `１２３４５６` 与 `123456` 对用户是同一个验证码,但正则 [0-9] 匹配不到前者。
+     * 这一步放在所有匹配之前,让后续规则无需各自处理。
+     */
     private fun normalizeDigits(text: String): String {
         if (text.isEmpty()) return text
         val sb = StringBuilder(text.length)
@@ -84,6 +91,8 @@ object SmsCodeUtils {
                 in '\u06F0'..'\u06F9' -> sb.append((ch - '\u06F0' + '0'.code).toChar())
                 // Arabic-Indic digits (Arabic: ٠ ١ ٢ ٣ ٤ ٥ ٦ ٧ ٨ ٩)
                 in '\u0660'..'\u0669' -> sb.append((ch - '\u0660' + '0'.code).toChar())
+                // Fullwidth digits (CJK: ０ １ ２ ３ ４ ５ ６ ７ ８ ９)
+                in '\uFF10'..'\uFF19' -> sb.append((ch - '\uFF10' + '0'.code).toChar())
                 else -> sb.append(ch)
             }
         }

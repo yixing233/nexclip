@@ -1,0 +1,173 @@
+{
+  "specVersion": 1,
+  "id": "nexclip.supplement.english",
+  "name": "英文验证码补充规则",
+  "description": "内置中文规则集(zhen.general.default)不含英文关键字，导致 'Your verification code is 556677' / 'code: 445566' / 'Your OTP is 778899' 这类短信提取不到。本补充集只覆盖英文场景，优先级低于官方中文规则不影响中文短信。",
+  "locale": "en",
+  "updatedAt": "2026-11-11T00:00:00+08:00",
+  "rules": [
+    {
+      "id": "en-verification-code",
+      "company": null,
+      "codeKeyword": "verification code",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes"
+      ],
+      "notes": "Your verification code is 556677"
+    },
+    {
+      "id": "en-verification-code-alnum",
+      "company": null,
+      "codeKeyword": "verification code",
+      "codeRegex": "(?<![a-zA-Z0-9])[a-zA-Z0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 5,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes"
+      ],
+      "notes": "混合型英文验证码"
+    },
+    {
+      "id": "en-security-code",
+      "company": null,
+      "codeKeyword": "security code",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes"
+      ]
+    },
+    {
+      "id": "en-auth-code",
+      "company": null,
+      "codeKeyword": "authentication code",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes"
+      ]
+    },
+    {
+      "id": "en-otp",
+      "company": null,
+      "codeKeyword": "otp",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes"
+      ],
+      "notes": "Your OTP is 778899"
+    },
+    {
+      "id": "en-passcode",
+      "company": null,
+      "codeKeyword": "passcode",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes"
+      ]
+    },
+    {
+      "id": "en-one-time-password",
+      "company": null,
+      "codeKeyword": "one-time password",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes"
+      ]
+    },
+    {
+      "id": "en-pin-code",
+      "company": null,
+      "codeKeyword": "pin code",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes"
+      ]
+    },
+    {
+      "id": "en-login-code",
+      "company": null,
+      "codeKeyword": "login code",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes"
+      ]
+    },
+    {
+      "id": "en-2fa",
+      "company": null,
+      "codeKeyword": "2fa",
+      "codeRegex": "(?<![a-zA-Z0-9])[0-9]{4,8}(?![a-zA-Z0-9])",
+      "priority": 10,
+      "rejectedSuffixes": [
+        "mb",
+        "gb",
+        "kb",
+        "tb",
+        "pb",
+        "byte",
+        "bytes"
+      ]
+    }
+  ]
+}

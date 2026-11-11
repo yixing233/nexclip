@@ -124,7 +124,8 @@ object SmsCodeHandler {
         return runCatching { SmartActionEngine.extractVerificationCode(body) }.getOrNull()
     }
 
-    private fun isDuplicate(code: String): Boolean {        val now = System.currentTimeMillis()
+    private fun isDuplicate(code: String): Boolean {
+        val now = System.currentTimeMillis()
         recentCodes.entries.removeIf { now - it.value > DEDUP_WINDOW_MILLIS }
         val last = recentCodes[code]
         if (last != null && now - last <= DEDUP_WINDOW_MILLIS) return true
