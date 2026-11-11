@@ -13,7 +13,6 @@ import androidx.compose.animation.AnimatedVisibility
 import kotlinx.coroutines.CancellationException
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
@@ -63,7 +62,6 @@ import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -100,6 +98,12 @@ import clip.yixing.sync.cardContentPadding
 import clip.yixing.sync.data.SyncApi
 import clip.yixing.sync.formatTime
 import clip.yixing.sync.ui.LucideIcons
+import clip.yixing.sync.ui.nav.PredictiveBackBackdrop
+import clip.yixing.sync.ui.nav.PredictiveNavigationBackHandler
+import clip.yixing.sync.ui.nav.PredictiveNavigationLayer
+import clip.yixing.sync.ui.nav.predictiveNavigationBackground
+import clip.yixing.sync.ui.nav.predictiveNavigationTransform
+import clip.yixing.sync.ui.nav.rememberPredictiveNavigationLayerState
 import clip.yixing.sync.smartaction.SmartActionEngine
 import clip.yixing.sync.smartaction.SmartActionChip
 import clip.yixing.sync.service.CapturedClip
@@ -285,7 +289,12 @@ internal fun RecordsPage(
     var keepFavoritesOnClear by remember { mutableStateOf(true) }
 
     // 记录详情二级子页面状态与动画
-    val detailPageAnimProgress = remember { Animatable(1f) }
+    // 转场统一到 HyperIsland 的层级模型(见 ui/nav/PredictiveNavigation.kt)
+    val detailNavState = rememberPredictiveNavigationLayerState()
+    // 直接读,不用 remember 缓存 —— 否则在设置页改了开关后回到这里仍用旧值。
+    // prefs 是内存里的同一份实例,getBoolean 开销可忽略。
+    val predictiveBackOn = SyncSettings.predictiveBackEnabled(context)
+    val predictiveBackMaxPercent = SyncSettings.predictiveBackMaxProgressPercent(context)
     var activeDetailClip by remember { mutableStateOf<CapturedClip?>(null) }
     var displayedDetailClip by remember { mutableStateOf<CapturedClip?>(null) }
     var previewImageClip by remember { mutableStateOf<CapturedClip?>(null) }
@@ -299,19 +308,12 @@ internal fun RecordsPage(
         displayedDetailClip = clip
         editFieldState.edit { replace(0, length, clip.text) }
         isEditingInDetail = false
-        scope.launch {
-            detailPageAnimProgress.snapTo(1f)
-            detailPageAnimProgress.animateTo(0f, animationSpec = tween(280, easing = FastOutSlowInEasing))
-        }
     }
 
     val closeDetailPage: () -> Unit = {
         isEditingInDetail = false
         activeDetailClip = null
-        scope.launch {
-            detailPageAnimProgress.animateTo(1f, animationSpec = tween(220, easing = LinearOutSlowInEasing))
-            displayedDetailClip = null
-        }
+        displayedDetailClip = null
     }
 
     LaunchedEffect(isEditingInDetail) {
@@ -506,52 +508,37 @@ internal fun RecordsPage(
         keyboardController?.hide()
     }
 
-    // 退出记录详情二级页面的预测返回拦截（仅在非编辑模式且无气泡菜单时生效）
-    PredictiveBackHandler(
-        enabled = activeDetailClip != null &&
-            !isEditingInDetail &&
-            !showClearDialog &&
-            !showDatePickerDialog &&
-            previewImageClip == null &&
-            !isDetailMenuExpanded &&
-            !isGlobalOverlayActive
-    ) { progress ->
-        if (!SyncSettings.predictiveBackEnabled(context)) {
-            closeDetailPage()
-            return@PredictiveBackHandler
-        }
-        try {
-            progress.collect { event ->
-                val p = FastOutSlowInEasing.transform(SyncSettings.mapPredictiveBackProgress(context, event.progress))
-                detailPageAnimProgress.snapTo(p)
-            }
-            detailPageAnimProgress.animateTo(1f, animationSpec = tween(200, easing = LinearOutSlowInEasing))
-            activeDetailClip = null
-            displayedDetailClip = null
-        } catch (e: CancellationException) {
-            detailPageAnimProgress.animateTo(0f, animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
-        }
+    // 退出记录详情二级页面的预测返回(仅在非编辑模式且无气泡菜单时生效)
+    // 跟手进度与结算曲线由 PredictiveNavigationBackHandler 统一处理。
+    val detailBackEnabled = activeDetailClip != null &&
+        !isEditingInDetail &&
+        !showClearDialog &&
+        !showDatePickerDialog &&
+        previewImageClip == null &&
+        !isDetailMenuExpanded &&
+        !isGlobalOverlayActive
+    if (predictiveBackOn) {
+        PredictiveNavigationBackHandler(
+            enabled = detailBackEnabled,
+            state = detailNavState,
+            maxTranslationPercent = predictiveBackMaxPercent.toLong(),
+            onDismiss = {
+                isEditingInDetail = false
+                activeDetailClip = null
+                displayedDetailClip = null
+            },
+        )
+    } else {
+        BackHandler(enabled = detailBackEnabled) { closeDetailPage() }
     }
-
-    val baseProgress = detailPageAnimProgress.value
-    val screenCornerRadius = rememberScreenCornerRadius()
 
     Box(modifier = Modifier.fillMaxSize()) {
         // ---- 1. 底层：一级记录主页（包含 PageShell） ----
+        // 有详情层时整页下沉(缩到 96.5% + 左移 2.5%),由 PredictiveNavigation 统一驱动。
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer {
-                    if (displayedDetailClip != null) {
-                        translationX = -(1f - baseProgress) * size.width * 0.15f
-                        val s = 0.94f + 0.06f * baseProgress
-                        scaleX = s
-                        scaleY = s
-                        alpha = 0.82f + 0.18f * baseProgress
-                        clip = true
-                        shape = RoundedCornerShape(screenCornerRadius)
-                    }
-                }
+                .predictiveNavigationBackground(detailNavState)
         ) {
             PageShell(
                 title = if (isMultiSelectMode) "已选择 ${selectedClips.size} 项" else "剪贴板",
@@ -1171,32 +1158,25 @@ internal fun RecordsPage(
             }
         }
 
-        // 黑色半透明遮罩层（视差下沉感）
-        if (displayedDetailClip != null && (1f - baseProgress) > 0.001f) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = (1f - baseProgress) * 0.22f))
-            )
-        }
+        // 暗化/模糊覆盖层(手势期间随进度增强,统一由 PredictiveNavigation 驱动)
+        PredictiveBackBackdrop(
+            state = detailNavState,
+            modifier = Modifier.fillMaxSize(),
+            backdrop = recordsBackdrop,
+        )
     }
 
     // ---- 2. 顶层：记录详情二级页面 ----
-    displayedDetailClip?.let { detailClip ->
-            val p = detailPageAnimProgress.value // 0f (显示) -> 1f (退出到右侧)
+    // 进入整屏右滑入,返回手势跟手/按速度结算,均由 PredictiveNavigationLayer 负责。
+    PredictiveNavigationLayer(
+        visible = displayedDetailClip != null,
+        state = detailNavState,
+        maxTranslationPercent = predictiveBackMaxPercent.toLong(),
+    ) {
+        displayedDetailClip?.let { detailClip ->
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .graphicsLayer {
-                        translationX = p * size.width
-                        val s = 1f - p * 0.05f
-                        scaleX = s
-                        scaleY = s
-                        transformOrigin = TransformOrigin(0f, 0.5f)
-                        clip = true
-                        shape = RoundedCornerShape(screenCornerRadius + (p * 4).dp)
-                        shadowElevation = (1f - p) * 24f
-                    }
                     .background(MiuixTheme.colorScheme.background)
             ) {
                 RecordDetailPage(
@@ -1320,6 +1300,7 @@ internal fun RecordsPage(
             }
         }
     }
+}
 
     // 清空全部记录的二次确认弹窗
     val favoriteCount = captured.count { it.isFavorite }
@@ -2165,44 +2146,41 @@ internal fun SearchPage(
 
     val isKeyboardVisible = WindowInsets.isImeVisible
     val keyboardController = LocalSoftwareKeyboardController.current
-    var searchBackProgress by remember { mutableFloatStateOf(0f) }
-    var searchBackEdge by remember { mutableIntStateOf(BackEventCompat.EDGE_LEFT) }
-    var isSearchBackActive by remember { mutableStateOf(false) }
+    // 搜索页也用同一套层级转场模型:跟手进度 + 释放速度结算,
+    // 与设置页/记录详情保持一致的位移与缓动曲线。
+    val searchNavState = rememberPredictiveNavigationLayerState()
+    val searchBackEnabled = remember { SyncSettings.predictiveBackEnabled(context) }
+    val searchBackMaxPercent = remember { SyncSettings.predictiveBackMaxProgressPercent(context) }
 
     PredictiveBackHandler(enabled = true) { progress ->
         if (isKeyboardVisible) {
             keyboardController?.hide()
             return@PredictiveBackHandler
         }
-        if (!SyncSettings.predictiveBackEnabled(context)) {
+        if (!searchBackEnabled) {
             onClose()
             return@PredictiveBackHandler
         }
+        var cancelled = false
         try {
-            isSearchBackActive = true
-            progress.collect { event ->
-                searchBackProgress = SyncSettings.mapPredictiveBackProgress(context, event.progress)
-                searchBackEdge = event.swipeEdge
-            }
-            onClose()
+            progress.collect { event -> searchNavState.trackBack(event.progress) }
         } catch (e: CancellationException) {
-        } finally {
-            isSearchBackActive = false
-            searchBackProgress = 0f
+            searchNavState.cancelBack()
+            cancelled = true
+        }
+        if (!cancelled) {
+            searchNavState.commitBack(
+                maxTranslationPercent = searchBackMaxPercent.toLong(),
+                additionalAnimation = { _, _ -> },
+                onDismiss = onClose,
+            )
         }
     }
-
-    val screenCornerRadius = rememberScreenCornerRadius()
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .predictiveBackAnimation(
-                progress = searchBackProgress,
-                edge = searchBackEdge,
-                enabled = isSearchBackActive,
-                screenCornerRadius = screenCornerRadius
-            )
+            .predictiveNavigationTransform(searchNavState, searchBackMaxPercent.toLong())
             .background(MiuixTheme.colorScheme.surface)
     ) {
         Column(

@@ -18,23 +18,16 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.togetherWith
+import clip.yixing.sync.ui.nav.PredictiveNavigationStack
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -316,14 +309,8 @@ internal fun SettingsPage(
         }
     }
 
-    // 返回键/手势:直接拦截并出栈。
-    // 不启用 PredictiveBackHandler —— 跟手动画在本页的页面栈结构下始终难以做好
-    // (曾被状态机卡住导致页面错位),去掉后返回行为简单可靠。
-    BackHandler(
-        enabled = currentSubPage != null && !isAnyOverlayOpen && !isGlobalOverlayActive,
-    ) {
-        closeSubPage()
-    }
+    // 返回键/手势:由 PredictiveNavigationStack 接管(可跟手、可取消)。
+    // 弹层打开时由上面那个 handler 先吃掉事件,栈那边通过 backEnabled=false 让位。
 
     var devices by remember { mutableStateOf<List<DeviceInfo>>(emptyList()) }
     var devicesLoading by remember { mutableStateOf(true) }
@@ -583,29 +570,22 @@ internal fun SettingsPage(
         }
     }
 
-    val screenCornerRadius = rememberScreenCornerRadius()
-
-    Box(modifier = Modifier.fillMaxSize()) {
-        // ---- 1. 底层：一级设置主页 ----
-        // 照 HyperChanger:底层不做位移动画,只用模糊表达"被覆盖"。
-        // 位移方案需要精确计算两层互补,稍有偏差就露底;模糊没有这个问题。
-        val hasSubPage = currentSubPage != null
-        val baseProgress = if (hasSubPage) 0f else 1f
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    if (hasSubPage) {
-                        translationX = -(1f - baseProgress) * size.width * 0.15f
-                        val s = 0.94f + 0.06f * baseProgress
-                        scaleX = s
-                        scaleY = s
-                        alpha = 0.82f + 0.18f * baseProgress
-                        clip = true
-                        shape = RoundedCornerShape(screenCornerRadius)
-                    }
-                }
-        ) {
+    // ---- 二级页导航栈 ----
+    // 统一到 HyperIsland 的层级模型(见 ui/nav/PredictiveNavigation.kt):
+    //   进入: 子页整屏从右滑入 420ms,设置主页同时缩到 96.5% 并向左移 2.5%
+    //   手势: 进度直接驱动子页位移;主页反向回位,同时暗化
+    //   松手: 按释放速度结算 —— 甩得快直接退场,慢慢拖到一半则回弹
+    //
+    // PredictiveNavigationStack 负责层级顺序(base → 各层 backdrop → 各层页面),
+    // 设置主页作为 base 传进去,子页由 content 渲染。
+    PredictiveNavigationStack(
+        stack = subPageStack,
+        maxTranslationPercent = predictiveBackMaxProgressPercent.toLong(),
+        predictiveBackEnabled = predictiveBackEnabled,
+        onDismissTop = { closeSubPage() },
+        backEnabled = !isAnyOverlayOpen && !isGlobalOverlayActive,
+        modifier = Modifier.fillMaxSize(),
+        base = {
             PageShell(
                 title = "设置",
                 bottomInnerPadding = bottomInnerPadding
@@ -637,39 +617,10 @@ internal fun SettingsPage(
                     // 底部避让已由 contentPadding.bottom 承担,勿再追加尾部 Spacer(会重复计一份 bottomInnerPadding)
                 }
             }
-
-            // 黑色半透明遮罩层（视差下沉感）
-            if (hasSubPage && (1f - baseProgress) > 0.001f) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = (1f - baseProgress) * 0.2f))
-                )
-            }
-        }
-
-        // ---- 2. 二级页转场 ----
-        // 照 XiaomiHelper(hyperx-compose 的 NavDisplay)的做法:
-        // 用 AnimatedContent 做"两个页面同时对向移动"的转场 ——
-        //   进入: 新页整屏从右滑入 + 旧页向左移出 1/4
-        //   返回: 上一级从左 1/4 处滑回 + 当前页整屏向右滑出
-        // 两页位移互补,任何一帧都被填满,既不露底也不会"瞬间跳变"。
-        //
-        // 之前用 forEach + AnimatedVisibility 的问题:一次只动一页,
-        // 返回时靠"旧页消失、下面那页显露",观感就是没有动画。
-        AnimatedContent(
-            targetState = currentSubPage,
-            transitionSpec = {
-                val goingForward = (targetState?.ordinal ?: -1) >= (initialState?.ordinal ?: -1)
-                if (goingForward) SettingsNavTransitions.push() else SettingsNavTransitions.pop()
-            },
-            label = "settingsSubPage",
-            modifier = Modifier.fillMaxSize(),
-        ) { animatedPage ->
-            // 一级主页(无子页)时这一层不渲染内容,由底层设置页承担
-            if (animatedPage != null) {
-                Box(Modifier.fillMaxSize()) {
-                    when (animatedPage) {
+        },
+    ) { animatedPage, _, _ ->
+        Box(Modifier.fillMaxSize()) {
+            when (animatedPage) {
                     SettingsSubPage.Basic,
                     SettingsSubPage.Sync,
                     SettingsSubPage.Notifications,
@@ -2127,10 +2078,8 @@ internal fun SettingsPage(
                         }
                     }
                     }
-                }
             }
         }
-    }
 
     // ---- 对话框与弹层 ----
 

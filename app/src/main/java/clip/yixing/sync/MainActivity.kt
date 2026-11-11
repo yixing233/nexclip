@@ -10,20 +10,12 @@ import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.EaseInOut
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearOutSlowInEasing
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -79,8 +71,10 @@ import clip.yixing.sync.ui.RecordsPage
 import clip.yixing.sync.ui.SearchPage
 import clip.yixing.sync.ui.BarBlurSurface
 import clip.yixing.sync.ui.PageShell
-import clip.yixing.sync.ui.predictiveBackAnimation
-import clip.yixing.sync.ui.rememberScreenCornerRadius
+import clip.yixing.sync.ui.nav.PredictiveNavigationBackHandler
+import clip.yixing.sync.ui.nav.PredictiveNavigationLayer
+import clip.yixing.sync.ui.nav.predictiveNavigationBackground
+import clip.yixing.sync.ui.nav.rememberPredictiveNavigationLayerState
 import clip.yixing.sync.ui.FloatingBottomBar
 import clip.yixing.sync.ui.FloatingBottomBarItem
 import clip.yixing.sync.ui.SettingsPage
@@ -250,12 +244,27 @@ private fun MainScreen() {
     var isOverlayActiveRecords by remember { mutableStateOf(false) }
     var isOverlayActiveSettings by remember { mutableStateOf(false) }
     var isScanOpen by remember { mutableStateOf(false) }
-    var displayedScanOpen by remember { mutableStateOf(false) }
-    val scanAnimProgress = remember { Animatable(1f) }
+    // 覆盖层转场统一到 HyperIsland 的层级模型(见 ui/nav/PredictiveNavigation.kt):
+    // 进入整屏右滑入 + 底层下沉,返回跟手并按释放速度结算。
+    val scanNavState = rememberPredictiveNavigationLayerState()
+    // 直接读,不用 remember 缓存 —— 否则在设置页改完开关回到主页仍是旧值。
+    val predictiveBackOn = SyncSettings.predictiveBackEnabled(appContext)
+    val predictiveBackMaxPercent = SyncSettings.predictiveBackMaxProgressPercent(appContext)
 
     var isManualPushOpen by remember { mutableStateOf(false) }
-    var displayedManualPushOpen by remember { mutableStateOf(false) }
-    val manualPushAnimProgress = remember { Animatable(1f) }
+    val manualPushNavState = rememberPredictiveNavigationLayerState()
+
+    // 两个覆盖层互斥打开,底层跟随"当前活着的那一层"下沉。
+    val overlayDepth: () -> Float = {
+        maxOf(
+            scanNavState.backgroundDepth.value,
+            manualPushNavState.backgroundDepth.value,
+        )
+    }
+    val overlayBackdropIntensity = maxOf(
+        scanNavState.backdropIntensity.value,
+        manualPushNavState.backdropIntensity.value,
+    )
 
     // 启动检查发现新版本后，点击 snackbar「更新」直接在应用内下载安装
     var updateDialogInfo by remember { mutableStateOf<UpdateInfo?>(null) }
@@ -298,73 +307,37 @@ private fun MainScreen() {
     val isAnyOverlayActive = isOverlayActiveHome || isOverlayActiveRecords || isOverlayActiveSettings || isGlobalOverlayActive
 
     fun openScanner() {
-        displayedScanOpen = true
         isScanOpen = true
-        scope.launch {
-            scanAnimProgress.snapTo(1f)
-            scanAnimProgress.animateTo(0f, animationSpec = tween(280, easing = FastOutSlowInEasing))
-        }
     }
 
     fun closeScanner() {
-        scope.launch {
-            scanAnimProgress.animateTo(1f, animationSpec = tween(240, easing = FastOutSlowInEasing))
-            isScanOpen = false
-            displayedScanOpen = false
-        }
+        isScanOpen = false
     }
 
     fun openManualPush() {
-        displayedManualPushOpen = true
         isManualPushOpen = true
-        scope.launch {
-            manualPushAnimProgress.snapTo(1f)
-            manualPushAnimProgress.animateTo(0f, animationSpec = tween(280, easing = FastOutSlowInEasing))
-        }
     }
 
     fun closeManualPush() {
-        scope.launch {
-            manualPushAnimProgress.animateTo(1f, animationSpec = tween(240, easing = FastOutSlowInEasing))
-            isManualPushOpen = false
-            displayedManualPushOpen = false
-        }
+        isManualPushOpen = false
     }
 
-    PredictiveBackHandler(enabled = isScanOpen) { progress ->
-        if (!SyncSettings.predictiveBackEnabled(appContext)) {
-            closeScanner()
-            return@PredictiveBackHandler
-        }
-        try {
-            progress.collect { event ->
-                val p = FastOutSlowInEasing.transform(SyncSettings.mapPredictiveBackProgress(appContext, event.progress))
-                scanAnimProgress.snapTo(p)
-            }
-            scanAnimProgress.animateTo(1f, animationSpec = tween(200, easing = LinearOutSlowInEasing))
-            isScanOpen = false
-            displayedScanOpen = false
-        } catch (e: CancellationException) {
-            scanAnimProgress.animateTo(0f, animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
-        }
-    }
-
-    PredictiveBackHandler(enabled = isManualPushOpen) { progress ->
-        if (!SyncSettings.predictiveBackEnabled(appContext)) {
-            closeManualPush()
-            return@PredictiveBackHandler
-        }
-        try {
-            progress.collect { event ->
-                val p = FastOutSlowInEasing.transform(SyncSettings.mapPredictiveBackProgress(appContext, event.progress))
-                manualPushAnimProgress.snapTo(p)
-            }
-            manualPushAnimProgress.animateTo(1f, animationSpec = tween(200, easing = LinearOutSlowInEasing))
-            isManualPushOpen = false
-            displayedManualPushOpen = false
-        } catch (e: CancellationException) {
-            manualPushAnimProgress.animateTo(0f, animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
-        }
+    if (predictiveBackOn) {
+        PredictiveNavigationBackHandler(
+            enabled = isScanOpen,
+            state = scanNavState,
+            maxTranslationPercent = predictiveBackMaxPercent.toLong(),
+            onDismiss = { isScanOpen = false },
+        )
+        PredictiveNavigationBackHandler(
+            enabled = isManualPushOpen,
+            state = manualPushNavState,
+            maxTranslationPercent = predictiveBackMaxPercent.toLong(),
+            onDismiss = { isManualPushOpen = false },
+        )
+    } else {
+        BackHandler(enabled = isScanOpen) { isScanOpen = false }
+        BackHandler(enabled = isManualPushOpen) { isManualPushOpen = false }
     }
 
     // 单个 backdrop:录制外层 content(Pager 整体,含各页大标题顶栏),底栏 blur
@@ -386,10 +359,12 @@ private fun MainScreen() {
         Scaffold {
         padding ->
         val bottomInnerPadding = padding.calculateBottomPadding() + if (floatingBar) 88.dp else 64.dp
-        // 整页(含大标题顶栏)在 Pager 内滑动切换,与 KernelSU 一致
+        // 整页(含大标题顶栏)在 Pager 内滑动切换,与 KernelSU 一致。
+        // 覆盖层打开时整页下沉(缩到 96.5% + 左移 2.5%),由 PredictiveNavigation 驱动。
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .predictiveNavigationBackground(overlayDepth)
                 .layerBackdrop(backdrop)
         ) {
             HorizontalPager(
@@ -463,6 +438,47 @@ private fun MainScreen() {
                     )
                 }
             }
+        }
+
+        // 覆盖层(扫码/即时互传)打开时,给底下的 Pager 压一层暗化。
+        // 两层的强度取较大者 —— 两者互斥,同一时刻只有一层真正活着。
+        if (overlayBackdropIntensity > 0.001f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        MiuixTheme.colorScheme.windowDimming.copy(alpha = 0.16f * overlayBackdropIntensity)
+                    )
+            )
+        }
+
+        // 全屏扫码配对页:整屏右滑入,底层下沉,返回跟手并按释放速度结算
+        PredictiveNavigationLayer(
+            visible = isScanOpen,
+            state = scanNavState,
+            maxTranslationPercent = predictiveBackMaxPercent.toLong(),
+        ) {
+            QrScanPage(
+                snackbarHostState = snackbarHostState,
+                onBack = { closeScanner() },
+                onPairSuccess = {
+                    closeScanner()
+                    tabIndex = 0
+                    pagerNavigator.animateTo(pagerState, 0)
+                }
+            )
+        }
+
+        // 全屏跨设备即时互传页:同上
+        PredictiveNavigationLayer(
+            visible = isManualPushOpen,
+            state = manualPushNavState,
+            maxTranslationPercent = predictiveBackMaxPercent.toLong(),
+        ) {
+            ManualPushPage(
+                snackbarHostState = snackbarHostState,
+                onBack = { closeManualPush() }
+            )
         }
     }
 
@@ -615,65 +631,9 @@ private fun MainScreen() {
             snackbarHostState = snackbarHostState,
         )
     }
-
-    val screenCornerRadius = rememberScreenCornerRadius()
-
-    // 全屏扫码配对页(全屏覆盖,水平平滑滑入退出与独立预测返回)
-    if (displayedScanOpen) {
-        val p = scanAnimProgress.value
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    translationX = p * size.width
-                    val s = 1f - p * 0.05f
-                    scaleX = s
-                    scaleY = s
-                    transformOrigin = TransformOrigin(0f, 0.5f)
-                    clip = true
-                    val corner = screenCornerRadius + (p * 4).dp
-                    shape = RoundedCornerShape(corner)
-                    shadowElevation = (1f - p) * 24f
-                }
-        ) {
-            QrScanPage(
-                snackbarHostState = snackbarHostState,
-                onBack = { closeScanner() },
-                onPairSuccess = {
-                    closeScanner()
-                    tabIndex = 0
-                    pagerNavigator.animateTo(pagerState, 0)
-                }
-            )
-        }
-    }
-
-    // 全屏跨设备即时互传页(全屏覆盖,独立预测返回跟手手势)
-    if (displayedManualPushOpen) {
-        val p = manualPushAnimProgress.value
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    translationX = p * size.width
-                    val s = 1f - p * 0.05f
-                    scaleX = s
-                    scaleY = s
-                    transformOrigin = TransformOrigin(0f, 0.5f)
-                    clip = true
-                    val corner = screenCornerRadius + (p * 4).dp
-                    shape = RoundedCornerShape(corner)
-                    shadowElevation = (1f - p) * 24f
-                }
-        ) {
-            ManualPushPage(
-                snackbarHostState = snackbarHostState,
-                onBack = { closeManualPush() }
-            )
-        }
-    }
 }
 }
+
 /** 状态行:左标签右值(模块状态卡片用) */
 @Composable
 fun StatusRow(

@@ -135,36 +135,3 @@ fun PageShell(
         }
     }
 }
-
-/**
- * 预测返回手势动效修饰符。
- * 根据返回进度 (0f ~ 1f) 与边缘方向产生平滑的位移、缩放与圆角变形。
- * 支持左边缘 (EDGE_LEFT) 和右边缘 (EDGE_RIGHT) 侧滑手势。
- */
-fun Modifier.predictiveBackAnimation(
-    progress: Float,
-    edge: Int = BackEventCompat.EDGE_LEFT,
-    enabled: Boolean = true,
-    screenCornerRadius: Dp = 34.dp
-): Modifier = if (enabled && progress > 0f) {
-    this.graphicsLayer {
-        val p = FastOutSlowInEasing.transform(progress)
-        val sign = if (edge == BackEventCompat.EDGE_LEFT) 1f else -1f
-        // 横向视差平移 (向滑动方向微移)
-        translationX = sign * p * size.width * 0.28f
-        // 细腻缩放 (最大缩小至 92%)
-        val scale = 1f - p * 0.08f
-        scaleX = scale
-        scaleY = scale
-        // 变换原点贴合触摸滑动侧
-        transformOrigin = TransformOrigin(if (edge == BackEventCompat.EDGE_LEFT) 0f else 1f, 0.5f)
-        // 物理屏幕圆角完美贴合裁切 (基准与手机屏幕物理边缘无缝衔接)
-        clip = true
-        val corner = screenCornerRadius + (p * 4).dp
-        shape = RoundedCornerShape(corner)
-        // 浅层淡出
-        alpha = 1f - p * 0.12f
-    }
-} else {
-    this
-}
