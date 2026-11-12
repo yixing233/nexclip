@@ -185,6 +185,7 @@
             Grid.Row="1"
             ItemsSource="{x:Bind ViewModel.Messages}"
             SelectionMode="None"
+            ContainerContentChanging="ChatListView_ContainerContentChanging"
             Padding="14,12,16,12">
             <ListView.ItemsPanel>
                 <ItemsPanelTemplate>
@@ -285,7 +286,7 @@
                                         CornerRadius="10"
                                         Tapped="ImageBubble_Tapped">
                                         <Image
-                                            Source="{x:Bind Thumbnail}"
+                                            Source="{x:Bind Thumbnail, Mode=OneWay}"
                                             MaxHeight="180"
                                             MaxWidth="240"
                                             Stretch="Uniform" />

@@ -121,8 +121,8 @@ public partial class HistoryItemViewModel : ObservableObject
         Item = item;
         starred = item.Starred;
         remark = item.Remark;
-        Thumbnail = BuildThumbnail(item.ImagePath);
-        SourceAppIcon = BuildAppIcon(item.SourceAppIcon);
+        _thumbnail = new DeferredPreview<BitmapImage>(() => BuildThumbnail(Item.ImagePath));
+        _sourceAppIcon = new DeferredPreview<BitmapImage>(() => BuildAppIcon(Item.SourceAppIcon));
         RefreshFormatAnalysis();
         CopyCommand = new RelayCommand(async () => await parent.CopyAsync(this));
         DeleteCommand = new RelayCommand(() => parent.DeleteAsync(this));
@@ -268,9 +268,22 @@ public partial class HistoryItemViewModel : ObservableObject
 
     public string? SourceAppPath => Item.SourceAppPath;
 
-    public BitmapImage? SourceAppIcon { get; }
+    private readonly DeferredPreview<BitmapImage> _sourceAppIcon;
+    private readonly DeferredPreview<BitmapImage> _thumbnail;
 
-    public BitmapImage? Thumbnail { get; }
+    public BitmapImage? SourceAppIcon => _sourceAppIcon.Value;
+
+    public BitmapImage? Thumbnail => _thumbnail.Value;
+
+    /// <summary>列表容器显示时启用预览，回收或托盘空闲时清掉位图引用。</summary>
+    internal void SetPreviewActive(bool active)
+    {
+        if (!_thumbnail.SetActive(active)) return;
+        _sourceAppIcon.SetActive(active);
+        OnPropertyChanged(nameof(Thumbnail));
+        OnPropertyChanged(nameof(SourceAppIcon));
+        OnPropertyChanged(nameof(HasSourceAppIcon));
+    }
 
     public bool IsImage => Item.Type == "Image";
 

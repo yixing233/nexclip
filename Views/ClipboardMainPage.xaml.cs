@@ -25,6 +25,7 @@ public sealed partial class ClipboardMainPage : Page
     private Storyboard? _backToTopStoryboard;
     private CancellationTokenSource? _backToTopCts;
     private bool _backToTopReturnInProgress;
+    private bool _previewsSuspended;
 
     public ClipboardMainPage()
     {
@@ -79,7 +80,33 @@ public sealed partial class ClipboardMainPage : Page
         };
     }
 
-    /// <summary>动态刷新顶栏矢量图标的主题颜色(深/浅色模式切换时秒级重绘)。</summary>
+    private void EntryList_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+    {
+        if (args.Phase == 0 && args.Item is HistoryItemViewModel item)
+            item.SetPreviewActive(!args.InRecycleQueue && !_previewsSuspended);
+    }
+
+    /// <summary>托盘空闲时释放预览；恢复窗口时仅启用已实现容器，保留历史及滚动位置。</summary>
+    internal void SetPreviewsActive(bool active)
+    {
+        TransferChatHost.SetPreviewsActive(active);
+        if (_previewsSuspended == !active) return;
+        _previewsSuspended = !active;
+        if (!active)
+        {
+            foreach (var item in _history.Items) item.SetPreviewActive(false);
+        }
+        else
+        {
+            for (var i = 0; i < _history.Items.Count; i++)
+            {
+                if (EntryList.ContainerFromIndex(i) is ListViewItem)
+                    _history.Items[i].SetPreviewActive(true);
+            }
+        }
+    }
+
+    /// <summary>动态刷新顶栏与图片预览图标的主题颜色。</summary>
     public void RefreshThemeIcons()
     {
         TopmostIconPin.Source = Lucide.Pin;
@@ -87,6 +114,15 @@ public sealed partial class ClipboardMainPage : Page
         SettingsButtonImage.Source = Lucide.Settings;
         ClearSearchImage.Source = Lucide.X;
         ClearHistoryButtonImage.Source = Lucide.Trash;
+        ViewerInfoIcon.Source = Lucide.Image;
+        ViewerCloseIcon.Source = Lucide.X;
+        ViewerZoomOutIcon.Source = Lucide.Get("zoom-out");
+        ViewerZoomInIcon.Source = Lucide.ZoomIn;
+        ViewerZoomResetIcon.Source = Lucide.Get("maximize-2");
+        ViewerRotateIcon.Source = Lucide.RotateCw;
+        ViewerCopyIcon.Source = Lucide.Copy;
+        ViewerSaveIcon.Source = Lucide.Save;
+        ViewerOpenIcon.Source = Lucide.ExternalLink;
     }
 
     /// <summary>清空剪贴板历史记录(始终保留收藏的条目)。</summary>

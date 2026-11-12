@@ -30,12 +30,15 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private string syncText = "";
 
-    [ObservableProperty]
-    private BitmapImage? currentImage;
+    private string? _currentImagePath;
+    private readonly DeferredPreview<BitmapImage> _currentImage;
+
+    public BitmapImage? CurrentImage => _currentImage.Value;
 
     public MainViewModel(AppServices svc)
     {
         _svc = svc;
+        _currentImage = new DeferredPreview<BitmapImage>(() => BuildImage(_currentImagePath), isActive: true);
         RefreshConnectionState();
     }
 
@@ -46,7 +49,10 @@ public partial class MainViewModel : ObservableObject
         engine.EntryUpdated += (entry, imagePath, fromPush) =>
         {
             CurrentEntry = entry;
-            CurrentImage = BuildImage(imagePath);
+            // 后台同步只更新路径；界面实际读取预览时才创建位图。
+            _currentImagePath = imagePath;
+            _currentImage.Invalidate();
+            OnPropertyChanged(nameof(CurrentImage));
             if (fromPush)
             {
                 StatusMessage = $"收到来自 {entry.DeviceName ?? "未知设备"} 的新剪贴板";
@@ -81,7 +87,19 @@ public partial class MainViewModel : ObservableObject
     private static BitmapImage? BuildImage(string? path)
     {
         if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
-        return new BitmapImage(new Uri("file:///" + path.Replace('\\', '/')));
+        var bitmap = new BitmapImage { DecodePixelType = DecodePixelType.Logical };
+        var size = ImageCodec.TryReadPngSize(path);
+        if (size is { } s && s.Width > s.Height)
+            bitmap.DecodePixelWidth = 640;
+        else
+            bitmap.DecodePixelHeight = 480;
+        bitmap.UriSource = new Uri("file:///" + path.Replace('\\', '/'));
+        return bitmap;
+    }
+
+    internal void SetPreviewActive(bool active)
+    {
+        if (_currentImage.SetActive(active)) OnPropertyChanged(nameof(CurrentImage));
     }
 
     /// <summary>首页当前条目摘要。文件条目仅本地记录,不来自服务端,此处仅作兜底展示。</summary>

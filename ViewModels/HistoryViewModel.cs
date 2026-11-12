@@ -178,6 +178,18 @@ public partial class HistoryViewModel : ObservableObject
 
     private int _refreshing;
     private bool _refreshPending;
+    private bool _viewVisible = true;
+    private bool _refreshOnShow;
+
+    internal void SetViewVisible(bool visible)
+    {
+        _viewVisible = visible;
+        if (visible && _refreshOnShow)
+        {
+            _refreshOnShow = false;
+            _ = RefreshAsync();
+        }
+    }
 
     /// <summary>
     /// 最近一次 <see cref="RefreshAsync"/> 是否真正完成了列表更新。
@@ -189,6 +201,13 @@ public partial class HistoryViewModel : ObservableObject
     public async Task RefreshAsync()
     {
         if (_engine is null) return;
+        if (!_viewVisible)
+        {
+            // 后台同步仍然落库；隐藏期间只记录刷新需求，呼出时合并刷新一次。
+            _refreshOnShow = true;
+            RefreshCompleted = false;
+            return;
+        }
         // 若当前有刷新任务在进行，标记 pending 并在当前批次完成后自动以最新参数重试
         if (Interlocked.Exchange(ref _refreshing, 1) == 1)
         {
@@ -211,6 +230,11 @@ public partial class HistoryViewModel : ObservableObject
                 var urlOnly = FilterIndex == 4;
                 var search = SearchText?.Trim();
                 var items = await Task.Run(() => _engine.History.Query(search, type, starred, PageSize, urlOnly, 0));
+                if (!_viewVisible)
+                {
+                    _refreshOnShow = true;
+                    return;
+                }
 
                 // 复用内容未变化的条目:按 Id 建索引,命中且展示字段一致时沿用原 VM,
                 // 从而保留其缩略图与来源图标 BitmapImage,不再重新解码。
@@ -296,7 +320,7 @@ public partial class HistoryViewModel : ObservableObject
 
     public async Task LoadMoreAsync()
     {
-        if (_engine is null || IsLoadingMore || !HasMore || IsBusy) return;
+        if (_engine is null || !_viewVisible || IsLoadingMore || !HasMore || IsBusy) return;
 
         // 已达运行期保留上限：停止继续加载，防止 Items 与其缩略图无上限增长
         if (Items.Count >= MaxLoadedItems)
@@ -314,6 +338,7 @@ public partial class HistoryViewModel : ObservableObject
             var search = SearchText?.Trim();
             var offset = _currentOffset;
             var items = await Task.Run(() => _engine.History.Query(search, type, starred, PageSize, urlOnly, offset));
+            if (!_viewVisible) return;
 
             if (items.Count == 0)
             {

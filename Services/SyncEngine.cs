@@ -747,8 +747,15 @@ public sealed class SyncEngine : IDisposable
             }
         }
 
-        // 新内容通知: 若开启通知且为远端设备同步来的新鲜剪贴板, 在右下角弹出提示浮窗
-        if (s.NotifyEnabled && isFresh)
+        // 新内容通知与复制直达独立控制;智能动作优先,避免被通用同步提示覆盖。
+        var smartAction = isFresh && s.CopyDirectEnabled && entry.Type == "Text" && entry.Text is not null
+            ? SmartActionService.Detect(entry.Text, forToast: true)
+            : null;
+        if (smartAction is not null)
+        {
+            _dispatcher.TryEnqueue(() => App.ShowSmartActionToast(smartAction));
+        }
+        else if (s.NotifyEnabled && isFresh)
         {
             _dispatcher.TryEnqueue(() =>
             {

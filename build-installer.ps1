@@ -8,7 +8,7 @@ $desktopDir = $PSScriptRoot
 $installerDir = Join-Path $desktopDir "NexClip.Installer.Native"
 $resourcesDir = Join-Path $installerDir "Resources"
 $releasesDir = Join-Path $desktopDir "release-out"
-$version = "20261030.01"
+$version = "20261112.01"
 
 # Native AOT 的链接步骤依赖 vswhere.exe 定位 MSVC link.exe。
 # VS 开发者命令行会自带,普通 PowerShell 里不在 PATH 上,链接会以 exit 123 失败,
@@ -25,7 +25,14 @@ if (-not (Get-Command vswhere.exe -ErrorAction SilentlyContinue)) {
 
 Write-Host ">>> 1. 编译 NexClip.Desktop 主程序 (Release win-x64, 轻量框架依赖)..." -ForegroundColor Cyan
 $tempStaging = Join-Path ([System.IO.Path]::GetTempPath()) "NexClip_Staging_$([Guid]::NewGuid().ToString('N'))"
+$tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+if (-not [System.IO.Path]::GetFullPath($tempStaging).StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Staging path must remain inside the temporary directory."
+}
 dotnet publish "$desktopDir\NexClip.Desktop.csproj" -c Release -r win-x64 -p:WindowsAppSDKSelfContained=false --self-contained false -p:PublishSingleFile=false -p:DebugType=none -o $tempStaging
+if ($LASTEXITCODE -ne 0) {
+    throw "Desktop publish failed with exit code $LASTEXITCODE."
+}
 
 Write-Host ">>> 2. 准备 Payload 压缩包..." -ForegroundColor Cyan
 if (!(Test-Path $resourcesDir)) {

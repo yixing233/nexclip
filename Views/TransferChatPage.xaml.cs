@@ -16,6 +16,7 @@ public sealed partial class TransferChatPage : UserControl
     public TransferChatViewModel ViewModel => App.Services.ChatVm;
 
     private ScrollViewer? _chatScroller;
+    private bool _previewsSuspended;
 
     public TransferChatPage()
     {
@@ -37,6 +38,30 @@ public sealed partial class TransferChatPage : UserControl
         {
             DispatcherQueue.TryEnqueue(() => ScrollToBottom(instant: false));
         };
+    }
+
+    private void ChatListView_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+    {
+        if (args.Phase == 0 && args.Item is ChatMessageItem message)
+            message.SetPreviewActive(!args.InRecycleQueue && !_previewsSuspended);
+    }
+
+    internal void SetPreviewsActive(bool active)
+    {
+        if (_previewsSuspended == !active) return;
+        _previewsSuspended = !active;
+        if (!active)
+        {
+            ViewModel.ReleasePreviews();
+        }
+        else
+        {
+            for (var i = 0; i < ViewModel.Messages.Count; i++)
+            {
+                if (ChatListView.ContainerFromIndex(i) is ListViewItem)
+                    ViewModel.Messages[i].SetPreviewActive(true);
+            }
+        }
     }
 
     public async void OnActivated()

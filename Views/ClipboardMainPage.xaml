@@ -268,6 +268,7 @@
                 ItemContainerTransitions="{x:Null}"
                 SelectionMode="Extended"
                 SelectionChanged="EntryList_SelectionChanged"
+                ContainerContentChanging="EntryList_ContainerContentChanging"
                 KeyDown="EntryList_KeyDown"
                 Background="Transparent">
                 <ListView.ItemContainerStyle>
@@ -499,7 +500,7 @@
                                         IsHitTestVisible="{x:Bind OriginalHitTest, Mode=OneWay}">
                                         <!-- 预览:图片 / 颜色色块 / 代码片段 / 普通文本 -->
                                         <Image
-                                            Source="{x:Bind Thumbnail, Mode=OneTime}"
+                                            Source="{x:Bind Thumbnail, Mode=OneWay}"
                                             MaxHeight="140"
                                             MaxWidth="360"
                                             HorizontalAlignment="Left"
@@ -739,7 +740,7 @@
             Grid.RowSpan="3"
             Canvas.ZIndex="100"
             Visibility="Collapsed"
-            Background="#E6050B14"
+            Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
             KeyDown="ImageViewer_KeyDown">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
@@ -748,14 +749,14 @@
             </Grid.RowDefinitions>
 
             <!-- 顶栏 HUD (图片文件名/信息 + 关闭按钮) -->
-            <Grid Padding="16,10" Background="#40000000">
+            <Grid Padding="16,10" Background="{ThemeResource SolidBackgroundFillColorSecondaryBrush}">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <Image Source="{x:Bind services:Lucide.ImageMuted}" Width="15" Height="15" />
-                    <TextBlock x:Name="ViewerInfoText" Text="图片预览" FontSize="13" Foreground="#E2E8F0" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <Image x:Name="ViewerInfoIcon" Source="{x:Bind services:Lucide.Image}" Width="15" Height="15" />
+                    <TextBlock x:Name="ViewerInfoText" Text="图片预览" FontSize="13" Foreground="{ThemeResource TextFillColorPrimaryBrush}" FontWeight="SemiBold" VerticalAlignment="Center" />
                 </StackPanel>
                 <Button
                     Grid.Column="1"
@@ -765,7 +766,7 @@
                     BorderThickness="0"
                     CornerRadius="4"
                     ToolTipService.ToolTip="关闭 (Esc)">
-                    <Image Source="{x:Bind services:Lucide.XWhite}" Width="15" Height="15" />
+                    <Image x:Name="ViewerCloseIcon" Source="{x:Bind services:Lucide.X}" Width="15" Height="15" />
                 </Button>
             </Grid>
 
@@ -803,33 +804,33 @@
                 HorizontalAlignment="Center"
                 Margin="0,0,0,16"
                 CornerRadius="20"
-                Background="#D91E293B"
-                BorderBrush="#33FFFFFF"
+                Background="{ThemeResource SolidBackgroundFillColorTertiaryBrush}"
+                BorderBrush="{ThemeResource SurfaceStrokeColorDefaultBrush}"
                 BorderThickness="1"
                 Padding="8,4">
                 <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                     <Button Click="ZoomOut_Click" Padding="8,6" Background="Transparent" BorderThickness="0" CornerRadius="14" ToolTipService.ToolTip="缩小 (-)">
-                        <Image Source="{x:Bind services:Lucide.ZoomOutWhite}" Width="15" Height="15" />
+                        <Image x:Name="ViewerZoomOutIcon" Source="{x:Bind services:Lucide.Get('zoom-out', 'primary')}" Width="15" Height="15" />
                     </Button>
-                    <TextBlock x:Name="ViewerZoomText" Text="100%" FontSize="12" Foreground="#CBD5E1" VerticalAlignment="Center" Width="44" TextAlignment="Center" />
+                    <TextBlock x:Name="ViewerZoomText" Text="100%" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" Width="44" TextAlignment="Center" />
                     <Button Click="ZoomIn_Click" Padding="8,6" Background="Transparent" BorderThickness="0" CornerRadius="14" ToolTipService.ToolTip="放大 (+)">
-                        <Image Source="{x:Bind services:Lucide.ZoomInWhite}" Width="15" Height="15" />
+                        <Image x:Name="ViewerZoomInIcon" Source="{x:Bind services:Lucide.ZoomIn}" Width="15" Height="15" />
                     </Button>
                     <Button Click="ZoomReset_Click" Padding="8,6" Background="Transparent" BorderThickness="0" CornerRadius="14" ToolTipService.ToolTip="适应窗口 / 1:1">
-                        <Image Source="{x:Bind services:Lucide.Maximize2White}" Width="15" Height="15" />
+                        <Image x:Name="ViewerZoomResetIcon" Source="{x:Bind services:Lucide.Get('maximize-2', 'primary')}" Width="15" Height="15" />
                     </Button>
-                    <Rectangle Width="1" Height="16" Fill="#475569" Margin="4,0" />
+                    <Rectangle Width="1" Height="16" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" Margin="4,0" />
                     <Button Click="Rotate_Click" Padding="8,6" Background="Transparent" BorderThickness="0" CornerRadius="14" ToolTipService.ToolTip="旋转 90°">
-                        <Image Source="{x:Bind services:Lucide.RotateCwWhite}" Width="15" Height="15" />
+                        <Image x:Name="ViewerRotateIcon" Source="{x:Bind services:Lucide.RotateCw}" Width="15" Height="15" />
                     </Button>
                     <Button Click="CopyViewerImage_Click" Padding="8,6" Background="Transparent" BorderThickness="0" CornerRadius="14" ToolTipService.ToolTip="复制图片 (Ctrl+C)">
-                        <Image Source="{x:Bind services:Lucide.CopyWhite}" Width="15" Height="15" />
+                        <Image x:Name="ViewerCopyIcon" Source="{x:Bind services:Lucide.Copy}" Width="15" Height="15" />
                     </Button>
                     <Button Click="SaveViewerImage_Click" Padding="8,6" Background="Transparent" BorderThickness="0" CornerRadius="14" ToolTipService.ToolTip="另存为 (Ctrl+S)">
-                        <Image Source="{x:Bind services:Lucide.SaveWhite}" Width="15" Height="15" />
+                        <Image x:Name="ViewerSaveIcon" Source="{x:Bind services:Lucide.Save}" Width="15" Height="15" />
                     </Button>
                     <Button Click="OpenInSystemApp_Click" Padding="8,6" Background="Transparent" BorderThickness="0" CornerRadius="14" ToolTipService.ToolTip="用系统看图软件打开">
-                        <Image Source="{x:Bind services:Lucide.ExternalLinkWhite}" Width="15" Height="15" />
+                        <Image x:Name="ViewerOpenIcon" Source="{x:Bind services:Lucide.ExternalLink}" Width="15" Height="15" />
                     </Button>
                 </StackPanel>
             </Border>

@@ -145,6 +145,8 @@ public sealed partial class ClipboardWindow : Window
             {
                 _trimTimer?.Stop();
                 if (App.IsExiting || AppWindow.IsVisible) return;
+                if (Content is Views.ClipboardMainPage page) page.SetPreviewsActive(false);
+                App.Services.Main.SetPreviewActive(false);
                 // 压缩式 GC 与 EmptyWorkingSet 都不需要 UI 线程,放到后台线程避免界面卡顿与消息泵重入
                 _ = Task.Run(NativeMethods.TrimProcessWorkingSet);
             }
@@ -158,11 +160,21 @@ public sealed partial class ClipboardWindow : Window
         {
             if (!e.DidVisibilityChange || App.IsExiting || _trimTimer is null) return;
             _trimTimer.Stop();
-            if (!sender.IsVisible)
+            App.Services.HistoryVm.SetViewVisible(sender.IsVisible);
+            if (sender.IsVisible)
+            {
+                App.Services.Main.SetPreviewActive(true);
+                if (Content is Views.ClipboardMainPage page) page.SetPreviewsActive(true);
+            }
+            else
             {
                 _trimTimer.Start();
             }
         };
+
+        App.Services.HistoryVm.SetViewVisible(AppWindow.IsVisible);
+        // 静默启动时窗口从未显示，Hide 不一定产生可见性变化事件，也需要启动空闲回收计时。
+        if (!AppWindow.IsVisible) _trimTimer.Start();
 
         if (Content is FrameworkElement root)
         {

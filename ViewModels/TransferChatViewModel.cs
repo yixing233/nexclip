@@ -120,7 +120,19 @@ public partial class ChatMessageItem : ObservableObject
     public DateTime CreatedAt { get; set; }
     public bool IsFromSelf { get; set; }
     public bool IsManual { get; set; }
-    public ImageSource? Thumbnail { get; set; }
+    private readonly DeferredPreview<ImageSource> _thumbnail;
+
+    public ImageSource? Thumbnail => _thumbnail.Value;
+
+    public ChatMessageItem()
+    {
+        _thumbnail = new DeferredPreview<ImageSource>(() => BuildThumbnail(ImagePath));
+    }
+
+    internal void SetPreviewActive(bool active)
+    {
+        if (_thumbnail.SetActive(active)) OnPropertyChanged(nameof(Thumbnail));
+    }
 
     [ObservableProperty]
     private bool showDateHeader;
@@ -185,7 +197,6 @@ public partial class ChatMessageItem : ObservableObject
             CreatedAt = item.CreatedAt,
             IsFromSelf = isFromSelf,
             IsManual = item.IsManual,
-            Thumbnail = BuildThumbnail(item.ImagePath),
         };
     }
 
@@ -221,6 +232,7 @@ public partial class ChatMessageItem : ObservableObject
 public partial class TransferChatViewModel : ObservableObject
 {
     private readonly AppServices _services;
+    private string? _selectedImagePath;
 
     [ObservableProperty]
     private string inputText = "";
@@ -473,7 +485,7 @@ public partial class TransferChatViewModel : ObservableObject
             _allMessages.RemoveAt(0);
             // 被筛选条件过滤掉的消息可能不在 Messages 中，Remove 未命中时安全返回 false
             Messages.Remove(oldest);
-            oldest.Thumbnail = null;
+            oldest.SetPreviewActive(false);
             trimmed = true;
         }
 
@@ -493,6 +505,11 @@ public partial class TransferChatViewModel : ObservableObject
         // 历史已被清空，重置水位线让下次激活重新完整加载
         _historyLoaded = false;
         _historyMaxId = 0;
+    }
+
+    internal void ReleasePreviews()
+    {
+        foreach (var message in _allMessages) message.SetPreviewActive(false);
     }
 
     private void OnEntryUpdated(ClipboardEntry entry, string? localImagePath, bool fromRemote)
@@ -518,38 +535,9 @@ public partial class TransferChatViewModel : ObservableObject
             CreatedAt = entry.CreatedAt != default ? entry.CreatedAt : DateTime.UtcNow,
             IsFromSelf = isFromSelf,
             IsManual = true,
-            Thumbnail = BuildThumbnail(localImagePath),
         };
 
         AppendMessage(msg);
-    }
-
-    private static ImageSource? BuildThumbnail(string? path)
-    {
-        if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
-        try
-        {
-            var bmp = new BitmapImage();
-            // 与 TransferChatPage.xaml 中气泡图片的显示上限（MaxHeight 180 / MaxWidth 240）对齐，
-            // 避免按 720px 解码浪费大量位图内存。
-            // 按长边约束避免超宽/超高图片被反向放大：BitmapImage 只设一个维度时会按原始比例
-            // 推算另一维度，若一律限高 180，超宽长条图会被推算出极大的宽度，解码面积反而暴涨。
-            bmp.DecodePixelType = DecodePixelType.Logical;
-            var size = ImageCodec.TryReadPngSize(path);
-            if (size is { } s && s.Width > s.Height)
-            {
-                // 横图按气泡宽度上限限宽
-                bmp.DecodePixelWidth = 240;
-            }
-            else
-            {
-                // 竖图/方图，以及非 PNG 或读取头部失败时的兜底：按气泡高度上限限高
-                bmp.DecodePixelHeight = 180;
-            }
-            bmp.UriSource = new Uri("file:///" + path.Replace('\\', '/'));
-            return bmp;
-        }
-        catch { return null; }
     }
 
     /// <summary>设备刷新重入闸门:1 表示上一轮仍在执行。</summary>
@@ -713,6 +701,7 @@ public partial class TransferChatViewModel : ObservableObject
     public void SetSelectedImage(byte[] bytes, string? localPath = null)
     {
         SelectedImageBytes = bytes;
+        _selectedImagePath = localPath;
         if (localPath != null && File.Exists(localPath))
         {
             try
@@ -736,6 +725,7 @@ public partial class TransferChatViewModel : ObservableObject
     public void ClearSelectedImage()
     {
         SelectedImageBytes = null;
+        _selectedImagePath = null;
         SelectedImageThumbnail = null;
         OnPropertyChanged(nameof(HasSelectedImage));
         OnPropertyChanged(nameof(HasSelectedImageVisibility));
@@ -771,7 +761,7 @@ public partial class TransferChatViewModel : ObservableObject
                     CreatedAt = DateTime.UtcNow,
                     IsFromSelf = true,
                     IsManual = true,
-                    Thumbnail = SelectedImageThumbnail,
+                    ImagePath = _selectedImagePath,
                 };
                 AppendMessage(selfImgMsg);
             }

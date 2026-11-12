@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\NexClip.Tray\NexClip.Tray.csproj" />
+    <Compile Include="..\Services\DeferredPreview.cs" Link="Desktop\DeferredPreview.cs" />
   </ItemGroup>
 
   <ItemGroup>
