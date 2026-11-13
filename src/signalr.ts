@@ -216,6 +216,27 @@ export class SignalRHub {
     this.devicesChangedTimer.unref?.();
   }
 
+  /**
+   * 广播文件互传事件(网页上传后通知同用户的其它网页会话与设备)。
+   * 与 broadcastUpdated 相同的用户组隔离语义:userId 为 null 全量广播。
+   */
+  broadcastFileTransferred(file: unknown, userId?: string | null): void {
+    const msg = { type: 1, target: 'FileTransferred', arguments: [file] };
+    for (const conn of this.conns.values()) {
+      if (userId && conn.userId && conn.userId !== userId) continue;
+      this.sendJson(conn.ws, msg);
+    }
+  }
+
+  /** 广播文件删除事件(接收端据此移除列表项) */
+  broadcastFileDeleted(fileId: string, userId?: string | null): void {
+    const msg = { type: 1, target: 'FileDeleted', arguments: [fileId] };
+    for (const conn of this.conns.values()) {
+      if (userId && conn.userId && conn.userId !== userId) continue;
+      this.sendJson(conn.ws, msg);
+    }
+  }
+
   /** 主动断开指定 deviceId 的所有活跃连接(用于设备注销/移除) */
   disconnectDevice(deviceId: string): void {
     for (const [token, conn] of this.conns.entries()) {

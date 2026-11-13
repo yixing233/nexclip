@@ -8,12 +8,14 @@ import { PairError } from './service.js';
 import type { SessionStore, SessionPayload } from './sessions.js';
 import { RateLimiter } from './rate.js';
 import { parseMultipart } from './multipart.js';
+import type { FileTransferService } from './fileTransfer.js';
 import { clamp, randomHex, detectPlatform, extractClientIpv4, sha256Hex } from './util.js';
 import { extractToken, extractDeviceId, extractDeviceToken } from './auth.js';
 
 export interface Ctx {
   cfg: AppConfig;
   svc: SyncService;
+  files: FileTransferService;
   sessions: SessionStore;
   rate: RateLimiter;
   latency: { add(us: number): void; avgMs: number; last12: number[] };
@@ -240,6 +242,78 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     const isManual = mp.fields.isManual === 'true' || mp.fields.isManual === '1';
     const entry = svc.uploadImage(mp.file.filename || 'image', mp.file.data, deviceId, deviceName, remoteIp(req), platform, version, isManual);
     sendJson(res, 200, entry);
+    return true;
+  }
+
+  // ============ /api/files 网页文件互传 ============
+  // 上限沿用 maxImageSizeBytes(可经 SC_MAX_IMAGE_BYTES 调大);限速 30 次/分钟防刷盘。
+  if (p === '/api/files' && method === 'POST') {
+    if (!requireDeviceOrSession()) return true;
+    if (!ctx.rate.allow('files:' + (ctx.actor?.userId ?? deviceActor?.Id ?? remoteIp(req)), 30, 60_000)) {
+      sendJson(res, 429, { error: '上传过于频繁,请稍后再试' });
+      return true;
+    }
+    const body = await readBody(req, cfg.maxImageSizeBytes + 64 * 1024).catch(() => { sendJson(res, 413, { error: '文件超过大小限制' }); return null as unknown as Buffer; });
+    if (!body) return true;
+    const mp = parseMultipart(req.headers['content-type'], body);
+    if (!mp.file || mp.file.data.length === 0) {
+      sendJson(res, 400, { error: '缺少文件' });
+      return true;
+    }
+    if (mp.file.data.length > cfg.maxImageSizeBytes) {
+      sendJson(res, 400, { error: '文件超过大小限制(' + Math.floor(cfg.maxImageSizeBytes / 1024 / 1024) + 'MB)' });
+      return true;
+    }
+    const deviceId = deviceActor?.Id ?? ctx.actor?.deviceId ?? 'web-' + randomHex(4);
+    const deviceName = mp.fields.deviceName || deviceActor?.Name || ctx.actor?.deviceId || '网页';
+    const userId = deviceActor?.UserId ?? ctx.actor?.userId ?? null;
+    const dto = ctx.files.upload(mp.file.filename || 'file', mp.file.data, deviceId, deviceName, userId);
+    sendJson(res, 200, dto);
+    return true;
+  }
+
+  if (p === '/api/files' && method === 'GET') {
+    if (!requireDeviceOrSession()) return true;
+    const userId = deviceActor?.UserId ?? ctx.actor?.userId ?? null;
+    const limit = Number(url.searchParams.get('limit') ?? 50);
+    const offset = Number(url.searchParams.get('offset') ?? 0);
+    const { items, total } = ctx.files.list(userId, Number.isFinite(limit) ? limit : 50, Number.isFinite(offset) ? offset : 0);
+    sendJson(res, 200, { items, total });
+    return true;
+  }
+
+  const mFileDownload = /^\/api\/files\/([0-9a-f]+)\/download$/.exec(p);
+  // HEAD 支持:下载工具/浏览器预检常用 HEAD 探测大小,404 会让它们误判文件不存在
+  if (mFileDownload && (method === 'GET' || method === 'HEAD')) {
+    if (!requireDeviceOrSession()) return true;
+    const row = ctx.files.getByFileId(mFileDownload[1]);
+    if (!row) { sendJson(res, 404, { error: '文件不存在' }); return true; }
+    // 用户组隔离:登录用户只能下载自己组里的文件
+    const actorUserId = deviceActor?.UserId ?? ctx.actor?.userId ?? null;
+    if (actorUserId && row.UserId && actorUserId !== row.UserId) {
+      sendJson(res, 403, { error: '无权访问该文件' });
+      return true;
+    }
+    const opened = ctx.files.openStream(row);
+    if (!opened) { sendJson(res, 410, { error: '文件已丢失(可能被磁盘清理)' }); return true; }
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Length', String(opened.size));
+    // RFC 5987:非 ASCII 原名走 filename* 编码;ASCII 名直接给 filename
+    const asciiFallback = row.FileName.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '');
+    res.setHeader('Content-Disposition',
+      `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encodeURIComponent(row.FileName)}`);
+    opened.stream.pipe(res);
+    return true;
+  }
+
+  const mFileDelete = /^\/api\/files\/([0-9a-f]+)$/.exec(p);
+  if (mFileDelete && method === 'DELETE') {
+    if (!requireDeviceOrSession()) return true;
+    const userId = deviceActor?.UserId ?? ctx.actor?.userId ?? null;
+    const ok = ctx.files.delete(mFileDelete[1], userId);
+    if (!ok) { sendJson(res, 404, { error: '文件不存在或无权删除' }); return true; }
+    sendJson(res, 200, { ok: true });
     return true;
   }
 

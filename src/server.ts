@@ -8,6 +8,7 @@ import { SessionStore } from './sessions.js';
 import { RateLimiter } from './rate.js';
 import { SignalRHub } from './signalr.js';
 import { SyncService } from './service.js';
+import { FileTransferService } from './fileTransfer.js';
 import { handleApi, sendJson, CredentialErrorCode, type Ctx } from './controllers.js';
 import { serveStatic } from './static.js';
 
@@ -17,6 +18,7 @@ const hub = new SignalRHub();
 const sessions = new SessionStore();
 const rate = new RateLimiter();
 const svc = new SyncService(db, cfg, hub);
+const files = new FileTransferService(db, cfg.imageStoragePath, hub);
 const latency = new LatencyTracker();
 
 hub.onConnected = (deviceId, deviceName, platform, version, ip) => svc.registerHubDevice(deviceId, deviceName, platform, version, ip);
@@ -104,7 +106,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   }
 
   // API / 旧协议
-  const ctx: Ctx = { cfg, svc, sessions, rate, latency: latency as unknown as Ctx['latency'], url, req, res, actor, invalidDeviceSession };
+  const ctx: Ctx = { cfg, svc, files, sessions, rate, latency: latency as unknown as Ctx['latency'], url, req, res, actor, invalidDeviceSession };
   const handled = await handleApi(ctx).catch((e) => {
     if (e.message === 'body-too-large') {
       res.statusCode = 413;
