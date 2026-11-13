@@ -30,6 +30,15 @@ class PushClient(
     var onStateChanged: ((String) -> Unit)? = null
     var onAuthFailure: ((Throwable) -> Unit)? = null
 
+    // ---------- 文件互传事件(2026-11-13 服务端新增) ----------
+    // 回调在 SignalR 接收线程上触发,实现方自行切主线程。
+    // UI 当前未消费此事件(后续加「文件互传」页后接线),先保证推送不丢。
+
+    /** 其它端上传了新文件 */
+    var onFileTransferred: ((FileTransferInfo) -> Unit)? = null
+    /** 某文件被删除(参数为 fileId) */
+    var onFileDeleted: ((String) -> Unit)? = null
+
     val isConnected: Boolean get() = connection?.connectionState == HubConnectionState.CONNECTED
 
     fun connect() {
@@ -47,6 +56,16 @@ class PushClient(
             // Class<T> 重载:回调直接收到反序列化后的条目对象(LinkedHashMap)
             val entry = toEntry(raw)
             if (entry != null) onEntryReceived?.invoke(entry)
+        }, Any::class.java)
+        conn.on("FileTransferred", { raw ->
+            // 服务端推的是文件元数据对象;老服务端没有该事件,注册无害
+            val json = runCatching { org.json.JSONObject(raw as? Map<*, *> ?: return@on) }.getOrNull() ?: return@on
+            val info = parseFileJson(json) ?: return@on
+            onFileTransferred?.invoke(info)
+        }, Any::class.java)
+        conn.on("FileDeleted", { raw ->
+            val fileId = (raw as? String) ?: ((raw as? List<*>)?.firstOrNull() as? String) ?: return@on
+            onFileDeleted?.invoke(fileId)
         }, Any::class.java)
         conn.onClosed { error ->
             onStateChanged?.invoke("disconnected")
@@ -153,6 +172,22 @@ class PushClient(
             deviceName = map["deviceName"] as? String,
             createdAt = map["createdAt"] as? String ?: "",
             isManual = (map["isManual"] as? Boolean) ?: false,
+        )
+    } catch (_: Exception) {
+        null
+    }
+
+    /** FileTransferred 推送载荷 → FileTransferInfo(与 SyncApi.parseFileTransferInfo 同构) */
+    private fun parseFileJson(json: org.json.JSONObject): FileTransferInfo? = try {
+        FileTransferInfo(
+            fileId = json.getString("fileId"),
+            fileName = json.getString("fileName"),
+            size = json.optLong("size"),
+            contentHash = json.optString("contentHash"),
+            deviceId = json.optString("deviceId"),
+            deviceName = if (json.isNull("deviceName")) null else json.optString("deviceName"),
+            createdAt = json.optString("createdAt"),
+            downloadUrl = json.optString("downloadUrl"),
         )
     } catch (_: Exception) {
         null

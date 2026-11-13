@@ -4,6 +4,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -37,6 +38,39 @@ data class DeviceInfo(
 
 /** 配对结果(POST /api/pair → approved + 一次性设备凭证) */
 data class PairStatus(val status: String, val deviceToken: String? = null)
+
+/**
+ * 文件互传条目(GET /api/files、POST /api/files 返回的元数据)。
+ *
+ * 与 ClipboardEntry 的关键区别:文件不在剪贴板历史里,接收端收到
+ * FileTransferred 推送后应展示为「文件」而非写入剪贴板/自动粘贴。
+ */
+data class FileTransferInfo(
+    val fileId: String,
+    val fileName: String,
+    val size: Long,
+    val contentHash: String,
+    val deviceId: String,
+    val deviceName: String?,
+    val createdAt: String,
+    val downloadUrl: String,
+)
+
+/** 按扩展名猜 MIME(上传分片用;服务端只存字节,不依赖该值) */
+internal fun mimeTypeOf(fileName: String): String {
+    val ext = fileName.substringAfterLast('.', "").lowercase()
+    return when (ext) {
+        "png" -> "image/png"; "jpg", "jpeg" -> "image/jpeg"; "gif" -> "image/gif"
+        "webp" -> "image/webp"; "pdf" -> "application/pdf"
+        "zip" -> "application/zip"; "7z" -> "application/x-7z-compressed"
+        "mp3" -> "audio/mpeg"; "mp4" -> "video/mp4"
+        "txt", "md", "log" -> "text/plain"
+        "doc", "docx" -> "application/msword"
+        "xls", "xlsx" -> "application/vnd.ms-excel"
+        else -> "application/octet-stream"
+    }
+}
+
 
 /** 6 位纯数字配对码(POST /api/pairing-codes → { code, expiresAt, userId }) */
 data class PairingCode(val code: String, val expiresAt: String, val userId: String, val deviceToken: String? = null, val qrPayload: String? = null)
@@ -95,6 +129,19 @@ class SyncApi(
         createdAt = o.optString("createdAt"),
         isManual = o.optBoolean("isManual", false),
     )
+
+    private fun parseFileTransferInfo(o: JSONObject?) = o?.let {
+        FileTransferInfo(
+            fileId = it.getString("fileId"),
+            fileName = it.getString("fileName"),
+            size = it.optLong("size"),
+            contentHash = it.optString("contentHash"),
+            deviceId = it.optString("deviceId"),
+            deviceName = if (it.isNull("deviceName")) null else it.optString("deviceName"),
+            createdAt = it.optString("createdAt"),
+            downloadUrl = it.optString("downloadUrl"),
+        )
+    }
 
     private fun execute(req: Request): okhttp3.Response = try {
         val resp = client.newCall(req).execute()
@@ -341,6 +388,73 @@ class SyncApi(
         val req = builder("GET", "/api/images/" + ref.trimStart('/')).build()
         val resp = execute(req)
         resp.use { return it.body?.bytes() }
+    }
+
+    // ---------- 文件互传(/api/files, 2026-11-13 服务端新增) ----------
+
+    /**
+     * 上传任意文件。
+     *
+     * 与 uploadImage 的差异:文件走独立的 Files 表,不会进入剪贴板历史,
+     * 各端收到的是 FileTransferred 推送而非 ClipboardUpdated ——
+     * 这保证了「传文件」不会触发接收端的自动粘贴链路。
+     */
+    fun uploadFile(
+        file: java.io.File,
+        deviceId: String,
+        deviceName: String,
+    ): FileTransferInfo {
+        val mime = mimeTypeOf(file.name)
+        val body = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("file", file.name, file.asRequestBody(mime.toMediaType()))
+            .addFormDataPart("deviceId", deviceId)
+            .addFormDataPart("deviceName", deviceName)
+            .addFormDataPart("platform", "Android")
+            .addFormDataPart("version", android.os.Build.VERSION.RELEASE)
+            .build()
+        val req = builder("POST", "/api/files").post(body).build()
+        val resp = execute(req)
+        resp.use {
+            val json = JSONObject(it.body?.string() ?: "{}")
+            return FileTransferInfo(
+                fileId = json.getString("fileId"),
+                fileName = json.getString("fileName"),
+                size = json.getLong("size"),
+                contentHash = json.optString("contentHash"),
+                deviceId = json.optString("deviceId"),
+                deviceName = json.optString("deviceName"),
+                createdAt = json.optString("createdAt"),
+                downloadUrl = json.optString("downloadUrl"),
+            )
+        }
+    }
+
+    /** 列出文件互传记录(新→旧),返回 (条目, 总数) */
+    fun listFiles(offset: Int = 0, limit: Int = 50): Pair<List<FileTransferInfo>, Int> {
+        val req = builder("GET", "/api/files?offset=$offset&limit=$limit").build()
+        val resp = execute(req)
+        resp.use {
+            val json = JSONObject(it.body?.string() ?: "{}")
+            val items = json.optJSONArray("items") ?: return Pair(emptyList(), 0)
+            val list = (0 until items.length()).mapNotNull { i ->
+                parseFileTransferInfo(items.optJSONObject(i) ?: return@mapNotNull null)
+            }
+            return Pair(list, json.optInt("total", list.size))
+        }
+    }
+
+    /** 下载文件内容(调用方负责写盘;文件名用元数据里的 fileName) */
+    fun downloadFile(fileId: String): ByteArray? {
+        val req = builder("GET", "/api/files/$fileId/download").build()
+        val resp = execute(req)
+        resp.use { return it.body?.bytes() }
+    }
+
+    /** 删除文件(服务端会广播 FileDeleted 给同组其它端) */
+    fun deleteFile(fileId: String): Boolean {
+        val req = builder("DELETE", "/api/files/$fileId").build()
+        val resp = execute(req)
+        resp.use { return it.isSuccessful }
     }
 
     /** 服务连通性与网络延迟测试 (GET /api/health) */

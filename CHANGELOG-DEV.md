@@ -11,6 +11,39 @@
 
 ---
 
+## 2026-11-13 · 文件互传接口适配(仅 API 层,无 UI)
+
+### 背景
+
+服务端上线了网页文件互传(server 分支 a26e087)。本次为 Android 端把 /api/files 的客户端接口与 SignalR 事件接好,后续「手机 ←→ 服务器」方向的文件互传 UI 只需消费现成接口,不用再动网络层。
+
+### 改动(仅数据层,不动 UI)
+
+- `data/SyncApi.kt`:
+  - 新增 `FileTransferInfo` 数据类(fileId/fileName/size/hash/来源/时间/downloadUrl)
+  - `uploadFile(File)` / `listFiles()` / `downloadFile(fileId)` / `deleteFile(fileId)`
+  - `mimeTypeOf()` 按扩展名猜 MIME(服务端只存字节,不依赖该值)
+- `data/PushClient.kt`:
+  - 注册 `FileTransferred` / `FileDeleted` 推送(老服务端无此事件,注册无害)
+  - 新回调 `onFileTransferred` / `onFileDeleted`,在 SignalR 接收线程触发
+- 关键语义(与网页端一致):文件不在剪贴板历史里,收到 FileTransferred **不应该**走自动粘贴链路 —— 后续接 UI 时必须展示为「文件」而非写剪贴板。
+
+### 验证边界
+
+- 编译通过(`compileDebugKotlin`)。**接口未经线上实测**:没有 UI 入口,无法在真机上发起上传;待 UI 落地后一起验证。
+- PushClient 对 `FileTransferred` 的解析假定载荷是 {fileId,fileName,...} 对象,与服务端 broadcastFileTransferred 的 arguments[0] 一致;FileDeleted 载荷是 [fileId] 数组。
+
+### 多端状态
+
+| 端 | 状态 |
+|---|---|
+| Server | 已上线(a26e087) |
+| Web | 已上线(ea43462),浏览器实测通过 |
+| Android | **API 层就绪,UI 未做**(本次) |
+| Windows | 未做 |
+
+---
+
 ## 2026-11-11 · 短信验证码:补全角数字与英文关键字
 
 ### 背景
