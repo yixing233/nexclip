@@ -41,6 +41,11 @@ object SyncNotificationManager {
     const val NOTIFICATION_ID_PUSH = 2001
     /** 上传失败提示(独立 ID,不覆盖前台常驻通知与推送通知)。 */
     const val NOTIFICATION_ID_UPLOAD_FAILED = 3001
+    /** 收到文件互传(独立 ID;同 ID 覆盖是刻意的——连续收到多个文件只留最新一条提醒)。 */
+    const val NOTIFICATION_ID_FILE = 2002
+
+    /** MainActivity 读取该 extra 后直接打开文件互传页(通知点按/分享入口共用)。 */
+    const val EXTRA_OPEN_FILES_PAGE = "clip.yixing.sync.extra.OPEN_FILES_PAGE"
 
     /**
      * 初始化全部通知渠道
@@ -461,6 +466,45 @@ object SyncNotificationManager {
             nm.notify(NOTIFICATION_ID_UPLOAD_FAILED, notification)
         } catch (e: Exception) {
             android.util.Log.w("SyncNotification", "notifyUploadFailed 失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 收到文件互传通知。
+     *
+     * 走 CHANNEL_PUSH(与剪贴板推送同级)但独立 ID,不覆盖推送通知;
+     * 点按直接打开文件互传页(MainActivity 读 EXTRA_OPEN_FILES_PAGE)。
+     */
+    fun notifyFileReceived(context: Context, fileName: String, deviceName: String) {
+        try {
+            if (Build.VERSION.SDK_INT >= 33 &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val openFilesPi = PendingIntent.getActivity(
+                context,
+                2002,
+                Intent(context, MainActivity::class.java).apply {
+                    putExtra(EXTRA_OPEN_FILES_PAGE, true)
+                    // 通知点按走全新任务栈,加 FLAG_ACTIVITY_NEW_TASK 保证不叠加旧实例
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                },
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            val notification = NotificationCompat.Builder(context, CHANNEL_PUSH)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle("收到文件")
+                .setContentText("$deviceName 发来了 $fileName")
+                .setStyle(NotificationCompat.BigTextStyle().bigText("$deviceName 发来了 $fileName"))
+                .setContentIntent(openFilesPi)
+                .setAutoCancel(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .build()
+            nm.notify(NOTIFICATION_ID_FILE, notification)
+        } catch (e: Exception) {
+            android.util.Log.w("SyncNotification", "notifyFileReceived 失败: ${e.message}")
         }
     }
 

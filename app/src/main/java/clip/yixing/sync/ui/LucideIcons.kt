@@ -782,6 +782,236 @@ object LucideIcons {
         }.build()
     }
 
+    /** Lucide UploadCloud 上传图标(文件互传页上传按钮用) */
+    val UploadCloud: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.UploadCloud",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                // 云形(开口右下) + 上箭头
+                moveTo(20f, 16.6f)
+                curveTo(20.9f, 15.4f, 21.5f, 13.9f, 21.5f, 12.2f)
+                curveTo(21.5f, 8.9f, 19.1f, 6.1f, 15.9f, 5.6f)
+                curveTo(14.5f, 3.6f, 12.2f, 2.4f, 9.7f, 2.7f)
+                curveTo(6.4f, 3f, 3.9f, 5.6f, 3.6f, 8.9f)
+                curveTo(3.5f, 9.8f, 3.6f, 10.7f, 3.8f, 11.5f)
+                curveTo(4.1f, 14.4f, 5.9f, 16.6f, 8.3f, 17.4f)
+
+                moveTo(16f, 17f)
+                lineTo(16f, 11f)
+
+                moveTo(12.5f, 14.5f)
+                lineTo(16f, 11f)
+                lineTo(19.5f, 14.5f)
+            }
+        }.build()
+    }
+
+    /** Lucide FolderOpen 文件互传入口图标 */
+    val FolderOpen: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.FolderOpen",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                // 打开的文件夹:后板 + 前斜板
+                moveTo(4f, 6.5f)
+                lineTo(4f, 3.5f)
+                curveTo(4f, 2.9f, 4.4f, 2.5f, 5f, 2.5f)
+                lineTo(9.5f, 2.5f)
+                lineTo(11.5f, 5f)
+                lineTo(19f, 5f)
+                curveTo(19.6f, 5f, 20f, 5.4f, 20f, 6f)
+                lineTo(20f, 6.5f)
+
+                moveTo(6f, 14.5f)
+                lineTo(3.2f, 20f)
+                curveTo(2.9f, 20.6f, 3.3f, 21.5f, 4f, 21.5f)
+                lineTo(19.4f, 21.5f)
+                curveTo(20f, 21.5f, 20.6f, 21.1f, 20.8f, 20.5f)
+                lineTo(23f, 14.5f)
+                curveTo(23.2f, 13.9f, 22.7f, 13.2f, 22f, 13.2f)
+                lineTo(6.8f, 13.2f)
+                curveTo(6.2f, 13.2f, 5.6f, 13.6f, 5.4f, 14.2f)
+                lineTo(3.2f, 20f)
+            }
+        }.build()
+    }
+
+    /** Lucide FileText 通用文件图标(文件互传条目用) */
+    val FileText: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.FileText",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                // 文件轮廓(右上角折角) + 两行文字
+                moveTo(14.5f, 2.5f)
+                lineTo(6f, 2.5f)
+                curveTo(5.2f, 2.5f, 4.5f, 3.2f, 4.5f, 4f)
+                lineTo(4.5f, 20f)
+                curveTo(4.5f, 20.8f, 5.2f, 21.5f, 6f, 21.5f)
+                lineTo(18f, 21.5f)
+                curveTo(18.8f, 21.5f, 19.5f, 20.8f, 19.5f, 20f)
+                lineTo(19.5f, 7.5f)
+                lineTo(14.5f, 2.5f)
+
+                moveTo(14f, 2.5f)
+                lineTo(14f, 8f)
+                lineTo(19.5f, 8f)
+
+                moveTo(8.5f, 13.5f)
+                lineTo(15.5f, 13.5f)
+
+                moveTo(8.5f, 17f)
+                lineTo(15.5f, 17f)
+            }
+        }.build()
+    }
+
+    /** Lucide FileArchive 压缩包图标(zip/7z/rar) */
+    val FileArchive: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.FileArchive",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                // 文件轮廓 + 中缝拉链线
+                moveTo(14.5f, 2.5f)
+                lineTo(6f, 2.5f)
+                curveTo(5.2f, 2.5f, 4.5f, 3.2f, 4.5f, 4f)
+                lineTo(4.5f, 20f)
+                curveTo(4.5f, 20.8f, 5.2f, 21.5f, 6f, 21.5f)
+                lineTo(18f, 21.5f)
+                curveTo(18.8f, 21.5f, 19.5f, 20.8f, 19.5f, 20f)
+                lineTo(19.5f, 7.5f)
+                lineTo(14.5f, 2.5f)
+
+                moveTo(14f, 2.5f)
+                lineTo(14f, 8f)
+                lineTo(19.5f, 8f)
+
+                moveTo(12f, 2.5f)
+                lineTo(12f, 5f)
+                moveTo(12f, 6.5f)
+                lineTo(12f, 8f)
+                moveTo(12f, 9.5f)
+                lineTo(12f, 11f)
+                moveTo(12f, 12.5f)
+                lineTo(12f, 14f)
+
+                moveTo(10.5f, 15.5f)
+                lineTo(13.5f, 15.5f)
+                lineTo(13.5f, 18.5f)
+                lineTo(10.5f, 18.5f)
+                lineTo(10.5f, 15.5f)
+            }
+        }.build()
+    }
+
+    /** Lucide Video 视频图标(mp4/mov/mkv) */
+    val Video: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Video",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                // 摄像机机身 + 三角镜头
+                moveTo(22f, 8.5f)
+                lineTo(22f, 15.5f)
+                lineTo(16f, 12f)
+                lineTo(22f, 8.5f)
+
+                moveTo(14f, 6f)
+                lineTo(14f, 18f)
+                curveTo(14f, 18.8f, 13.3f, 19.5f, 12.5f, 19.5f)
+                lineTo(3.5f, 19.5f)
+                curveTo(2.7f, 19.5f, 2f, 18.8f, 2f, 18f)
+                lineTo(2f, 6f)
+                curveTo(2f, 5.2f, 2.7f, 4.5f, 3.5f, 4.5f)
+                lineTo(12.5f, 4.5f)
+                curveTo(13.3f, 4.5f, 14f, 5.2f, 14f, 6f)
+            }
+        }.build()
+    }
+
+    /** Lucide Music 音频图标(mp3/wav/flac) */
+    val Music: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Lucide.Music",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 2f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round
+            ) {
+                // 音符:符杆 + 两个符头
+                moveTo(9f, 18f)
+                lineTo(9f, 5f)
+                lineTo(21f, 3f)
+                lineTo(21f, 16f)
+
+                moveTo(9f, 18f)
+                curveTo(9f, 19.7f, 7.7f, 21f, 6f, 21f)
+                curveTo(4.3f, 21f, 3f, 19.7f, 3f, 18f)
+                curveTo(3f, 16.3f, 4.3f, 15f, 6f, 15f)
+                curveTo(7.7f, 15f, 9f, 16.3f, 9f, 18f)
+
+                moveTo(21f, 16f)
+                curveTo(21f, 17.7f, 19.7f, 19f, 18f, 19f)
+                curveTo(16.3f, 19f, 15f, 17.7f, 15f, 16f)
+                curveTo(15f, 14.3f, 16.3f, 13f, 18f, 13f)
+                curveTo(19.7f, 13f, 21f, 14.3f, 21f, 16f)
+            }
+        }.build()
+    }
+
     /** Lucide Send / PaperPlane 发送图标 */
     val Send: ImageVector by lazy {
         ImageVector.Builder(

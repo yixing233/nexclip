@@ -1,6 +1,7 @@
 package clip.yixing.sync
 
 import android.app.ActivityManager
+import android.content.Intent
 import android.os.Bundle
 import android.content.pm.PackageManager
 import androidx.activity.BackEventCompat
@@ -42,6 +43,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import kotlinx.coroutines.CancellationException
 import androidx.compose.runtime.remember
@@ -62,11 +64,13 @@ import androidx.compose.ui.unit.sp
 import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import androidx.navigationevent.compose.rememberNavigationEventDispatcherOwner
 import clip.yixing.sync.service.ClipboardMonitorService
+import clip.yixing.sync.service.SyncNotificationManager
 import clip.yixing.sync.ui.AppUpdateDialog
 import clip.yixing.sync.ui.BottomBarIcons
 import clip.yixing.sync.ui.HomePage
 import clip.yixing.sync.ui.LucideIcons
 import clip.yixing.sync.ui.ManualPushPage
+import clip.yixing.sync.ui.FilesPage
 import clip.yixing.sync.ui.RecordsPage
 import clip.yixing.sync.ui.SearchPage
 import clip.yixing.sync.ui.BarBlurSurface
@@ -143,6 +147,10 @@ class MainActivity : ComponentActivity() {
         if (SyncSettings.bootStartEnabled(this)) {
             ClipboardMonitorService.start(this)
         }
+        // 通知点按(open_files_page)或系统分享(SEND/SEND_MULTIPLE)进入时,
+        // 提取 intent 信号传给 MainScreen 的初始 state —— compose 未就绪前
+        // 不能命令式调 openFilesPage(),state 初值是唯一可靠路径。
+        launchIntentSignal = extractIntentSignal(intent)
         setContent {
             // 气泡菜单/弹窗等组件依赖 NavigationEventDispatcher 处理返回手势,
             // 需在根节点提供 DispatcherOwner, 并挂载 OnBackInvokedOverlayInput 接收系统返回事件。
@@ -165,11 +173,47 @@ class MainActivity : ComponentActivity() {
                 LocalNavigationEventDispatcherOwner provides dispatcherOwner
             ) {
                 NexClipTheme {
-                    MainScreen()
+                    MainScreen(
+                        initialOpenFiles = launchIntentSignal.openFiles,
+                        initialShareUris = launchIntentSignal.shareUris,
+                    )
                 }
             }
         }
     }
+
+    /** onCreate/onNewIntent 提取的启动信号(打开文件页 / 待上传分享 Uri) */
+    data class LaunchIntentSignal(val openFiles: Boolean, val shareUris: List<android.net.Uri>)
+
+    @Volatile
+    private var launchIntentSignal: LaunchIntentSignal = LaunchIntentSignal(false, emptyList())
+
+    /** 从 intent 提取文件页启动信号(通知点按 / 分享) */
+    private fun extractIntentSignal(intent: Intent?): LaunchIntentSignal {
+        if (intent == null) return LaunchIntentSignal(false, emptyList())
+        val shareUris = when (intent.action) {
+            Intent.ACTION_SEND ->
+                @Suppress("DEPRECATION")
+                listOfNotNull(intent.getParcelableExtra<android.net.Uri>(Intent.EXTRA_STREAM))
+            Intent.ACTION_SEND_MULTIPLE ->
+                @Suppress("DEPRECATION")
+                intent.getParcelableArrayListExtra<android.net.Uri>(Intent.EXTRA_STREAM)?.filterNotNull().orEmpty()
+            else -> emptyList()
+        }
+        val openFiles = intent.getBooleanExtra(SyncNotificationManager.EXTRA_OPEN_FILES_PAGE, false) || shareUris.isNotEmpty()
+        return LaunchIntentSignal(openFiles, shareUris)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val signal = extractIntentSignal(intent)
+        // 热路径:compose 树已在,直接把信号交给 MainScreen 的回调
+        pendingIntentSignal?.invoke(signal)
+    }
+
+    /** MainScreen 组合后注册;onNewIntent 通过它把信号转发进 compose 状态 */
+    @Volatile
+    var pendingIntentSignal: ((LaunchIntentSignal) -> Unit)? = null
 
     override fun onResume() {
         super.onResume()
@@ -220,7 +264,7 @@ private class PagerNavigator(private val scope: CoroutineScope) {
 }
 
 @Composable
-private fun MainScreen() {
+private fun MainScreen(initialOpenFiles: Boolean = false, initialShareUris: List<android.net.Uri> = emptyList()) {
     val pagerState = rememberPagerState(pageCount = { 3 })
     val scope = rememberCoroutineScope()
     val pagerNavigator = remember { PagerNavigator(scope) }
@@ -254,16 +298,24 @@ private fun MainScreen() {
     var isManualPushOpen by remember { mutableStateOf(false) }
     val manualPushNavState = rememberPredictiveNavigationLayerState()
 
-    // 两个覆盖层互斥打开,底层跟随"当前活着的那一层"下沉。
+    // 文件互传覆盖页:初始值来自 intent(通知点按/系统分享),冷启动直接进入
+    var isFilesOpen by remember { mutableStateOf(initialOpenFiles) }
+    val filesNavState = rememberPredictiveNavigationLayerState()
+    // 待上传的分享 Uri(系统分享进入时非空,FilesPage 消费后回调清空)
+    var pendingShareUris = remember { mutableStateListOf<android.net.Uri>().apply { addAll(initialShareUris) } }
+
+    // 覆盖层互斥打开,底层跟随"当前活着的那一层"下沉。
     val overlayDepth: () -> Float = {
         maxOf(
             scanNavState.backgroundDepth.value,
             manualPushNavState.backgroundDepth.value,
+            filesNavState.backgroundDepth.value,
         )
     }
     val overlayBackdropIntensity = maxOf(
         scanNavState.backdropIntensity.value,
         manualPushNavState.backdropIntensity.value,
+        filesNavState.backdropIntensity.value,
     )
 
     // 启动检查发现新版本后，点击 snackbar「更新」直接在应用内下载安装
@@ -303,8 +355,21 @@ private fun MainScreen() {
         }
     }
 
-    val isGlobalOverlayActive = isScanOpen || isManualPushOpen || searchOpen
+    val isGlobalOverlayActive = isScanOpen || isManualPushOpen || isFilesOpen || searchOpen
     val isAnyOverlayActive = isOverlayActiveHome || isOverlayActiveRecords || isOverlayActiveSettings || isGlobalOverlayActive
+
+    // onNewIntent(通知点按/分享热路径) → compose 状态:
+    // Activity 侧通过 pendingIntentSignal 回调转发;冷启动路径走 MainScreen 初始参数,无需补发。
+    val activity = appContext as? MainActivity
+    DisposableEffect(activity) {
+        val forward: (MainActivity.LaunchIntentSignal) -> Unit = { signal ->
+            if (signal.openFiles) isFilesOpen = true
+            pendingShareUris.clear()
+            pendingShareUris.addAll(signal.shareUris)
+        }
+        activity?.pendingIntentSignal = forward
+        onDispose { activity?.pendingIntentSignal = null }
+    }
 
     fun openScanner() {
         isScanOpen = true
@@ -322,6 +387,15 @@ private fun MainScreen() {
         isManualPushOpen = false
     }
 
+    fun openFilesPage() {
+        isFilesOpen = true
+    }
+
+    fun closeFilesPage() {
+        isFilesOpen = false
+        pendingShareUris.clear()
+    }
+
     if (predictiveBackOn) {
         PredictiveNavigationBackHandler(
             enabled = isScanOpen,
@@ -335,9 +409,16 @@ private fun MainScreen() {
             maxTranslationPercent = predictiveBackMaxPercent.toLong(),
             onDismiss = { isManualPushOpen = false },
         )
+        PredictiveNavigationBackHandler(
+            enabled = isFilesOpen,
+            state = filesNavState,
+            maxTranslationPercent = predictiveBackMaxPercent.toLong(),
+            onDismiss = { closeFilesPage() },
+        )
     } else {
         BackHandler(enabled = isScanOpen) { isScanOpen = false }
         BackHandler(enabled = isManualPushOpen) { isManualPushOpen = false }
+        BackHandler(enabled = isFilesOpen) { closeFilesPage() }
     }
 
     // 单个 backdrop:录制外层 content(Pager 整体,含各页大标题顶栏),底栏 blur
@@ -384,6 +465,13 @@ private fun MainScreen() {
                                 Icon(
                                     imageVector = LucideIcons.Send,
                                     contentDescription = "即时互传",
+                                    tint = MiuixTheme.colorScheme.onSurface
+                                )
+                            }
+                            IconButton(onClick = { openFilesPage() }) {
+                                Icon(
+                                    imageVector = LucideIcons.FolderOpen,
+                                    contentDescription = "文件互传",
                                     tint = MiuixTheme.colorScheme.onSurface
                                 )
                             }
@@ -480,6 +568,20 @@ private fun MainScreen() {
                 onBack = { closeManualPush() }
             )
         }
+
+        // 全屏文件互传页:同上;系统分享进入时带 pendingShareUris 自动上传
+        PredictiveNavigationLayer(
+            visible = isFilesOpen,
+            state = filesNavState,
+            maxTranslationPercent = predictiveBackMaxPercent.toLong(),
+        ) {
+            FilesPage(
+                snackbarHostState = snackbarHostState,
+                pendingShareUris = pendingShareUris.toList(),
+                onShareConsumed = { pendingShareUris.clear() },
+                onBack = { closeFilesPage() }
+            )
+        }
     }
 
     // Snackbar: 修复配色与操作按钮文字可见性 (操作按钮蓝底白字, 错误提示红字, 成功/普通白底黑字)
@@ -528,7 +630,7 @@ private fun MainScreen() {
     // 底栏:悬浮(液态玻璃)或普通贴底,由设置开关控制,默认开启
     // 当全屏搜索或任一弹层/对话框/多选操作/扫码激活时平滑隐藏,防止遮挡弹层内容与操作按钮
     AnimatedVisibility(
-        visible = !searchOpen && !isAnyOverlayActive && !isScanOpen && !isManualPushOpen,
+        visible = !searchOpen && !isAnyOverlayActive && !isScanOpen && !isManualPushOpen && !isFilesOpen,
         enter = fadeIn(tween(180)) + slideInVertically(initialOffsetY = { it }, animationSpec = tween(180)),
         exit = fadeOut(tween(180)) + slideOutVertically(targetOffsetY = { it }, animationSpec = tween(180)),
         modifier = Modifier.align(Alignment.BottomCenter)

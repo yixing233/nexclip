@@ -221,6 +221,17 @@ class ClipboardMonitorService : Service() {
                         }
                     }
                 }
+                // 连接建立后拉一次文件互传列表(服务端是权威来源,这里只做展示缓存)
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        if (SyncSettings.isPaired(ctx) && SyncSettings.deviceToken(ctx).isNotBlank()) {
+                            val api = SyncApi(SyncSettings.serverUrl(ctx), SyncSettings.ensureDeviceId(ctx), SyncSettings.deviceToken(ctx))
+                            val (items, _) = api.listFiles()
+                            fileTransfers.value = items
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
             } else {
                 heartbeatJob?.cancel()
                 heartbeatJob = null
@@ -237,6 +248,20 @@ class ClipboardMonitorService : Service() {
                 client.disconnect()
                 if (push === client) push = null
             }
+        }
+        // 文件互传推送:更新内存列表 + 系统通知。
+        // 关键语义:文件不在剪贴板历史里,绝不走 addCaptured/自动粘贴链路。
+        client.onFileTransferred = { info ->
+            // 过滤本机上传的回显(服务端按用户组广播,包含上传者自己)
+            if (info.deviceId != SyncSettings.ensureDeviceId(ctx)) {
+                fileTransfers.value = listOf(info) + fileTransfers.value.filter { it.fileId != info.fileId }
+                SyncNotificationManager.notifyFileReceived(ctx, info.fileName, info.deviceName ?: "其他设备")
+            } else {
+                fileTransfers.value = listOf(info) + fileTransfers.value.filter { it.fileId != info.fileId }
+            }
+        }
+        client.onFileDeleted = { fileId ->
+            fileTransfers.value = fileTransfers.value.filter { it.fileId != fileId }
         }
         push = client
         client.connect()
@@ -523,6 +548,14 @@ class ClipboardMonitorService : Service() {
 
         /** 捕获/接收的剪贴板记录(最新在前) */
         val captured = MutableStateFlow<List<CapturedClip>>(emptyList())
+
+        /**
+         * 文件互传列表(最新在前)。
+         *
+         * 仅内存缓存,权威来源是服务端 /api/files;不持久化 —— 文件与剪贴板
+         * 不同,重连后首拉即可恢复,持久化反而会造成与服务端状态漂移。
+         */
+        val fileTransfers = MutableStateFlow<List<clip.yixing.sync.data.FileTransferInfo>>(emptyList())
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(context, Intent(context, ClipboardMonitorService::class.java))

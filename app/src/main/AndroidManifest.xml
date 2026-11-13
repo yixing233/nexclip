@@ -81,6 +81,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="de.robv.android.xposed.category.MODULE_SETTINGS" />
             </intent-filter>
+            <!-- 系统分享接收:文件互传(SEND 单文件 / SEND_MULTIPLE 多文件)。
+                 部分文档类分享带 application/octet-stream,与 */* 并存确保兼容 -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
         </activity>
         <activity
             android:name=".service.NotificationTrampolineActivity"

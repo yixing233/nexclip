@@ -11,6 +11,42 @@
 
 ---
 
+
+## 2026-11-14 · 文件互传 UI(全屏覆盖页 + 系统分享接收)
+
+### 背景
+
+API 层就绪后落地 UI。入口采用全屏覆盖页(HomePage 顶栏 FolderOpen 图标),
+功能含: SAF 多选上传、列表/下载/删除、收到文件系统通知、系统分享(SEND/SEND_MULTIPLE)接收。
+
+### 关键设计
+
+- **列表权威来源在服务端**: ClipboardMonitorService.fileTransfers 仅内存缓存,
+  重连后首拉恢复;本机上传走乐观插入,推送回显按 fileId 去重。
+- **下载去重**: MediaStore 先查 Downloads/NexClip 下同名条目,存在则覆盖写
+  (否则系统自动改名 file (1).txt,越下越多 —— 首轮实测踩到)。
+- **类型图标分流**: resolveFileTypeIcon 按扩展名选 图标+色调
+  (图片紫/视频红/音频绿/压缩黄/代码蓝/文档灰),LucideIcons 新增
+  FileArchive/Video/Music/FileText 四个手绘向量。
+- **点击行为**: 文本类(.txt/.md/.json 等)内存预览(截断 2 万字符,不落盘),
+  其它类型"下载到 Downloads → ACTION_VIEW 交给系统应用打开"。
+- **intent 信号模型**: 通知点按/系统分享走「onCreate 提取 → state 初值」,
+  onNewIntent 走 pendingIntentSignal 回调转发 —— compose 未就绪前不命令式
+  改 UI 状态,规避冷启动竞态。
+- 上传进度逐文件展示(文件名+转圈,完成即转为正式条目),不再用总数计数条。
+
+### 验证边界
+
+- assembleDebug 通过,装机确认启动无崩溃、无 hwui 崩溃。
+- **上传达意链路未端到端实测**: 设备 wireless adb 中途掉线,以下用例留待
+  设备恢复后验证 —— ① 上传后网页列表即时出现 ② 网页上传手机收通知
+  ③ 分享菜单进 NexClip 直接上传 ④ 同名文件二次下载不产生 (1) 副本
+  ⑤ 文本预览弹窗。
+- 通知点按 deep-link 与分享接收在部分 ROM 受「后台启动 Activity」限制,
+  MIUI 上若点通知仅打开主页未进文件页,需给 NexClip 开后台弹出权限。
+
+---
+
 ## 2026-11-13 · 文件互传接口适配(仅 API 层,无 UI)
 
 ### 背景
