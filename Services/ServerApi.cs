@@ -314,6 +314,138 @@ public sealed class ServerApi
         return await response.Content.ReadAsByteArrayAsync(ct);
     }
 
+    // ---------- 文件互传(/api/files, 2026-11-13 服务端新增) ----------
+    // 语义约定:文件不在剪贴板历史里(独立 Files 表)。UI 消费 FileTransferred
+    // 推送时必须展示为「文件」,不得写入剪贴板/自动粘贴。
+
+    /// <summary>POST /api/files:上传任意文件(独立于剪贴板历史,接收端收到 FileTransferred 推送)。</summary>
+    public async Task<FileTransferInfo?> UploadFileAsync(
+        string serverUrl, string token, string filePath,
+        string deviceId, string deviceName,
+        string? platform = null, string? version = null, CancellationToken ct = default)
+    {
+        await using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var fileName = Path.GetFileName(filePath);
+        var contentType = GuessContentType(fileName);
+        using var form = new MultipartFormDataContent();
+        var streamContent = new StreamContent(fs);
+        streamContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(contentType);
+        form.Add(streamContent, "file", fileName);
+        form.Add(new StringContent(deviceId), "deviceId");
+        form.Add(new StringContent(deviceName), "deviceName");
+        if (!string.IsNullOrWhiteSpace(platform)) form.Add(new StringContent(platform), "platform");
+        if (!string.IsNullOrWhiteSpace(version)) form.Add(new StringContent(version), "version");
+        using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint(serverUrl, "/api/files"))
+        {
+            Content = form,
+        };
+        return await SendAsync<FileTransferInfo>(request, deviceId, token, ct);
+    }
+
+    /// <summary>GET /api/files:列出文件互传记录(新→旧),返回 (条目, 总数)。</summary>
+    public async Task<(List<FileTransferInfo> Items, int Total)> ListFilesAsync(
+        string serverUrl, string deviceId, string token, int offset = 0, int limit = 50, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            Endpoint(serverUrl, $"/api/files?offset={offset}&limit={limit}"));
+        var json = await SendAsync<JsonElement>(request, deviceId, token, ct);
+        var items = new List<FileTransferInfo>();
+        if (json.TryGetProperty("items", out var arr) && arr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var el in arr.EnumerateArray())
+            {
+                var info = ParseFileTransferInfo(el);
+                if (info is not null) items.Add(info);
+            }
+        }
+        var total = json.TryGetProperty("total", out var t) && t.TryGetInt32(out var n) ? n : items.Count;
+        return (items, total);
+    }
+
+    /// <summary>GET /api/files/{id}/download:下载文件内容(410 表示服务端文件已丢失)。</summary>
+    public async Task<byte[]?> DownloadFileAsync(
+        string serverUrl, string deviceId, string token, string fileId, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, Endpoint(serverUrl, "/api/files/" + fileId + "/download"));
+        ApplyDeviceAuth(request, deviceId, token);
+        using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Gone or HttpStatusCode.NoContent)
+        {
+            return null;
+        }
+        await EnsureSuccessAsync(response, ct);
+        return await response.Content.ReadAsByteArrayAsync(ct);
+    }
+
+    /// <summary>DELETE /api/files/{id}:删除文件(服务端会广播 FileDeleted 给同组其它端)。</summary>
+    public async Task DeleteFileAsync(
+        string serverUrl, string deviceId, string token, string fileId, CancellationToken ct = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Delete, Endpoint(serverUrl, "/api/files/" + fileId));
+        await SendNoContentAsync(request, deviceId, token, ct);
+    }
+
+    /// <summary>按扩展名猜上传用 MIME;注册表查不到时回退 octet-stream(服务端只存字节,不依赖该值)。</summary>
+    private static string GuessContentType(string fileName)
+    {
+        var ext = Path.GetExtension(fileName);
+        if (string.IsNullOrEmpty(ext)) return "application/octet-stream";
+        try
+        {
+            using var key = Microsoft.Win32.Registry.ClassesRoot.OpenSubKey(ext);
+            if (key?.GetValue("Content Type") is string ct && !string.IsNullOrWhiteSpace(ct))
+            {
+                return ct;
+            }
+        }
+        catch
+        {
+            // 注册表不可访问时回退默认值
+        }
+        return ext.ToLowerInvariant() switch
+        {
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            ".pdf" => "application/pdf",
+            ".zip" => "application/zip",
+            ".txt" or ".md" or ".log" => "text/plain",
+            ".mp3" => "audio/mpeg",
+            ".mp4" => "video/mp4",
+            _ => "application/octet-stream",
+        };
+    }
+
+    private static FileTransferInfo? ParseFileTransferInfo(JsonElement el)
+    {
+        try
+        {
+            if (el.ValueKind != JsonValueKind.Object) return null;
+            string GetStr(string name) =>
+                el.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() ?? "" : "";
+            long GetLong(string name) =>
+                el.TryGetProperty(name, out var p) && p.TryGetInt64(out var v) ? v : 0;
+            var fileId = GetStr("fileId");
+            if (string.IsNullOrEmpty(fileId)) return null;
+            return new FileTransferInfo
+            {
+                FileId = fileId,
+                FileName = GetStr("fileName"),
+                Size = GetLong("size"),
+                ContentHash = GetStr("contentHash"),
+                DeviceId = GetStr("deviceId"),
+                DeviceName = el.TryGetProperty("deviceName", out var dn) && dn.ValueKind == JsonValueKind.String ? dn.GetString() : null,
+                CreatedAt = el.TryGetProperty("createdAt", out var ca) && DateTime.TryParse(ca.GetString(), out var d) ? d : DateTime.UtcNow,
+                DownloadUrl = GetStr("downloadUrl"),
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     /// <summary>
     /// POST /api/pairing-codes:生成一次性配对码(一码一设备,10 分钟有效)。
     /// 携带本设备信息:服务端生成码的同时登记/更新生成方设备(设备列表可见)。

@@ -24,6 +24,16 @@ public sealed class PushClient : IAsyncDisposable
     /// <summary>收到 ClipboardUpdated(entry)。</summary>
     public event Action<ClipboardEntry>? EntryReceived;
 
+    // ---------- 文件互传事件(2026-11-13 服务端新增;老服务端无此事件,不触发) ----------
+    // 语义约束:文件不在剪贴板历史里,收到 FileTransferred 必须展示为「文件」,
+    // 不得像 EntryReceived 那样写剪贴板/触发自动粘贴。
+
+    /// <summary>其它端上传了新文件(参数为文件元数据)。</summary>
+    public event Action<FileTransferInfo>? FileTransferred;
+
+    /// <summary>某文件被删除(参数为 fileId)。</summary>
+    public event Action<string>? FileDeleted;
+
     /// <summary>收到 DevicesChanged() 广播(设备上下线/配对/重命名/移除)。</summary>
     public event Action? DevicesChanged;
 
@@ -95,6 +105,8 @@ public sealed class PushClient : IAsyncDisposable
         _hub = hub;
 
         hub.On<ClipboardEntry>("ClipboardUpdated", entry => EntryReceived?.Invoke(entry));
+        hub.On<FileTransferInfo>("FileTransferred", file => FileTransferred?.Invoke(file));
+        hub.On<string>("FileDeleted", fileId => FileDeleted?.Invoke(fileId));
         hub.On("DevicesChanged", () => DevicesChanged?.Invoke());
         hub.Reconnecting += ex =>
         {

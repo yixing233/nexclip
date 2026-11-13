@@ -11,6 +11,200 @@
 
 ---
 
+## 2026-11-14 · 文件互传接口适配(仅 API 层,无 UI)
+
+### 背景
+
+服务端上线了网页文件互传(server 分支 a26e087,web 分支 ea43462):
+独立 Files 表 + /api/files 四个端点 + SignalR FileTransferred/FileDeleted 推送。
+本次为 Windows 端把客户端接口与推送事件接好,后续「电脑 ←→ 服务器」方向的
+文件互传 UI 只需消费现成接口,不用再动网络层。
+
+### 改动(仅数据层,不动 UI)
+
+- `Models/FileTransferInfo.cs`:文件元数据模型(fileId/fileName/size/hash/
+  来源/时间/downloadUrl + SizeText 人类可读大小)
+- `Services/ServerApi.cs`:
+  - `UploadFileAsync`(FileStream 直传,不整读内存;MIME 按注册表 Content Type
+    查询,失败回退常用扩展名表)
+  - `ListFilesAsync`(JsonElement 手动解析,total 容错)
+  - `DownloadFileAsync`(404/410/204 一律返回 null,语义"文件不存在或已丢失")
+  - `DeleteFileAsync`
+  - `ParseFileTransferInfo` 私有解析器
+- `Services/PushClient.cs`:注册 `FileTransferred`/`FileDeleted` 事件
+  (老服务端无此事件,不会触发),新事件 `FileTransferred`/`FileDeleted`
+
+### 语义约束(与网页/Android 端一致)
+
+文件不在剪贴板历史里,收到 FileTransferred **必须展示为「文件」**,
+不得像 EntryReceived 那样写剪贴板/触发自动粘贴。该约束已写进两处 XML 注释,
+后续接 UI 时以注释为准。
+
+### 验证边界
+
+- `dotnet build` 通过(0 错误;108 个警告全部为既有 MVVMTK/其它存量警告,
+  与本次改动无关)。
+- **接口未经线上实测**:无 UI 入口,无法端到端发起上传;Android 端同批
+  适配(API 形状一致)同样处于"编译通过、待 UI"状态。
+- `hub.On<FileTransferInfo>` 依赖 SignalR 客户端把 JSON 反序列化到模型,
+  字段命名依赖服务端 camelCase 与 .NET 默认命名策略匹配 —— 与既有
+  `hub.On<ClipboardEntry>` 同一套机制,后者在线上一直正常,故判定可靠。
+
+### 多端状态
+
+| 端 | 状态 |
+|---|---|
+| Server | 已上线(a26e087),deploy.sh 部署,健康检查通过 |
+| Web | 已上线(ea43462),浏览器实测通过 |
+| Android | API 层就绪,UI 未做(9646cc4) |
+| Windows | **API 层就绪,UI 未做**(本次) |
+
+---
+
+## 2026-10-23 · negotiate 错误补 code（凭证机制真正的发生点）
+
+### 背景
+
+上一条「服务端部署目录纳入 git 管理」把凭证错误码落进了版本库并上线。之后核对覆盖率时发现
+`test/` 三个文件**没有任何一条断言涉及 `credential_*`** —— 线上正在跑的判定逻辑没有任何回归保护。
+
+补测试的过程中顺手验证了各路径的实际响应，发现一个真实缺口：
+
+| 路径 | 修复前 | 修复后 |
+|---|---|---|
+| `GET /api/clipboard/history`（REST） | `{"error":"缺少设备凭证...","code":"credential_missing"}` | 不变 |
+| `GET /hubs/clipboard/negotiate` | `{"error":"unauthorized"}` ❌ **无 code** | `{"error":"缺少设备凭证...","code":"credential_missing"}` |
+
+**这个缺口恰好落在 10-23 故障的发生点上。** 当天桌面端连不上，卡的就是 negotiate：
+当初加 `CredentialErrorCode` 只覆盖了 `controllers.ts` 的 `sendApiError`，
+而 negotiate 分支写在 `server.ts`，是直接 `sendJson(res, 401, { error })` 手搓的，从来没有 code。
+于是这套机制**在最需要它的那条路径上不生效**：客户端仍只能看到 401，
+分不清「没带凭证」与「凭证失效」，把仍然有效的本地配对清掉——正是当天死循环的成因。
+
+### 方案
+
+negotiate 改用 `svc.deviceCredentialStatus()`（该方法本来就能区分三种情况，只是 negotiate 没用）：
+
+```
+revoked -> 410 + credential_revoked
+missing -> 401 + credential_missing
+invalid -> 401 + credential_invalid
+```
+
+顺带把「设备已移除」从原来的统一 401 细化为 410，与 REST 侧一致。
+
+### 验证
+
+**先写测试确认能抓到现状，再改代码转绿**：
+
+```
+改代码前： actual: undefined, expected: 'credential_missing'   ✖
+改代码后： device pairing regression passed                    ✔
+```
+
+新增 6 条断言：REST 与 negotiate 两侧的 missing / invalid / revoked，
+外加一条「有效凭证必须照常放行且返回 connectionToken」防止误伤正常路径。
+
+| 项 | 结果 |
+|---|---|
+| `npm test` | ✅ 8/8 通过（152 条断言量级，含新增） |
+| 线上 negotiate 无凭证 | ✅ `code: credential_missing` |
+| 线上 negotiate 错误令牌 | ✅ `code: credential_invalid` |
+| 线上 REST 无凭证 | ✅ `code: credential_missing`（未回归） |
+| 健康检查 | ✅ 200 |
+| 部署后设备重连 | ✅ 四台设备 10 秒内 lastSeen 全部推进到 07:44:4x |
+
+### 遗留
+
+1. **revoked 分支没有线上实测**：线上没有已移除的设备可试（会破坏真实用户数据），
+   只在测试中用临时库覆盖。风险可接受，因为该分支与 REST 侧共用 `deviceCredentialStatus`。
+2. 写入路径（`/api/clipboard` 等）的 `device_identity_mismatch` 403 仍无独立测试，
+   目前只有 negotiate 与 history 两条路径有覆盖。
+
+---
+
+## 2026-10-23 · 服务端部署目录纳入 git 管理
+
+### 背景
+
+承接待办 `ct_317eaff6`。当天排查「升级后连不上」时发现，生产 `/var/www/nexclip-server`
+不是 git 仓库，靠手工拷贝 dist 部署，没有任何版本记录，线上跑的其实是 09-18 的代码。
+临时修复只能直接 patch `dist/server.js` 并同步改 `src/server.ts`，src 与 dist 的一致性完全靠人工。
+
+进一步核对发现比待办描述的**更严重**：
+
+| 事实 | 说明 |
+|---|---|
+| `origin/server` 上没有凭证错误码的提交 | 服务器 `src/controllers.ts` 早已改好（`CredentialErrorCode`），但从未进过版本库 |
+| 任何人重新 build 都会把它冲掉 | 10-23 那次 401 死循环的修复只存在于服务器磁盘上 |
+| 被跟踪的 `config.json` 与生产布局不符 | 仓库版是单仓库结构 `../server/data`、`../web/dist`，生产目录是 `./data`、`./web` |
+| 服务器没有 typescript | 所以只能在服务器上改产物，`npm run build` 根本跑不起来 |
+
+### 方案
+
+**先让仓库追上生产，再把生产变成 git 检出。**
+
+1. **补齐仓库**（`origin/server` 前进 4 个提交）：
+   - `e7b3adf` 把服务器上已有的凭证错误码改动落成正式提交；
+   - `0664f08` 新增 `deploy.sh`，`config.json` 移出版本库并加 `config.example.json` 模板，
+     `config.ts` 支持 `SC_WEB_DIST` 且按目录结构自动探测 `web/dist`；
+   - `924b235` 用 `git rm --cached` 真正 untrack `config.json`（前一个提交只加 `.gitignore`，
+     对已跟踪文件无效——迁移时真的踩到了，见下）；
+   - `b6d356b` 加 `.gitattributes` 锁 `*.sh` 为 LF。
+
+2. **生产目录原地转 git**：`git init` + `remote add` + `reset --hard origin/server`。
+   选原地而不是「clone 到新目录再切」，因为 `data/`、`web/`、`releases/`、`.env`
+   全程原地不动，不需要搬运任何敏感文件或 72MB 数据库。
+
+3. **部署脚本 `deploy.sh`**：`git pull --ff-only` → `npm ci --include=dev` →
+   `tsc --outDir dist.new` → 原子替换 `dist` → `pm2 restart` → 健康检查。
+   构建失败不碰 `dist` 也不重启；健康检查失败自动回滚旧 `dist`。
+
+### 迁移中踩到的坑（值得记）
+
+`config.json` 被 `reset --hard` **覆盖了两次**，因为第一次只加 `.gitignore` 而没有 untrack 它：
+
+1. 第一次 reset → 被换成仓库版 `../server/data` 路径；
+2. 修好后再 reset 到 `924b235` → 该提交把文件移出版本库，而磁盘上那份仍被跟踪，
+   `reset --hard` 直接**删除**了它。
+
+两次都靠迁移前记录的 md5 还原，最终 `config.json` 与迁移前**逐字节一致**（`c8e8e224…`）。
+教训：`git reset --hard` 之前，对「即将被 untrack 的已跟踪本地文件」必须先复制副本，
+只记 md5 不够——文件可能被删，没有副本就还原不了。**本次是运气好**，
+配置内容在对话里出现过才得以重建。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| 线上 commit 可查 | ✅ `git rev-parse --short HEAD` → `924b235`，工作区干净 |
+| 服务器有 tsc | ✅ node_modules 含 typescript 5.9.3，`tsc -v` 正常 |
+| 部署脚本真实跑通 | ✅ 一次完整 deploy 从 fetch 到健康检查全过 |
+| 凭证错误码生效 | ✅ `GET /api/clipboard/history` 无凭证 → `{"error":"缺少设备凭证,请先完成配对","code":"credential_missing"}` |
+| negotiate header 鉴权 | ✅ header 凭证路径返回 401（伪造凭证），未回退成 400 |
+| 真实设备重连 | ✅ 重启后 10 秒内 XXCCBB / DESKTOP-IGJLCES / GIGA-XXCCBB / 小米14 四台 `LastSeenAt` 全部推进到 07:25:09 |
+| 业务写入 | ✅ 新条目 #7063 正常落库 |
+| 静态资源 | ✅ `/` 200、`/assets/*.js` 200，仍指向 `web/dist` |
+| 公网链路 | ✅ `https://nexclip.157342.xyz/api/health` 200，`/releases/` 200 |
+| 数据完好 | ✅ Entries 1000 条，Devices 5 台，库文件与迁移前同大小 |
+| 失败路径：脏工作区 | ✅ 提示未提交改动并中止 |
+| 失败路径：构建失败 | ✅ `TS2322` 报错后退出，`dist` md5 未变、无 `dist.new` 残留、未重启 |
+| 失败路径：健康检查失败 | ✅ 自动回滚旧 dist，md5 与部署前一致 |
+
+**未验证**：`pm2 save`（本次未执行，重启机器后进程列表依赖上次 save，与本改动无关）。
+
+### 遗留
+
+1. 服务器 `PATH` 上的 node 是 v20.20.2，pm2 用的是 nvm 里的 v22.22.2。
+   构建用前者（tsc 能跑即可），运行用后者（`node:sqlite` 需要 ≥22.5）。
+   脚本已检测并给出提示，但**两套 node 并存**本身是隐患，建议统一。
+2. `/var/www/nexclip-server/releases/`（531MB 安装包）与 `backup/`（138MB）仍靠人工管理，
+   会随部署无限增长，没有清理策略。
+3. 这不是 CI：还是要人工在服务器上跑 `./deploy.sh`。真正的自动化需要自托管 runner 或
+   部署密钥 + 推送式 hook，本次未做。
+
+---
+
 ## 2026-10-23 · 安装器:统一开机自启动并修复卸载残留
 
 ### 背景
@@ -102,6 +296,120 @@ Run[NexClip]   = "C:\...\NexClip.exe" --autostart   ← 仍残留
    两者不对称的问题单独记录在待办（`ct_73c1d730`）。
 3. 未在**非管理员账户**下验证。本机是管理员账户，`HKCU` 写入无权限问题；
    受限账户下 `Enable` 会返回 false 并记日志（有代码路径，但未实测）。
+
+---
+
+## 2026-10-23 · Android 图片上传：压缩 + 失败可见
+
+### 背景
+
+阅读 `origin/android` 代码时发现，Android 端的图片上传有三个叠加的缺陷（实测代码路径，非推测）：
+
+```kotlin
+// ClipboardMonitorService.kt:259
+if (bytes != null && bytes.isNotEmpty() && bytes.size <= 30 * 1024 * 1024) {   // 放行 30MB
+    ...
+    api.uploadImage(bytes, ...)                                                // 原图直传，零压缩
+}
+```
+
+而服务端 `config.json` 是 `maxImageSizeBytes: 10485760`（10MB）。手机长截图、相机原图很容易超过。
+
+更糟的是失败被完全吞掉：
+
+```kotlin
+} catch (_: Exception) {
+}
+```
+
+服务端返回 413 后，客户端既不重试也不提示，**用户以为已同步，直到换设备粘贴才发现内容不在**。
+
+对比 Windows 端（已在 `ct_bf54a70c` 修复）：超限时降采样生成预览、本地照存、只跳过同步并明确提示。
+
+### 方案
+
+**1. 上传前压缩**（新增 `ImageLoader.compressForUpload`）
+
+目标是压到服务端上限的 80%（8MB），留出 multipart 封装余量。
+
+**关键设计：先降质量，再降尺寸。** 第一版实现是"按单边尺寸逐级缩小"，验证时发现长截图会被压成细条：
+
+| 场景 | 第一版结果 | 问题 |
+|---|---|---|
+| 1080×12000 长截图 | 368×4096 | 宽度只剩 **34%** |
+| 1080×30000 超长截图 | 147×4096 | 宽度只剩 **14%** |
+
+根因是单边 4096 硬上限对长截图是错误约束——长截图的价值恰恰在于"长"。而实测表明，
+截图与照片经 JPEG q=90 编码后通常已远小于 10MB（1080×12000 约 0.4MB），
+**根本不需要缩尺寸**。
+
+最终策略：
+1. 原图已够小 → 原样上传，不解码不重编码（省 CPU、不损失画质）
+2. 否则在**原尺寸**上降 JPEG 质量（q: 90→85→80→70→60→50）
+3. 仍超限才按比例缩尺寸（1.0→0.75→0.5→0.35→0.25→0.15），每档同样从 q=90 试
+4. 透明图优先保持 PNG；PNG 超限才退回 JPEG
+5. 总像素上限 24MP（防解码 OOM），**不设单边硬上限**
+
+验证结果（Python 等价模型，8 个场景）：
+
+| 场景 | 原始 | 决策 | 输出 | 宽保留 |
+|---|---|---|---|---|
+| 微信小图 800×600 | 0.1MB | 原样 | 800×600 | 100% |
+| 手机截图 1080×2400 | 0.9MB | 原样 | 1080×2400 | 100% |
+| 长截图 1080×12000 | 9.1MB | q=90 | 1080×12000 | **100%** |
+| 超长截图 1080×30000 | 23.8MB | q=90 | 929×25819 | 86% |
+| 相机原图 6000×4000 | 13.4MB | q=90 | 6000×4000 | **100%** |
+| 超宽图 8000×1000 | 2.9MB | 原样 | 8000×1000 | 100% |
+| 极端 12000×9000 | 38.1MB | q=90 | 5656×4242 | 47% |
+| 超极端 20000×15000 | 76.3MB | q=90 | 5656×4242 | 28% |
+
+8/8 场景都能产出合规图片。
+
+**2. 失败可见**
+
+- 两处 `catch (_: Exception) {}` 改为记录日志（含 statusCode 与异常类型）
+- 新增 `SyncNotificationManager.notifyUploadFailed()`：压缩失败/无法解码时在通知栏留一条，
+  用独立通知 ID 3001，不覆盖前台常驻通知
+- 压缩降级时记录 Info 日志（原尺寸 → 新尺寸、字节数、mimeType）
+
+**3. 顺带修复**
+
+- `SyncApi.uploadImage` 增加 `mimeType` 参数：压缩成 JPEG 后必须告知服务端，
+  否则会以 `.png` 扩展名存下 JPEG 内容，下载端拿到错误类型
+- **EXIF 方向丢失**：原 `applyExifRotation` 在没有 Uri 时直接返回原图，
+  导致"从字节数组来的图片"方向信息全丢（手机竖拍上传后在其他设备上是横的）。
+  改为无 Uri 时从 `ByteArrayInputStream` 读 EXIF
+- 读入保护从"30MB 上传判据"改为"64MB 防 OOM 保护"，语义不再混淆
+
+### 各端改动
+
+| 端 | 文件 | 状态 |
+|---|---|---|
+| Android | `util/ImageLoader.kt` | ✅ 新增 `compressForUpload`（约 150 行） |
+| Android | `data/SyncApi.kt` | ✅ `uploadImage` 支持 mimeType |
+| Android | `service/ClipboardMonitorService.kt` | ✅ 上传前压缩 + 失败提示 |
+| Android | `service/SyncNotificationManager.kt` | ✅ 新增 `notifyUploadFailed` |
+| Android | `ui/RecordsPage.kt` | ✅ 手动推送路径同样压缩 |
+
+> 编译器在改 `uploadImage` 参数名时抓出了 `RecordsPage.kt` 的调用点，
+> 说明手动推送路径原本也会上传未压缩原图，已一并修复。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| `./gradlew :app:compileDebugKotlin` | ✅ BUILD SUCCESSFUL |
+| 压缩策略（Python 等价模型，8 场景） | ✅ 8/8 产出合规图片 |
+| **真机验证** | ❌ **未做** —— 无 Android 设备/模拟器 |
+
+**必须补真机验证**：压缩后的图是否真的能被服务端接受、画质是否可接受、
+EXIF 方向是否还正确。Python 模型只是逻辑等价推演，不是真实 JPEG 编码结果。
+
+### 遗留
+
+1. 压缩目标 8MB 是经验值，真实 JPEG 编码器输出与估算可能有偏差，需真机确认。
+2. 超长截图（1080×30000）压缩后宽度保留 86%，仍属可接受范围但不完美。
+3. `ct_7fdea874`（Android 令牌走 URL）是独立问题，本次未处理。
 
 ---
 
@@ -197,18 +505,25 @@ code 不存在（老服务端）时退回状态码:
 | 项 | 结果 |
 |---|---|
 | 服务端 `npx tsc --noEmit` | ✅ 通过 |
+| 服务端线上实测 | ✅ 无凭证返回 `credential_missing`，错误令牌返回 `credential_invalid` |
 | Windows `dotnet build`（Debug） | ✅ 0 错误 |
-| Android 编译 | ❌ **未做** —— 本机无 JDK、无 Android SDK，`gradlew` 无法运行 |
-| Android 结构完整性 | ⚠️ 仅做了括号/字符串配对的粗略检查（4 文件均平衡），不等于编译通过 |
+| **Android `./gradlew :app:compileDebugKotlin`** | ✅ **BUILD SUCCESSFUL**（编译通过，非运行验证） |
 
-**Android 必须补编译验证**。改动涉及 `val code: String?` 参数位置与 Kotlin 属性语法，
-建议在有 SDK 的环境跑一次 `./gradlew :app:compileDebugKotlin`。
+Android 编译环境是本次新搭的（首次编译前本机无 JDK / 无 Android SDK）：
+- JDK：Microsoft OpenJDK 21.0.12.101（winget `Microsoft.OpenJDK.21`）
+- Android SDK：`%LOCALAPPDATA%\Android\Sdk`，含
+  `platforms;android-37.0`、`build-tools;37.0.0`、`build-tools;35.0.0`、`platform-tools`
+- 注意：`compileSdk = 37` 对应的包名是 `platforms;android-37.0`，不是 `android-37`
+
+> ⚠️ 编译通过 ≠ 行为正确。上述 Android 改动仍未在真机上验证
+> "401/403 时到底清不清配对"这一实际行为。
 
 ### 遗留
 
-1. **服务端部署**：`/var/www/nexclip-server` 非 git 管理，本次通过 patch `dist` 上线。
-   该目录与仓库代码会持续漂移，见待办 `ct_317eaff6`。
-2. **Android 编译验证**缺失，见上。
+1. ~~**服务端部署**：`/var/www/nexclip-server` 非 git 管理，本次通过 patch `dist` 上线。~~
+   **已于同日修复**：目录已转为 git 检出，凭证错误码已正式入库，见下文
+   「服务端部署目录纳入 git 管理」（待办 `ct_317eaff6` 已完成）。
+2. **Android 未真机验证**：编译通过，但"401/403 时不清空配对"需要真机或集成测试确认。
 3. 本次只统一了"是否清空凭证"的判定；`ct_7fdea874`（Android 令牌仍走 URL query）
    是另一个独立问题，方案见该待办（推荐短期一次性 ticket）。
 
