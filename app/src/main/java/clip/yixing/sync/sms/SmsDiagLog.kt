@@ -78,18 +78,19 @@ object SmsDiagLog {
      * 构造正文的"元数据指纹"。
      *
      * 只暴露统计特征,不含原文:
-     * 长度 [len]、分段 [seg]、含关键字 [kw]、含链接 [url]、数字串数 [num]。
+     * 长度 [len]、分段 [seg]、含关键字 [kw]、含链接 [url]、数字串数 [num]、通道 [ch]。
      * `kw`/`url` 是布尔值,`num` 是计数 —— 三者都没法用来还原短信。
      */
     fun fingerprint(
         body: String,
         segments: Int = 1,
+        channel: String = "system",
         keywords: List<String> = DEFAULT_KEYWORDS,
     ): String {
         val hasKeyword = keywords.any { body.contains(it, ignoreCase = true) }
         val hasUrl = body.contains("http://") || body.contains("https://") || body.contains("www.")
         val numberRuns = Regex("""\d+""").findAll(body).count()
-        return "len=${body.length} seg=$segments kw=$hasKeyword url=$hasUrl num=$numberRuns"
+        return "ch=$channel len=${body.length} seg=$segments kw=$hasKeyword url=$hasUrl num=$numberRuns"
     }
 
     /** 关键字清单,仅用于统计"这条短信到底有没有出现验证码关键字" */

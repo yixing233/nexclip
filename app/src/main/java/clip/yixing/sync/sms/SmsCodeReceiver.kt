@@ -1,5 +1,6 @@
 package clip.yixing.sync.sms
 
+import clip.yixing.sync.hook.SmsHandlerHook
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -7,22 +8,46 @@ import android.provider.Telephony
 import android.util.Log
 
 /**
- * 短信接收入口。
+ * 短信接收入口,双通道:
  *
- * 只做两件事: 把多段短信拼回完整正文, 然后交给 [SmsCodeHandler] 提取验证码。
+ * 1. **Hook 通道**(主路径,见 [clip.yixing.sync.hook.SmsHandlerHook]):
+ *    com.android.phone 进程内拦截 SMS_DELIVER 后以
+ *    [ACTION_SMS_CODE_INTERCEPT] 发来的正文广播。实测 HyperOS 不把
+ *    SMS_RECEIVED 投给第三方接收器,这条是唯一可靠路径。
+ * 2. **系统广播通道**(SMS_RECEIVED):标准 AOSP 路径,在未激活 Xposed
+ *    或 hook 失效的设备上兜底。收到但解析不出正文时记入诊断日志。
+ *
+ * 两条通道最终都汇入 [SmsCodeHandler.handle()],由其去重窗口保证幂等 ——
+ * 同一条短信可能同时走两条通道到达(Hook 先、广播后),去重窗口会挡住第二次。
+ *
  * 正文不落盘、不上报, 匹配不到验证码的短信直接丢弃。
- *
- * 系统会在开机、权限变更等场景重投广播, 因此处理必须幂等 —— 幂等性由
- * [SmsCodeHandler] 的去重窗口保证。
  */
 class SmsCodeReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent?) {
-        if (intent?.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {
-            SmsDiagLog.log(context, SmsDiagLog.Stage.IGNORED_ACTION, "action=${intent?.action}")
+        when (intent?.action) {
+            SmsHandlerHook.ACTION_SMS_CODE_INTERCEPT -> handleHookChannel(context, intent)
+            Telephony.Sms.Intents.SMS_RECEIVED_ACTION -> handleSystemChannel(context, intent)
+            else -> {
+                SmsDiagLog.log(context, SmsDiagLog.Stage.IGNORED_ACTION, "action=${intent?.action}")
+            }
+        }
+    }
+
+    /** Hook 通道:正文已由 hook 进程拼好,直接处理 */
+    private fun handleHookChannel(context: Context, intent: Intent) {
+        val body = intent.getStringExtra(SmsHandlerHook.EXTRA_BODY)
+        if (body.isNullOrBlank()) {
+            SmsDiagLog.log(context, SmsDiagLog.Stage.EMPTY_BODY, "hook channel empty body")
             return
         }
+        val subscription = intent.getIntExtra(SmsHandlerHook.EXTRA_SUBSCRIPTION, -1)
+        SmsDiagLog.log(context, SmsDiagLog.Stage.RECEIVED, SmsDiagLog.fingerprint(body, 1, channel = "hook"))
+        dispatch(context, body, "hook sub=$subscription")
+    }
 
+    /** 系统广播通道:自己从 pdus 组装正文 */
+    private fun handleSystemChannel(context: Context, intent: Intent) {
         val body = runCatching { extractBody(intent) }.getOrElse {
             Log.w(TAG, "parse sms intent failed: ${it.message}")
             SmsDiagLog.log(context, SmsDiagLog.Stage.ERROR, "extractBody=${it.javaClass.simpleName}")
@@ -42,8 +67,11 @@ class SmsCodeReceiver : BroadcastReceiver() {
         }
 
         val segments = intent.getSerializableExtra("pdus")?.let { (it as? Array<*>)?.size } ?: 1
-        SmsDiagLog.log(context, SmsDiagLog.Stage.RECEIVED, SmsDiagLog.fingerprint(body, segments))
+        SmsDiagLog.log(context, SmsDiagLog.Stage.RECEIVED, SmsDiagLog.fingerprint(body, segments, channel = "system"))
+        dispatch(context, body, "system")
+    }
 
+    private fun dispatch(context: Context, body: String, source: String) {
         // goAsync 让接收器在 onReceive 返回后仍能完成异步工作, 否则进程可能在
         // 写剪贴板/发通知前被回收
         val pendingResult = goAsync()
@@ -51,7 +79,7 @@ class SmsCodeReceiver : BroadcastReceiver() {
             SmsCodeHandler.handle(context.applicationContext, body)
         } catch (t: Throwable) {
             Log.w(TAG, "handle sms failed: ${t.message}")
-            SmsDiagLog.log(context, SmsDiagLog.Stage.ERROR, "handle=${t.javaClass.simpleName}")
+            SmsDiagLog.log(context, SmsDiagLog.Stage.ERROR, "handle=$source ${t.javaClass.simpleName}")
         } finally {
             pendingResult.finish()
         }
