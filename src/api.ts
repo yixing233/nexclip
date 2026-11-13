@@ -229,6 +229,64 @@ export function pushImage(file: File | Blob, deviceId: string, deviceName: strin
   return request<ClipboardEntry>('/api/clipboard/image', { method: 'POST', body: form });
 }
 
+// ============ 文件互传 ============
+
+export interface FileItem {
+  id: number;
+  fileId: string;
+  fileName: string;
+  size: number;
+  contentHash: string;
+  deviceId: string;
+  deviceName?: string | null;
+  createdAt: string;
+  downloadUrl: string;
+}
+
+export interface FileListPage {
+  items: FileItem[];
+  total: number;
+}
+
+export function listFiles(offset = 0, limit = 50): Promise<FileListPage> {
+  return request<FileListPage>('/api/files?offset=' + offset + '&limit=' + limit);
+}
+
+export function uploadFile(file: File): Promise<FileItem> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('deviceName', getDefaultDeviceName());
+  form.append('platform', getBrowserPlatform());
+  return request<FileItem>('/api/files', { method: 'POST', body: form });
+}
+
+export function deleteFile(fileId: string): Promise<void> {
+  return request('/api/files/' + encodeURIComponent(fileId), { method: 'DELETE' });
+}
+
+/**
+ * 带凭证下载文件。
+ *
+ * 不直接用 downloadUrl:Authorization 头不能放在 <a href> 上,
+ * 所以走 fetch → blob → objectURL,下载完立即释放。
+ */
+export async function downloadFile(item: FileItem): Promise<void> {
+  const res = await fetch(item.downloadUrl, {
+    headers: { Authorization: 'Bearer ' + (getToken() ?? '') },
+  });
+  if (!res.ok) throw new Error(res.status === 410 ? '文件已丢失' : '下载失败');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = item.fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+
 export function getDevices(): Promise<DeviceInfo[]> {
   return request<DeviceInfo[]>('/api/devices');
 }

@@ -4,7 +4,7 @@ import {
   Layout, Menu, Button, Input, Avatar, Dropdown, Badge, Tooltip, message, theme as antdTheme, ConfigProvider,
 } from 'antd'
 import {
-  Home, FileText, Monitor, Clock, Settings, RefreshCw, Search, LogOut, Cloud, Users,
+  Home, FileText, Monitor, Clock, Settings, RefreshCw, Search, LogOut, Cloud, Users, HardDrive,
 } from 'lucide-react'
 import type { MenuProps } from 'antd'
 import LoginPage from './pages/LoginPage'
@@ -12,6 +12,7 @@ import OverviewPage from './pages/OverviewPage'
 import ClipboardPage from './pages/ClipboardPage'
 import DevicesPage from './pages/DevicesPage'
 import SyncRecordsPage from './pages/SyncRecordsPage'
+import FilesPage from './pages/FilesPage'
 import SettingsPage from './pages/SettingsPage'
 import UsersPage from './pages/UsersPage'
 import UserPage from './pages/UserPage'
@@ -22,8 +23,8 @@ import { addIncoming } from './chatStore'
 
 const { Header, Sider, Content } = Layout
 
-type PageKey = 'overview' | 'clipboard' | 'devices' | 'records' | 'users' | 'settings'
-const PAGE_KEYS: PageKey[] = ['overview', 'clipboard', 'devices', 'records', 'users', 'settings']
+type PageKey = 'overview' | 'clipboard' | 'files' | 'devices' | 'records' | 'users' | 'settings'
+const PAGE_KEYS: PageKey[] = ['overview', 'clipboard', 'files', 'devices', 'records', 'users', 'settings']
 
 /** 两套主题的语义色板:所有自定义颜色统一从这里取,保证明暗模式协调一致 */
 const LIGHT = {
@@ -83,11 +84,13 @@ interface AdminConsoleProps {
   themeMode: 'light' | 'dark' | 'system'
   onThemeChange: (m: 'light' | 'dark' | 'system') => void
   onLogout: () => void
+  /** 文件互传:hub 推送计数,变化即重拉 FilesPage */
+  fileTick: number
 }
 
 /** 管理台主框架(/pro/:page),页面进 URL:可刷新/深链/前进后退 */
 function AdminConsole({
-  refreshTick, onRefresh, userFilter, onUserFilterChange, statusBadge, isDark, c, themeMode, onThemeChange, onLogout,
+  refreshTick, onRefresh, userFilter, onUserFilterChange, statusBadge, isDark, c, themeMode, onThemeChange, onLogout, fileTick,
 }: AdminConsoleProps) {
   const navigate = useNavigate()
   const { pageKey } = useParams()
@@ -132,6 +135,7 @@ function AdminConsole({
   const menuItems: MenuProps['items'] = [
     { key: 'overview', icon: <Home size={16} />, label: '总览' },
     { key: 'clipboard', icon: <FileText size={16} />, label: '剪贴板' },
+    { key: 'files', icon: <HardDrive size={16} />, label: '文件互传' },
     { key: 'devices', icon: <Monitor size={16} />, label: '设备管理' },
     { key: 'records', icon: <Clock size={16} />, label: '同步记录' },
     { key: 'users', icon: <Users size={16} />, label: '用户管理' },
@@ -142,12 +146,13 @@ function AdminConsole({
     switch (page) {
       case 'overview': return <OverviewPage refreshTick={refreshTick} />
       case 'clipboard': return <ClipboardPage refreshTick={refreshTick} userFilter={userFilter} onUserFilterChange={onUserFilterChange} search={search} />
+      case 'files': return <FilesPage refreshTick={fileTick} />
       case 'devices': return <DevicesPage refreshTick={refreshTick} userFilter={userFilter} onUserFilterChange={onUserFilterChange} />
       case 'records': return <SyncRecordsPage refreshTick={refreshTick} userFilter={userFilter} onUserFilterChange={onUserFilterChange} />
       case 'users': return <UsersPage onViewUser={(uid) => { onUserFilterChange(uid); go('clipboard') }} />
       default: return <SettingsPage onThemeChange={onThemeChange} themeMode={themeMode} onRefresh={onRefresh} />
     }
-  }, [page, refreshTick, themeMode, userFilter, search]) // eslint-disable-line
+  }, [page, refreshTick, fileTick, themeMode, userFilter, search]) // eslint-disable-line
 
   return (
     <Layout id="clipsync-app" className="clipsync-app" style={{ height: '100vh' }}>
@@ -256,6 +261,8 @@ export default function App() {
   const [refreshTick, setRefreshTick] = useState(0)
   const [themeMode, setThemeModeState] = useState<'light' | 'dark' | 'system'>(getThemeMode())
   const [userFilter, setUserFilter] = useState<string | null>(null)
+  // 文件互传:hub 推送到达时 bump 计数驱动 FilesPage 重拉
+  const [fileTick, setFileTick] = useState(0)
 
   /** 手动刷新:驱动全部页面的 refreshTick 重新拉取 */
   const refreshAll = () => setRefreshTick(t => t + 1)
@@ -290,6 +297,18 @@ export default function App() {
       },
       onDevicesChanged: () => {
         setRefreshTick(t => t + 1)
+      },
+      onFileTransferred: (file) => {
+        const f = file as { fileName?: string; deviceName?: string } | null
+        if (f?.fileName) {
+          message.info('收到新文件: ' + f.fileName + (f.deviceName ? '（来自 ' + f.deviceName + '）' : ''))
+        } else {
+          message.info('收到新文件')
+        }
+        setFileTick(t => t + 1)
+      },
+      onFileDeleted: () => {
+        setFileTick(t => t + 1)
       },
       onStatusChange: (s) => {
         if (s === 'connected' || s === 'reconnecting' || s === 'disconnected') {
@@ -415,6 +434,7 @@ export default function App() {
                 themeMode={themeMode}
                 onThemeChange={setThemeModeState}
                 onLogout={logout}
+                fileTick={fileTick}
               />
             )
           } />

@@ -6,6 +6,10 @@ export interface HubEvents {
   onClipboardCleared: () => void
   onDevicesChanged: () => void
   onStatusChange: (status: string) => void
+  /** 文件互传:其它端/会话上传了新文件(FileItem) */
+  onFileTransferred: (file: unknown) => void
+  /** 文件互传:某文件被删除(参数为 fileId) */
+  onFileDeleted: (fileId: string) => void
 }
 
 let connection: signalR.HubConnection | null = null
@@ -37,6 +41,14 @@ export function connectHub(events: HubEvents): void {
 
   connection.on('DevicesChanged', () => {
     events.onDevicesChanged()
+  })
+
+  connection.on('FileTransferred', (file) => {
+    events.onFileTransferred(file)
+  })
+
+  connection.on('FileDeleted', (fileId) => {
+    events.onFileDeleted(fileId)
   })
 
   connection.onreconnecting(() => events.onStatusChange('reconnecting'))
