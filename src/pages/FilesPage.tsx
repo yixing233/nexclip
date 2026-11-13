@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import {
   Card, Typography, Space, Button, Table, Tag, Empty, Upload, Popconfirm,
-  message, Tooltip,
+  message, Tooltip, Grid,
 } from 'antd'
 import type { UploadProps } from 'antd'
 import {
@@ -35,6 +35,10 @@ export default function FilesPage({ refreshTick, onHubFileChange }: {
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(0) // 进行中的上传数
   const listRef = useRef(0)
+
+  // 窄屏精简:隐藏「来源」列(首帧 screens 为空时按桌面处理避免闪烁)
+  const screens = Grid.useBreakpoint()
+  const isMobile = screens.md === false
 
   const load = useCallback(() => {
     const seq = ++listRef.current
@@ -119,7 +123,7 @@ export default function FilesPage({ refreshTick, onHubFileChange }: {
       render: (name: string) => (
         <Space>
           <FileText size={16} style={{ flexShrink: 0 }} />
-          <Text strong ellipsis style={{ maxWidth: 420 }}>{name}</Text>
+          <Text strong ellipsis style={{ maxWidth: isMobile ? '44vw' : 420 }}>{name}</Text>
         </Space>
       ),
     },
@@ -130,18 +134,18 @@ export default function FilesPage({ refreshTick, onHubFileChange }: {
       width: 100,
       render: (s: number) => <Text type="secondary">{formatSize(s)}</Text>,
     },
-    {
+    ...(isMobile ? [] : [{
       title: '来源',
       dataIndex: 'deviceName',
       key: 'deviceName',
       width: 160,
-      render: (name: string | null, row) => (
+      render: (name: string | null, row: FileItem) => (
         <Space>
           <Monitor size={14} />
           <Text type="secondary">{name || row.deviceId}</Text>
         </Space>
       ),
-    },
+    }]),
     {
       title: '时间',
       dataIndex: 'createdAt',
@@ -174,6 +178,7 @@ export default function FilesPage({ refreshTick, onHubFileChange }: {
 
   return (
     <Card
+      styles={{ header: { flexWrap: 'wrap', gap: 8 } }}
       title={
         <Space>
           <HardDrive size={18} />
@@ -202,6 +207,7 @@ export default function FilesPage({ refreshTick, onHubFileChange }: {
         dataSource={items}
         loading={loading}
         size="middle"
+        scroll={{ x: 640 }}
         pagination={{ pageSize: 20, total, showSizeChanger: false }}
         locale={{
           emptyText: (

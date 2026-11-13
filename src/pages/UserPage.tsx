@@ -6,11 +6,13 @@ import {
 import {
   Home, Clock, Settings, KeyRound, RefreshCw, Check, X, LogOut, Pencil, Copy,
   Monitor, Trash2, Search, Send, Image as ImageIcon, Code2, Globe, ExternalLink,
-  Smartphone, Laptop, UploadCloud, ChevronRight, Filter, ShieldCheck, QrCode as QrIcon, AlertTriangle, FileText,
+  Smartphone, Laptop, UploadCloud, ChevronRight, Filter, ShieldCheck, QrCode as QrIcon, AlertTriangle, FileText, HardDrive,
 } from 'lucide-react'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
+import Grid from 'antd/es/grid'
+import FilesPage from './FilesPage'
 import {
   getUserId, createPairingCode, revokePairingCode,
   getDevices, removeDevice, getUser, renameUser, getActivities, deviceId,
@@ -22,9 +24,11 @@ dayjs.extend(relativeTime)
 const { Text, Title, Paragraph } = Typography
 const { TextArea } = Input
 
-export default function UserPage({ refreshTick, onLogout }: { refreshTick: number; onLogout: () => void }) {
+export default function UserPage({ refreshTick, fileTick, onLogout }: { refreshTick: number; fileTick: number; onLogout: () => void }) {
   const uid = getUserId() ?? ''
-  const [activeTab, setActiveTab] = useState<'home' | 'records' | 'settings'>('home')
+  const screens = Grid.useBreakpoint()
+  const isMobile = screens.md === false
+  const [activeTab, setActiveTab] = useState<'home' | 'records' | 'files' | 'settings'>('home')
 
   // 用户与设备数据
   const [userName, setUserName] = useState('')
@@ -431,8 +435,20 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
             </div>
           </Space>
 
-          {/* 中间 Tab 切换胶囊组 (对齐安卓三大板块) */}
-          <div style={{ display: 'flex', gap: 6, background: 'rgba(0, 0, 0, 0.04)', padding: 4, borderRadius: 999 }}>
+          {/* 中间 Tab 切换胶囊组 (对齐安卓四大板块;窄屏换行铺满) */}
+          <div
+            style={{
+              display: 'flex',
+              gap: 6,
+              background: 'rgba(0, 0, 0, 0.04)',
+              padding: 4,
+              borderRadius: 999,
+              flexWrap: 'wrap',
+              justifyContent: 'center',
+              flex: isMobile ? '1 1 100%' : undefined,
+              order: isMobile ? 3 : undefined,
+            }}
+          >
             <Button
               type={activeTab === 'home' ? 'primary' : 'text'}
               shape="round"
@@ -452,6 +468,16 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
               style={{ fontWeight: 600, fontSize: 13, height: 34 }}
             >
               记录 ({historyTotal})
+            </Button>
+            <Button
+              type={activeTab === 'files' ? 'primary' : 'text'}
+              shape="round"
+              size="middle"
+              icon={<HardDrive size={15} />}
+              onClick={() => setActiveTab('files')}
+              style={{ fontWeight: 600, fontSize: 13, height: 34 }}
+            >
+              文件互传
             </Button>
             <Button
               type={activeTab === 'settings' ? 'primary' : 'text'}
@@ -780,7 +806,7 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onPressEnter={() => loadHistory(searchQuery)}
                 allowClear
-                style={{ width: 280, borderRadius: 999 }}
+                style={{ width: isMobile ? '100%' : 280, borderRadius: 999 }}
               />
 
               {/* 类型筛选分段控制器 (Ant Design Segmented) */}
@@ -883,7 +909,7 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
                     }}
                     styles={{ body: { padding: '16px 20px' } }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 14 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 14, flexWrap: 'wrap' }}>
                       {/* 左侧内容区 */}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         {/* 顶栏元数据 */}
@@ -964,7 +990,7 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
                       </div>
 
                       {/* 右侧快捷操作按钮 */}
-                      <Space size={4} style={{ flexShrink: 0 }}>
+                      <Space size={4} style={{ flexShrink: 0, flexWrap: 'wrap' }}>
                         <Tooltip title={item.type === 'Image' ? '复制图片到剪贴板' : '复制文本到剪贴板'}>
                           <Button
                             type="primary"
@@ -995,6 +1021,9 @@ export default function UserPage({ refreshTick, onLogout }: { refreshTick: numbe
           )}
         </div>
       )}
+
+      {/* ==================== 2.5 【文件互传】板块 (Files, 复用管理端 FilesPage) ==================== */}
+      {activeTab === 'files' && <FilesPage refreshTick={fileTick} />}
 
       {/* ==================== 3. 【设置与设备】板块 (Settings & Devices) ==================== */}
       {activeTab === 'settings' && (

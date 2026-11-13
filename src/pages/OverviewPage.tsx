@@ -360,7 +360,7 @@ export default function OverviewPage({ refreshTick }: { refreshTick: number }) {
               dataSource={history}
               pagination={false}
               size="middle"
-              scroll={{ y: recentScrollY }}
+              scroll={{ y: recentScrollY, x: 720 }}
               locale={{ emptyText: <Empty description="暂无剪贴板记录" /> }}
             />
             </div>

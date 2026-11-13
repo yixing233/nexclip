@@ -247,7 +247,7 @@ export default function DevicesPage({ refreshTick, userFilter, onUserFilterChang
         columns={columns}
         dataSource={filtered}
         loading={loading && devices.length > 0}
-        scroll={{ y: scrollY }}
+        scroll={{ y: scrollY, x: 720 }}
         pagination={{ pageSize: 10, showTotal: t => `共 ${t} 台设备` }}
         locale={{ emptyText: <Empty description="没有匹配的设备" /> }}
       />

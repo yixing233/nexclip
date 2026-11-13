@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useParams, useNavigate } from 'react-router-dom'
 import {
-  Layout, Menu, Button, Input, Avatar, Dropdown, Badge, Tooltip, message, theme as antdTheme, ConfigProvider,
+  Layout, Menu, Button, Input, Avatar, Dropdown, Badge, Tooltip, message, theme as antdTheme, ConfigProvider, Drawer, Grid,
 } from 'antd'
 import {
-  Home, FileText, Monitor, Clock, Settings, RefreshCw, Search, LogOut, Cloud, Users, HardDrive,
+  Home, FileText, Monitor, Clock, Settings, RefreshCw, Search, LogOut, Cloud, Users, HardDrive, Menu as MenuIcon,
 } from 'lucide-react'
 import type { MenuProps } from 'antd'
 import LoginPage from './pages/LoginPage'
@@ -101,6 +101,12 @@ function AdminConsole({
   const [username, setUsername] = useState<string | null>(null)
   const [version, setVersion] = useState('')
   const [serviceOk, setServiceOk] = useState<boolean | null>(null)
+  const [navOpen, setNavOpen] = useState(false)
+
+  // 响应式断点(<992 侧栏转抽屉,<768 顶栏精简);首帧 screens 为空时按桌面处理避免闪烁
+  const screens = Grid.useBreakpoint()
+  const isTablet = screens.lg === false
+  const isMobile = screens.md === false
 
   // 会话信息:侧栏展示真实登录用户名
   useEffect(() => {
@@ -154,58 +160,78 @@ function AdminConsole({
     }
   }, [page, refreshTick, fileTick, themeMode, userFilter, search]) // eslint-disable-line
 
+  // 侧栏内容:Sider 与窄屏 Drawer 共用同一份(logo + 菜单 + 服务状态 + 用户信息)
+  const sidebarInner = (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <div id="clipsync-sidebar-logo" className="clipsync-sidebar-logo" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '18px 20px' }}>
+        <img src="/logo.png" alt="NexClip Logo" style={{ width: 28, height: 28, borderRadius: 6, objectFit: 'contain' }} />
+        <span style={{ fontSize: 18, fontWeight: 700, color: c.text }}>NexClip</span>
+      </div>
+      <Menu
+        id="clipsync-sidebar-menu"
+        className="clipsync-sidebar-menu"
+        mode="inline"
+        selectedKeys={[page]}
+        items={menuItems}
+        onClick={({ key }) => { go(key as PageKey); setNavOpen(false) }}
+        style={{ borderInlineEnd: 'none', flex: 1, overflowY: 'auto' }}
+      />
+      <div id="clipsync-sidebar-footer" className="clipsync-sidebar-footer" style={{ padding: '0 16px 16px', flexShrink: 0 }}>
+        <div
+          id="clipsync-service-status"
+          className="clipsync-service-status"
+          style={{
+            background: serviceOk === false ? 'rgba(239, 68, 68, 0.10)' : c.serviceBg,
+            border: '1px solid ' + (serviceOk === false ? 'rgba(239, 68, 68, 0.40)' : c.serviceBorder),
+            borderRadius: 12, padding: '10px 12px', marginBottom: 12,
+          }}
+        >
+          <div style={{ color: serviceOk === false ? c.danger : c.serviceText, fontWeight: 600, fontSize: 13 }}>
+            <Badge status={serviceOk === false ? 'error' : 'success'} /> {serviceOk === false ? '服务不可用' : '服务运行中'}
+          </div>
+          <div style={{ color: c.textTertiary, fontSize: 12, marginTop: 2 }}>版本 {version || '…'}</div>
+        </div>
+        <Dropdown
+          menu={{
+            items: [{ key: 'logout', icon: <LogOut size={16} />, label: '退出登录', onClick: onLogout }],
+          }}
+        >
+          <div id="clipsync-user-info" className="clipsync-user-info" style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '6px 4px' }}>
+            <Avatar size={34} style={{ background: c.avatarBg, color: c.avatarText }}>{(username ?? 'A').slice(0, 1).toUpperCase()}</Avatar>
+            <div>
+              <div style={{ fontWeight: 600, color: c.text, fontSize: 13 }}>{username ?? '管理员'}</div>
+              <div style={{ color: c.textTertiary, fontSize: 12 }}>管理员</div>
+            </div>
+          </div>
+        </Dropdown>
+      </div>
+    </div>
+  )
+
   return (
     <Layout id="clipsync-app" className="clipsync-app" style={{ height: '100vh' }}>
-      <Sider
-        id="clipsync-sidebar"
-        className="clipsync-sidebar"
-        width={216}
-        theme={isDark ? 'dark' : 'light'}
-        style={{ borderRight: '1px solid ' + c.border, position: 'relative' }}
+      {!isTablet && (
+        <Sider
+          id="clipsync-sidebar"
+          className="clipsync-sidebar"
+          width={216}
+          theme={isDark ? 'dark' : 'light'}
+          style={{ borderRight: '1px solid ' + c.border, position: 'relative' }}
+        >
+          {sidebarInner}
+        </Sider>
+      )}
+      <Drawer
+        id="clipsync-sidebar-drawer"
+        placement="left"
+        width={248}
+        open={isTablet && navOpen}
+        onClose={() => setNavOpen(false)}
+        closable={false}
+        styles={{ body: { padding: 0 } }}
       >
-        <div id="clipsync-sidebar-logo" className="clipsync-sidebar-logo" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '18px 20px' }}>
-          <img src="/logo.png" alt="NexClip Logo" style={{ width: 28, height: 28, borderRadius: 6, objectFit: 'contain' }} />
-          <span style={{ fontSize: 18, fontWeight: 700, color: c.text }}>NexClip</span>
-        </div>
-        <Menu
-          id="clipsync-sidebar-menu"
-          className="clipsync-sidebar-menu"
-          mode="inline"
-          selectedKeys={[page]}
-          items={menuItems}
-          onClick={({ key }) => go(key as PageKey)}
-          style={{ borderInlineEnd: 'none' }}
-        />
-        <div id="clipsync-sidebar-footer" className="clipsync-sidebar-footer" style={{ position: 'absolute', bottom: 16, left: 16, right: 16 }}>
-          <div
-            id="clipsync-service-status"
-            className="clipsync-service-status"
-            style={{
-              background: serviceOk === false ? 'rgba(239, 68, 68, 0.10)' : c.serviceBg,
-              border: '1px solid ' + (serviceOk === false ? 'rgba(239, 68, 68, 0.40)' : c.serviceBorder),
-              borderRadius: 12, padding: '10px 12px', marginBottom: 12,
-            }}
-          >
-            <div style={{ color: serviceOk === false ? c.danger : c.serviceText, fontWeight: 600, fontSize: 13 }}>
-              <Badge status={serviceOk === false ? 'error' : 'success'} /> {serviceOk === false ? '服务不可用' : '服务运行中'}
-            </div>
-            <div style={{ color: c.textTertiary, fontSize: 12, marginTop: 2 }}>版本 {version || '…'}</div>
-          </div>
-          <Dropdown
-            menu={{
-              items: [{ key: 'logout', icon: <LogOut size={16} />, label: '退出登录', onClick: onLogout }],
-            }}
-          >
-            <div id="clipsync-user-info" className="clipsync-user-info" style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', padding: '6px 4px' }}>
-              <Avatar size={34} style={{ background: c.avatarBg, color: c.avatarText }}>{(username ?? 'A').slice(0, 1).toUpperCase()}</Avatar>
-              <div>
-                <div style={{ fontWeight: 600, color: c.text, fontSize: 13 }}>{username ?? '管理员'}</div>
-                <div style={{ color: c.textTertiary, fontSize: 12 }}>管理员</div>
-              </div>
-            </div>
-          </Dropdown>
-        </div>
-      </Sider>
+        {sidebarInner}
+      </Drawer>
       <Layout style={{ position: 'relative' }}>
         <Header
           id="clipsync-header"
@@ -213,14 +239,19 @@ function AdminConsole({
           style={{
             background: c.surfaceGlass, backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)',
             position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20,
-            padding: '0 24px', borderBottom: '1px solid ' + c.border,
-            height: 64, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 16,
+            padding: isMobile ? '0 12px' : '0 24px', borderBottom: '1px solid ' + c.border,
+            height: 64, flexShrink: 0, display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 16,
           }}
         >
-          <div id="clipsync-header-title" className="clipsync-header-title" style={{ flex: 1 }}>
-            <div style={{ fontSize: 18, fontWeight: 700, color: c.text }}>剪贴板共享服务端</div>
+          {isTablet && (
+            <Tooltip title="打开菜单">
+              <Button type="text" icon={<MenuIcon size={18} />} onClick={() => setNavOpen(true)} aria-label="打开菜单" />
+            </Tooltip>
+          )}
+          <div id="clipsync-header-title" className="clipsync-header-title" style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: isMobile ? 16 : 18, fontWeight: 700, color: c.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>剪贴板共享服务端</div>
           </div>
-          {serviceOk === false ? (
+          {!isTablet && (serviceOk === false ? (
             <span style={{ color: c.danger, fontWeight: 600, fontSize: 13 }}><Badge status="error" /> 服务异常</span>
           ) : serviceOk === null ? (
             <span style={{ color: c.textTertiary, fontWeight: 600, fontSize: 13 }}><Badge status="default" /> 检测中</span>
@@ -228,7 +259,7 @@ function AdminConsole({
             <span id="clipsync-header-server-status" className="clipsync-header-server-status" style={{ color: c.success, fontWeight: 600, fontSize: 13 }}>
               <Badge status="success" /> 服务运行正常
             </span>
-          )}
+          ))}
           {statusBadge}
           <Input
             id="clipsync-header-search"
@@ -236,18 +267,20 @@ function AdminConsole({
             prefix={<Search size={16} color="#9CA3AF" />}
             placeholder="搜索剪贴板内容"
             allowClear
-            style={{ width: 220 }}
+            style={{ width: isMobile ? 140 : 220 }}
             value={search}
             onChange={e => onSearchInput(e.target.value)}
           />
           <Tooltip title="刷新全部数据">
-            <Button id="clipsync-header-refresh" className="clipsync-header-refresh" icon={<RefreshCw size={16} />} onClick={onRefresh}>刷新</Button>
+            <Button id="clipsync-header-refresh" className="clipsync-header-refresh" icon={<RefreshCw size={16} />} onClick={onRefresh}>
+              {!isMobile && '刷新'}
+            </Button>
           </Tooltip>
           <Tooltip title="服务设置">
             <Button id="clipsync-header-settings" className="clipsync-header-settings" icon={<Settings size={16} />} onClick={() => go('settings')} />
           </Tooltip>
         </Header>
-        <Content id="clipsync-content" className="clipsync-content" ref={contentRef} style={{ overflow: 'auto', height: '100%', padding: '88px 24px 24px' }}>
+        <Content id="clipsync-content" className="clipsync-content" ref={contentRef} style={{ overflow: 'auto', height: '100%', padding: isMobile ? '72px 12px 16px' : '88px 24px 24px' }}>
           {pageEl}
         </Content>
       </Layout>
@@ -399,7 +432,7 @@ export default function App() {
               <Navigate to="/index/login" replace />
             ) : role === 'user' ? (
               <div style={{ minHeight: '100vh', background: isDark ? '#0D1117' : '#F3F4F6', padding: 24 }}>
-                <UserPage refreshTick={refreshTick} onLogout={logout} />
+                <UserPage refreshTick={refreshTick} fileTick={fileTick} onLogout={logout} />
               </div>
             ) : (
               <Navigate to="/pro/overview" replace />

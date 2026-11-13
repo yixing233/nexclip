@@ -258,6 +258,7 @@ export default function ClipboardPage({ refreshTick, userFilter, onUserFilterCha
             columns={columns}
             dataSource={data}
             loading={loadingMore}
+            scroll={{ x: 720 }}
             pagination={false}
             locale={{ emptyText: <Empty description="暂无剪贴板记录" /> }}
           />

@@ -124,7 +124,7 @@ export default function UsersPage({ onViewUser }: { onViewUser: (uid: string) =>
         extra={<Button icon={<RefreshCw size={15} />} onClick={() => { loadUsers(); loadAudit(auditLimit) }}>刷新</Button>}
         style={{ borderRadius: 14 }}
       >
-        <Table<UserRow> rowKey="id" columns={columns} dataSource={users} loading={loading} pagination={false} size="middle"
+        <Table<UserRow> rowKey="id" columns={columns} dataSource={users} loading={loading} pagination={false} size="middle" scroll={{ x: 720 }}
           locale={{ emptyText: <Empty description="暂无用户(设备完成首次配对后自动创建)" /> }} />
         <Divider style={{ margin: '14px 0' }} />
         <div style={{ color: '#9CA3AF', fontSize: 12 }}>
@@ -150,7 +150,7 @@ export default function UsersPage({ onViewUser }: { onViewUser: (uid: string) =>
         }
         style={{ borderRadius: 14 }}
       >
-        <Table<AuditRow> rowKey="id" columns={auditCols} dataSource={filteredAudit} loading={auditLoading} pagination={{ pageSize: 15, showTotal: t => '共 ' + t + ' 条' }} size="small" />
+        <Table<AuditRow> rowKey="id" columns={auditCols} dataSource={filteredAudit} loading={auditLoading} pagination={{ pageSize: 15, showTotal: t => '共 ' + t + ' 条' }} size="small" scroll={{ x: 760 }} />
       </Card>
 
       <Modal
