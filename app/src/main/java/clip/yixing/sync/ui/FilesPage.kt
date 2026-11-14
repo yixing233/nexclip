@@ -347,13 +347,10 @@ fun FilesPage(
                         }
                         if (accept) {
                             api.acceptFile(info.fileId)
-                            val bytes = withContext(Dispatchers.IO) { api.downloadFile(info.fileId) }
-                            if (bytes != null) {
-                                saveToDownloads(context, info.fileName, bytes)
-                                snackbarHostState?.showAppSnack("已接受,文件保存到 Downloads", SnackType.Success)
-                            } else {
-                                snackbarHostState?.showAppSnack("已接受,但文件已不可下载", SnackType.Error)
-                            }
+                            // 文件本体在发送方收到"已接受"后才开始上传,登记等待自动保存
+                            ClipboardMonitorService.autoSaveFileIds.value =
+                                ClipboardMonitorService.autoSaveFileIds.value + info.fileId
+                            snackbarHostState?.showAppSnack("已接受,文件送达后将自动保存", SnackType.Success)
                         } else {
                             api.rejectFile(info.fileId)
                             snackbarHostState?.showAppSnack("已拒绝该文件", SnackType.Success)

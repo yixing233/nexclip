@@ -56,12 +56,9 @@ class NotificationActionReceiver : BroadcastReceiver() {
                             val api = SyncApi(SyncSettings.serverUrl(context), SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
                             val ok = if (accept) api.acceptFile(fileId) else api.rejectFile(fileId)
                             if (ok && accept) {
-                                val meta = ClipboardMonitorService.pendingFileRequests.value.firstOrNull { it.fileId == fileId }
-                                val bytes = api.downloadFile(fileId)
-                                if (bytes != null) {
-                                    val uri = clip.yixing.sync.ui.saveToDownloads(context, meta?.fileName ?: "nexclip-$fileId", bytes)
-                                    savedPath = uri?.toString()
-                                } else errorMsg = "文件已不可下载"
+                                // 文件本体在发送方收到"已接受"后才开始上传,登记等待自动保存
+                                ClipboardMonitorService.autoSaveFileIds.value =
+                                    ClipboardMonitorService.autoSaveFileIds.value + fileId
                             }
                         } else errorMsg = "配对状态不可用"
                     } catch (e: Exception) {
@@ -72,10 +69,8 @@ class NotificationActionReceiver : BroadcastReceiver() {
                         nm.cancel(SyncNotificationManager.NOTIFICATION_ID_FILE_CONSENT)
                         if (!accept) {
                             Toast.makeText(context, "已拒绝文件传输", Toast.LENGTH_SHORT).show()
-                        } else if (savedPath != null) {
-                            Toast.makeText(context, "已接受,文件保存到 Downloads", Toast.LENGTH_SHORT).show()
                         } else {
-                            Toast.makeText(context, "已接受,但保存失败: ${errorMsg ?: "未知错误"}", Toast.LENGTH_LONG).show()
+                            Toast.makeText(context, "已接受,文件送达后将自动保存", Toast.LENGTH_SHORT).show()
                         }
                         pendingResult.finish()
                     }

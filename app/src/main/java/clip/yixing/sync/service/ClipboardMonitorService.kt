@@ -23,6 +23,7 @@ import clip.yixing.sync.util.AppSourceHelper
 import clip.yixing.sync.util.ImageLoader
 import clip.yixing.sync.util.NotificationStyle
 import clip.yixing.sync.util.SyncSettings
+import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -255,7 +256,32 @@ class ClipboardMonitorService : Service() {
             // 过滤本机上传的回显(服务端按用户组广播,包含上传者自己)
             if (info.deviceId != SyncSettings.ensureDeviceId(ctx)) {
                 fileTransfers.value = listOf(info) + fileTransfers.value.filter { it.fileId != info.fileId }
-                SyncNotificationManager.notifyFileReceived(ctx, info.fileName, info.deviceName ?: "其他设备")
+                if (info.fileId in autoSaveFileIds.value) {
+                    // 确认制:本端已接受 → 文件本体此刻到达,自动下载保存
+                    autoSaveFileIds.value = autoSaveFileIds.value - info.fileId
+                    scope.launch(Dispatchers.IO) {
+                        var saved = false
+                        try {
+                            val api = SyncApi(SyncSettings.serverUrl(ctx), SyncSettings.ensureDeviceId(ctx), SyncSettings.deviceToken(ctx))
+                            val bytes = api.downloadFile(info.fileId)
+                            if (bytes != null) {
+                                clip.yixing.sync.ui.saveToDownloads(ctx, info.fileName, bytes)
+                                saved = true
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.w("ClipboardMonitor", "确认制自动保存失败: ${e.message}")
+                        }
+                        CoroutineScope(Dispatchers.Main).launch {
+                            Toast.makeText(
+                                ctx,
+                                if (saved) "已接受,文件保存到 Downloads" else "已接受,但保存失败",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                } else {
+                    SyncNotificationManager.notifyFileReceived(ctx, info.fileName, info.deviceName ?: "其他设备")
+                }
             } else {
                 fileTransfers.value = listOf(info) + fileTransfers.value.filter { it.fileId != info.fileId }
             }
@@ -573,6 +599,9 @@ class ClipboardMonitorService : Service() {
          * 仅内存缓存,权威来源是服务端 /api/files 的 pending 记录。
          */
         val pendingFileRequests = MutableStateFlow<List<clip.yixing.sync.data.FileTransferInfo>>(emptyList())
+
+        /** 确认制:已接受、等待文件本体到达后自动保存的 fileId 集合 */
+        val autoSaveFileIds = MutableStateFlow<Set<String>>(emptySet())
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(context, Intent(context, ClipboardMonitorService::class.java))
