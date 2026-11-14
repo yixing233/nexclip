@@ -12,7 +12,7 @@ import {
   IconFileText as FileText,
   IconShieldCheck as ShieldCheck,
   IconAntennaBars5 as Signal,
-  IconSend2 as Send,
+  IconBrandTelegram as Send,
   IconCopy as Copy,
   IconTrash as Trash2,
   IconShare as Share2,

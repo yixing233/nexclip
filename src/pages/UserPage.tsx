@@ -17,7 +17,7 @@ import {
   IconDeviceDesktop as Monitor,
   IconTrash as Trash2,
   IconSearch as Search,
-  IconSend2 as Send,
+  IconBrandTelegram as Send,
   IconPhoto as ImageIcon,
   IconCode as Code2,
   IconWorld as Globe,
