@@ -11,6 +11,7 @@ import android.provider.MediaStore
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -465,16 +466,17 @@ fun FilesPage(
                             )
                         }
                     }
-                    // 设备在线卡片行(与即时互传页同款语言:谁能收到一眼可见)
-                    if (deviceList.isNotEmpty()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp)
-                                .padding(bottom = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                    // 设备在线卡片行(与即时互传页同款语言:谁能收到一眼可见)。
+                    // 横向滚动 —— 设备多时不挤压换行(首轮真机 6 台溢出翻车的教训)。
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 12.dp)
+                            .padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                             val onlineNow = deviceList.filter { it.online }
                             // 收起为计数摘要:全部设备/在线数
                             Box(
@@ -502,8 +504,8 @@ fun FilesPage(
                                     )
                                 }
                             }
-                            // 逐设备小芯片(在线高亮,离线灰)
-                            deviceList.take(4).forEach { dev ->
+                            // 逐设备小芯片(在线高亮,离线灰);横向滚动不截断设备数
+                            deviceList.forEach { dev ->
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(8.dp))
@@ -522,15 +524,16 @@ fun FilesPage(
                                         )
                                         Spacer(Modifier.width(4.dp))
                                         Text(
-                                            text = dev.name.take(8),
+                                            text = dev.name,
                                             fontSize = 11.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
                                             color = if (dev.online) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackgroundVariant
                                         )
                                     }
                                 }
                             }
                         }
-                    }
                 }
             }
         }
@@ -847,15 +850,15 @@ private fun FileBubble(
             }
         }
 
-        // 长按展开的操作行(仅该气泡,点击别处/再长按收起)
+        // 长按展开的操作行(仅该气泡):半透明浮层贴在气泡下方,点击操作后收起
         if (showActions) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(18.dp),
                 modifier = Modifier
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MiuixTheme.colorScheme.surfaceContainer.copy(alpha = 0.7f))
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .padding(top = 4.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MiuixTheme.colorScheme.surfaceContainerHigh)
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
             ) {
                 Text(
                     text = "下载",
