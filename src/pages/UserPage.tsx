@@ -456,6 +456,7 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
           <Bubble.List
             autoScroll
             style={{ flex: 1, minHeight: 0 }}
+            classNames={{ avatar: 'cs-bubble-avatar' }}
             items={chatMsgs.map(m => ({
               key: m.id,
               role: m.direction === 'out' ? 'user' : 'ai',

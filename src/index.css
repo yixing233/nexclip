@@ -121,3 +121,18 @@ html[data-theme='dark'] .clipsync-login-page::after { background: #4c1d95; opaci
   .clipsync-login-page::before,
   .clipsync-login-page::after { animation: none; }
 }
+
+/* ===== 快速同步气泡:头像与气泡顶部对齐(默认是整块垂直居中,footer 会把头像拉低) ===== */
+.ant-bubble .ant-bubble-avatar {
+  align-self: flex-start;
+}
+.cs-bubble-avatar {
+  align-self: flex-start;
+}
+/* 气泡本体与 footer 左边缘对齐(出站/入站同规则) */
+.ant-bubble .ant-bubble-content-wrapper {
+  min-width: 0;
+}
+.ant-bubble .ant-bubble-footer {
+  text-align: inherit;
+}
