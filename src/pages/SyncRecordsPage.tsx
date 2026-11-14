@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Card, Timeline, Typography, Empty, Skeleton, theme, Select, message } from 'antd'
-import { Upload, Download, Monitor, Trash2 } from 'lucide-react'
+import {
+  IconUpload as Upload,
+  IconDownload as Download,
+  IconDeviceDesktop as Monitor,
+  IconTrash as Trash2,
+} from '@tabler/icons-react'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import { getActivities, listUsers, type ActivityLog } from '../api'

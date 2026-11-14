@@ -4,8 +4,19 @@ import {
   Layout, Menu, Button, Input, Avatar, Dropdown, Badge, Tooltip, message, theme as antdTheme, ConfigProvider, Drawer, Grid,
 } from 'antd'
 import {
-  Home, FileText, Monitor, Clock, Settings, RefreshCw, Search, LogOut, Cloud, Users, HardDrive, Menu as MenuIcon,
-} from 'lucide-react'
+  IconHome as Home,
+  IconFileText as FileText,
+  IconDeviceDesktop as Monitor,
+  IconClock as Clock,
+  IconSettings as Settings,
+  IconRefresh as RefreshCw,
+  IconSearch as Search,
+  IconLogout as LogOut,
+  IconCloud as Cloud,
+  IconUsers as Users,
+  IconDeviceSdCard as HardDrive,
+  IconMenu as MenuIcon,
+} from '@tabler/icons-react'
 import type { MenuProps } from 'antd'
 import LoginPage from './pages/LoginPage'
 import OverviewPage from './pages/OverviewPage'

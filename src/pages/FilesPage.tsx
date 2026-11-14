@@ -5,8 +5,14 @@ import {
 } from 'antd'
 import type { UploadProps } from 'antd'
 import {
-  FileText, Download, Trash2, RefreshCw, UploadCloud, Monitor, HardDrive,
-} from 'lucide-react'
+  IconFileText as FileText,
+  IconDownload as Download,
+  IconTrash as Trash2,
+  IconRefresh as RefreshCw,
+  IconCloudUpload as UploadCloud,
+  IconDeviceDesktop as Monitor,
+  IconDeviceSdCard as HardDrive,
+} from '@tabler/icons-react'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'

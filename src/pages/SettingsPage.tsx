@@ -3,8 +3,20 @@ import {
   Card, Form, InputNumber, Button, Segmented, Typography, Tag, Popconfirm, Space, message, Skeleton, Modal, Input, List,
 } from 'antd'
 import {
-  Sun, Moon, Monitor, Server, History, Database, Info, Save, Trash2, Palette, ShieldCheck, FolderOpen, FolderUp,
-} from 'lucide-react'
+  IconSun as Sun,
+  IconMoon as Moon,
+  IconDeviceDesktop as Monitor,
+  IconServer2 as Server,
+  IconHistory as History,
+  IconDatabase as Database,
+  IconInfoCircle as Info,
+  IconDeviceFloppy as Save,
+  IconTrash as Trash2,
+  IconPalette as Palette,
+  IconShieldCheck as ShieldCheck,
+  IconFolderOpen as FolderOpen,
+  IconFolderUp as FolderUp,
+} from '@tabler/icons-react'
 import {
   setThemeMode, getAdminSettings, putAdminSettings, clearHistory, getHealth, browseStorageDir, type ThemeMode,
 } from '../api'

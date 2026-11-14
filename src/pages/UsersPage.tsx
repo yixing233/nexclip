@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Card, Table, Tag, Typography, Space, Button, Input, Modal, Form, Popconfirm, message, Empty, Divider, Select } from 'antd'
-import { Users, Pencil, Trash2, RefreshCw, ShieldCheck, Monitor } from 'lucide-react'
+import {
+  IconUsers as Users,
+  IconPencil as Pencil,
+  IconTrash as Trash2,
+  IconRefresh as RefreshCw,
+  IconShieldCheck as ShieldCheck,
+  IconDeviceDesktop as Monitor,
+} from '@tabler/icons-react'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'

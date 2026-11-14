@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Card, Form, Input, Button, message, Typography, theme, Spin, Tag } from 'antd'
-import { User, Lock, ArrowRight, Smartphone } from 'lucide-react'
+import {
+  IconUser as User,
+  IconLock as Lock,
+  IconArrowRight as ArrowRight,
+  IconDeviceMobile as Smartphone,
+} from '@tabler/icons-react'
 import { login as apiLogin, pairDirect, setSession, getDefaultDeviceName } from '../api'
 
 const { Title, Text } = Typography

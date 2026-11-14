@@ -2,27 +2,27 @@ import React, { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Button, Tooltip, message, Dropdown, type MenuProps } from 'antd'
 import {
-  Monitor,
-  Smartphone,
-  Globe,
-  Download,
-  ArrowRight,
-  Sun,
-  Moon,
-  Check,
-  ShieldCheck,
-  Zap,
-  Image as ImageIcon,
-  KeyRound,
-  ExternalLink,
-  LogIn,
-  Sliders,
-  Sparkles,
-  Command,
-  Copy,
-  Server,
-  ChevronDown,
-} from 'lucide-react'
+  IconDeviceDesktop as Monitor,
+  IconDeviceMobile as Smartphone,
+  IconWorld as Globe,
+  IconDownload as Download,
+  IconArrowRight as ArrowRight,
+  IconSun as Sun,
+  IconMoon as Moon,
+  IconCheck as Check,
+  IconShieldCheck as ShieldCheck,
+  IconBolt as Zap,
+  IconPhoto as ImageIcon,
+  IconKey as KeyRound,
+  IconExternalLink as ExternalLink,
+  IconLogin as LogIn,
+  IconAdjustments as Sliders,
+  IconSparkles as Sparkles,
+  IconCommand as Command,
+  IconCopy as Copy,
+  IconServer2 as Server,
+  IconChevronDown as ChevronDown,
+} from '@tabler/icons-react'
 
 interface ReleaseItem {
   version: string

@@ -6,9 +6,23 @@ import {
 } from 'antd'
 import { Bubble, Sender, Conversations } from '@ant-design/x'
 import {
-  Monitor, Users, ArrowUpDown, FileText, ShieldCheck, Signal, Send, Copy, Trash2, Share2,
-  Download, Upload, Server, Cloud, Maximize2, Minimize2,
-} from 'lucide-react'
+  IconDeviceDesktop as Monitor,
+  IconUsers as Users,
+  IconArrowsSort as ArrowUpDown,
+  IconFileText as FileText,
+  IconShieldCheck as ShieldCheck,
+  IconAntennaBars5 as Signal,
+  IconSend as Send,
+  IconCopy as Copy,
+  IconTrash as Trash2,
+  IconShare as Share2,
+  IconDownload as Download,
+  IconUpload as Upload,
+  IconServer2 as Server,
+  IconCloud as Cloud,
+  IconArrowsMaximize as Maximize2,
+  IconArrowsMinimize as Minimize2,
+} from '@tabler/icons-react'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'

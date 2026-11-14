@@ -3,7 +3,15 @@ import {
   Card, Table, Tag, Badge, Typography, Space, Button, Input, Modal, Form, Popconfirm,
   message, Select, Empty, Skeleton,
 } from 'antd'
-import { Monitor, Pencil, Trash2, RefreshCw, KeyRound, Copy, RotateCcw } from 'lucide-react'
+import {
+  IconDeviceDesktop as Monitor,
+  IconPencil as Pencil,
+  IconTrash as Trash2,
+  IconRefresh as RefreshCw,
+  IconKey as KeyRound,
+  IconCopy as Copy,
+  IconRotate2 as RotateCcw,
+} from '@tabler/icons-react'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'

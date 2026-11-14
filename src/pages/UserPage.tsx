@@ -4,10 +4,35 @@ import {
   Empty, Row, Col, Skeleton, Tabs, Image as AntImage, Upload, Tooltip, Dropdown, Modal, QRCode, Segmented, Drawer, Select,
 } from 'antd'
 import {
-  Home, Clock, Settings, KeyRound, RefreshCw, Check, X, LogOut, Pencil, Copy,
-  Monitor, Trash2, Search, Send, Image as ImageIcon, Code2, Globe, ExternalLink,
-  Smartphone, Laptop, UploadCloud, ChevronRight, Filter, ShieldCheck, QrCode as QrIcon, AlertTriangle, FileText, HardDrive,
-} from 'lucide-react'
+  IconHome as Home,
+  IconClock as Clock,
+  IconSettings as Settings,
+  IconKey as KeyRound,
+  IconRefresh as RefreshCw,
+  IconCheck as Check,
+  IconX as X,
+  IconLogout as LogOut,
+  IconPencil as Pencil,
+  IconCopy as Copy,
+  IconDeviceDesktop as Monitor,
+  IconTrash as Trash2,
+  IconSearch as Search,
+  IconSend as Send,
+  IconPhoto as ImageIcon,
+  IconCode as Code2,
+  IconWorld as Globe,
+  IconExternalLink as ExternalLink,
+  IconDeviceMobile as Smartphone,
+  IconDeviceLaptop as Laptop,
+  IconCloudUpload as UploadCloud,
+  IconChevronRight as ChevronRight,
+  IconFilter as Filter,
+  IconShieldCheck as ShieldCheck,
+  IconQrcode as QrIcon,
+  IconAlertTriangle as AlertTriangle,
+  IconFileText as FileText,
+  IconDeviceSdCard as HardDrive,
+} from '@tabler/icons-react'
 import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'

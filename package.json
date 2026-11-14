@@ -9,15 +9,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@ant-design/icons": "^6.0.0",
     "@ant-design/x": "^2.9.0",
     "@fortawesome/free-brands-svg-icons": "^7.3.1",
     "@fortawesome/free-solid-svg-icons": "^7.3.1",
     "@fortawesome/react-fontawesome": "^3.5.0",
     "@microsoft/signalr": "^10.0.11",
+    "@tabler/icons-react": "^3.51.0",
     "antd": "^6.6.0",
     "dayjs": "^1.11.13",
-    "lucide-react": "^1.31.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.9.0"
