@@ -2,12 +2,12 @@
 node_modules/
 dist/
 
-# Rust / Cargo（desktop-tauri 后端）
-desktop-tauri/src-tauri/target/
+# Rust / Cargo（Tauri 后端）
+src-tauri/target/
 *.local
 
 # Tauri 构建中间产物
-desktop-tauri/src-tauri/gen/
+src-tauri/gen/
 
 # IDE 与用户配置
 .vs/

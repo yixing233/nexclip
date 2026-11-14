@@ -11,7 +11,7 @@ NexClip Windows 桌面端的下一代实现：**Tauri 2 + React 18 + antd 5**（
 - **三窗口架构**：主剪贴板弹窗（无边框、光标处呼出）、设置窗口、智能直达 toast。
 - **多种剪贴板类型**：纯文本、HTML、高清图片、文件元数据，去重入库。
 - **系统托盘与全局热键**：呼出主面板 / 打开直达链接 / 置顶切换等，均可配置。
-- **多设备同步**：REST + 原生 WebSocket 推送（协议见 `desktop-tauri/docs/ws-protocol.md`），
+- **多设备同步**：REST + 原生 WebSocket 推送（协议见 `docs/ws-protocol.md`），
   支持配对码配对、文件互传聊天。
 - **智能直达 (SmartAction)**：链接 / 网盘 / 色值 / 本地路径 / 提取码识别与一键直达。
 - **拼音与全文检索**：拼音首字母与全拼模糊搜索历史记录。
@@ -30,8 +30,6 @@ NexClip Windows 桌面端的下一代实现：**Tauri 2 + React 18 + antd 5**（
 ### 常用命令
 
 ```bash
-cd desktop-tauri
-
 npm install          # 安装前端依赖（首次）
 
 npm run tauri dev    # 开发模式（Vite 1420 端口 + Rust 增量编译）
@@ -39,7 +37,7 @@ npm run tauri build  # 打包 NSIS 安装包
 npm run build        # 仅构建前端（tsc --noEmit + vite build）
 
 # 真实数据兼容性验证（拷贝 %LOCALAPPDATA%\NexClip 到临时目录校验，不碰原库）
-cargo run --example verify_compat
+cargo run --example verify_compat --manifest-path src-tauri/Cargo.toml
 ```
 
 ---
@@ -47,12 +45,11 @@ cargo run --example verify_compat
 ## 目录结构
 
 ```
-desktop-tauri/
-├── src/                  # React 前端（按 Tauri 窗口 label 路由）
-│   ├── pages/            # ClipboardPopup / Settings / TransferChat / LinkToast
-│   └── ipc/              # invoke 封装（history / chat / settings）
-└── src-tauri/            # Rust 后端
-    └── src/
+src/                  # React 前端（按 Tauri 窗口 label 路由）
+├── pages/            # ClipboardPopup / Settings / TransferChat / LinkToast
+└── ipc/              # invoke 封装（history / chat / settings）
+src-tauri/            # Rust 后端
+└── src/
         ├── lib.rs        # 窗口 / 托盘 / 热键总装
         ├── capture.rs    # 剪贴板采集管线（防环 / 去抖 / 过滤）
         ├── commands/     # 39 个 tauri command
