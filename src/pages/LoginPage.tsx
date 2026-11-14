@@ -186,9 +186,6 @@ export default function LoginPage({ mode, onLogin }: { mode: 'user' | 'admin'; o
               />
             ))}
           </div>
-          <div style={{ fontSize: 12, color: '#9CA3AF', textAlign: 'center', marginTop: 10 }}>
-            输满 6 位自动连接 · 也可直接粘贴整段验证码
-          </div>
         </div>
 
         <div>
@@ -293,22 +290,6 @@ export default function LoginPage({ mode, onLogin }: { mode: 'user' | 'admin'; o
           >
             {formBlock}
           </Card>
-
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
-            {features.map(f => (
-              <span
-                key={f.title}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 5,
-                  background: 'rgba(0,0,0,0.04)', borderRadius: 999, padding: '5px 10px',
-                  fontSize: 11, color: '#4B5563',
-                }}
-              >
-                <span style={{ color: token.colorPrimary, display: 'inline-flex' }}>{f.icon}</span>
-                {f.title}
-              </span>
-            ))}
-          </div>
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontSize: 12, color: '#9CA3AF' }}>
             <a href="/" style={{ color: '#6B7280', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
