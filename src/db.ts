@@ -96,6 +96,15 @@ CREATE TABLE IF NOT EXISTS "Settings" (
   "Key" TEXT NOT NULL PRIMARY KEY,
   "Value" TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS "Sessions" (
+  "TokenHash" TEXT NOT NULL PRIMARY KEY,
+  "Role" TEXT NOT NULL,
+  "UserId" TEXT NULL,
+  "Username" TEXT NULL,
+  "DeviceId" TEXT NULL,
+  "DeviceTokenHash" TEXT NULL,
+  "ExpiresAt" INTEGER NOT NULL
+);
 `);
   // Entries 增量加列: IsManual 标记 / Html 富文本片段
   const entryCols = new Set((db.prepare('PRAGMA table_info("Entries")').all() as { name: string }[]).map(c => c.name));

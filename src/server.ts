@@ -15,7 +15,7 @@ import { serveStatic } from './static.js';
 const cfg = loadConfig();
 const db = openDb(cfg);
 const hub = new SignalRHub();
-const sessions = new SessionStore();
+const sessions = new SessionStore(db);
 const rate = new RateLimiter();
 const svc = new SyncService(db, cfg, hub);
 const files = new FileTransferService(db, cfg.imageStoragePath, hub);
