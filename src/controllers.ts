@@ -267,7 +267,14 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     const deviceId = deviceActor?.Id ?? ctx.actor?.deviceId ?? 'web-' + randomHex(4);
     const deviceName = mp.fields.deviceName || deviceActor?.Name || ctx.actor?.deviceId || '网页';
     const userId = deviceActor?.UserId ?? ctx.actor?.userId ?? null;
-    const dto = ctx.files.upload(mp.file.filename || 'file', mp.file.data, deviceId, deviceName, userId);
+    // 定向传输:deviceIds 为逗号分隔的目标设备 id;缺省回退全员广播(老客户端行为不变)
+    const targets = new Set(
+      (mp.fields.deviceIds ?? '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+    );
+    const dto = ctx.files.upload(mp.file.filename || 'file', mp.file.data, deviceId, deviceName, userId, targets.size > 0 ? targets : undefined);
     sendJson(res, 200, dto);
     return true;
   }

@@ -228,6 +228,15 @@ export class SignalRHub {
     }
   }
 
+  /** 定向推送文件互传事件:只通知指定 deviceId 的在线连接(两方/多方传输) */
+  broadcastFileTransferredTo(file: unknown, deviceIds: ReadonlySet<string>): void {
+    const msg = { type: 1, target: 'FileTransferred', arguments: [file] };
+    const lowerTargets = new Set([...deviceIds].map(id => id.toLowerCase()));
+    for (const conn of this.conns.values()) {
+      if (conn.deviceId && lowerTargets.has(conn.deviceId.toLowerCase())) this.sendJson(conn.ws, msg);
+    }
+  }
+
   /** 广播文件删除事件(接收端据此移除列表项) */
   broadcastFileDeleted(fileId: string, userId?: string | null): void {
     const msg = { type: 1, target: 'FileDeleted', arguments: [fileId] };

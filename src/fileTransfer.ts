@@ -80,9 +80,10 @@ CREATE INDEX IF NOT EXISTS "IX_Files_CreatedAt" ON "Files" ("CreatedAt");
   /**
    * 上传文件。
    *
+   * @param targets 指定接收设备的 deviceId 集合;提供时只定向通知这些设备,缺省全员广播
    * @returns 文件 DTO;size 超限抛 RangeError 由控制器转 413
    */
-  upload(fileName: string, data: Buffer, deviceId: string, deviceName: string | null, userId: string | null): FileDto {
+  upload(fileName: string, data: Buffer, deviceId: string, deviceName: string | null, userId: string | null, targets?: ReadonlySet<string>): FileDto {
     const safeName = sanitizeFileName(fileName || 'file');
     const hash = sha256Bytes(data);
     const dir = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -100,8 +101,12 @@ CREATE INDEX IF NOT EXISTS "IX_Files_CreatedAt" ON "Files" ("CreatedAt");
     ).run(fileId, safeName, data.length, hash, storageRel, deviceId, deviceName, userId, now);
 
     const dto = this.toDto(this.getByFileId(fileId)!);
-    // 与 broadcastUpdated 的用户组隔离语义一致:userId 为 null 时全量广播
-    this.hub.broadcastFileTransferred(dto, userId);
+    if (targets && targets.size > 0) {
+      this.hub.broadcastFileTransferredTo(dto, targets);
+    } else {
+      // 与 broadcastUpdated 的用户组隔离语义一致:userId 为 null 时全量广播
+      this.hub.broadcastFileTransferred(dto, userId);
+    }
     return dto;
   }
 
