@@ -25,6 +25,7 @@ import {
   IconDeviceMobile as Smartphone,
   IconDeviceLaptop as Laptop,
   IconCloudUpload as UploadCloud,
+  IconCloudUpload as Cloud,
   IconChevronRight as ChevronRight,
   IconFilter as Filter,
   IconShieldCheck as ShieldCheck,
@@ -37,11 +38,15 @@ import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import Grid from 'antd/es/grid'
+import { Bubble, Sender } from '@ant-design/x'
+import {
+  addOutgoing, clearChatMsgs, getChatMsgs, subscribeChatMsgs, type ChatMsg,
+} from '../chatStore'
 import FileTransferPanel from './FileTransferPanel'
 import {
   getUserId, createPairingCode, revokePairingCode,
   getDevices, removeDevice, getUser, renameUser, getActivities, deviceId,
-  getHistory, deleteEntry, clearHistory, pushText, pushImage, sendToDevices, getCurrentClipboard,
+  getHistory, deleteEntry, clearHistory, pushImage, sendToDevices, getCurrentClipboard,
   imageUrl, type DeviceInfo, type ActivityLog, type ClipboardEntry, type FileItem,
 } from '../api'
 
@@ -77,13 +82,14 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
 
   // 当前最新剪贴板
   const [currentClip, setCurrentClip] = useState<ClipboardEntry | null>(null)
-  const [inputText, setInputText] = useState('')
-  const [sendingText, setSendingText] = useState(false)
+  const [chatText, setChatText] = useState('')
+  const [chatSending, setChatSending] = useState(false)
+  const [chatTargets, setChatTargets] = useState<string[]>([])
+  const [chatMsgs, setChatMsgs] = useState<ChatMsg[]>(getChatMsgs())
+  useEffect(() => subscribeChatMsgs(() => setChatMsgs(getChatMsgs())), [])
   // 移动端快速推送:悬浮按钮 + 底部抽屉
   const [pushOpen, setPushOpen] = useState(false)
-  // 推送组合器:目标设备(空=全员) + 待发送图片附件
-  const [pushTargets, setPushTargets] = useState<string[]>([])
-  const [pushImages, setPushImages] = useState<File[]>([])
+
 
   // 历史记录列表
   const [historyItems, setHistoryItems] = useState<ClipboardEntry[]>([])
@@ -226,47 +232,42 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
     }
   }
 
-  // 推送组合器:文本按所选设备定向(空=全员广播),图片暂仅全员广播(服务端限制)
-  const handlePushComposer = async () => {
-    const text = inputText.trim()
-    if (!text && pushImages.length === 0) return
-    setSendingText(true)
+  // 聊天目标默认全选在线设备(可改选/清空)
+  const onlineDevices = devices.filter(d => d.online)
+  useEffect(() => {
+    if (onlineDevices.length > 0) {
+      setChatTargets(prev => (prev.length === 0 ? onlineDevices.map(d => d.id) : prev))
+    }
+  }, [onlineDevices.length]) // eslint-disable-line
+
+  /** 聊天发送:文本按所选设备定向(空=全员广播) */
+  const handleChatSend = async (msg: string) => {
+    const text = msg.trim()
+    if (!text) { message.warning('请输入要发送的内容'); return }
+    const targets = chatTargets.length > 0 ? chatTargets : onlineDevices.map(d => d.id)
+    if (targets.length === 0) { message.warning('没有在线设备可推送'); return }
+    setChatSending(true)
     try {
-      if (text) {
-        if (pushTargets.length > 0) {
-          await sendToDevices(text, pushTargets)
-        } else {
-          await pushText(text, deviceId(), 'Web 控制台')
-        }
-      }
-      if (pushImages.length > 0) {
-        if (pushTargets.length > 0) {
-          message.info('图片暂不支持定向,已同步至所有设备')
-        }
-        for (const f of pushImages) {
-          await pushImage(f, deviceId(), 'Web 控制台')
-        }
-      }
-      message.success(pushTargets.length > 0 ? '已发送至所选设备！' : '已推送至所有在线设备！')
-      setInputText('')
-      setPushImages([])
-      setPushOpen(false)
+      await sendToDevices(text, targets)
+      addOutgoing(text, targets)
+      setChatText('')
       loadAll()
     } catch (e) {
-      message.error('发送失败:' + (e as Error).message)
+      message.error((e as Error).message)
     } finally {
-      setSendingText(false)
+      setChatSending(false)
     }
   }
 
-  // 删除单条历史
-  const handleDeleteEntry = async (id: number) => {
+  /** 聊天里的图片推送:服务端图片仅支持全员广播,发送后记录为出站消息 */
+  const quickSendImage = async (file: File) => {
     try {
-      await deleteEntry(id)
-      message.success('已删除记录')
-      loadHistory()
+      await pushImage(file, deviceId(), 'Web 控制台')
+      addOutgoing('[图片] '+ (file.name || '图片'), devices.map(d => d.id))
+      message.success('图片已同步至所有在线设备！')
+      loadAll()
     } catch (e) {
-      message.error('删除失败:' + (e as Error).message)
+      message.error('图片上传失败:' + (e as Error).message)
     }
   }
 
@@ -280,6 +281,19 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
       message.error('清空失败:' + (e as Error).message)
     }
   }
+
+
+  // 删除单条历史
+  const handleDeleteEntry = async (id: number) => {
+    try {
+      await deleteEntry(id)
+      message.success('已删除记录')
+      loadHistory()
+    } catch (e) {
+      message.error('删除失败:' + (e as Error).message)
+    }
+  }
+
 
   // 复制内容到剪贴板(深度适配:图片真实位图写入 + 文本写入)
   const handleCopyEntry = async (item?: ClipboardEntry | null) => {
@@ -334,6 +348,7 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
     message.success('已复制到系统剪贴板！')
   }
 
+
   // 识别文本类型
   const detectType = (item: ClipboardEntry) => {
     if (item.type === 'Image' || item.imageRef) return 'image'
@@ -359,6 +374,7 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
     if (historyFilter === 'all') return true
     return t === historyFilter
   })
+
 
   // 设备表格列定义
   const devCols: ColumnsType<DeviceInfo> = [
@@ -399,98 +415,76 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
     },
   ]
 
-  // 快速推送面板:桌面常驻卡片,移动端由悬浮按钮 + 底部抽屉呼出
-  const pushPanel = (
+
+  /** 聊天流(旧消息在上,新消息在下) */
+  const chatPanel = (
     <>
-      {/* 目标设备多选:不选即全员广播 */}
-      <Select
-        mode="multiple"
-        allowClear
-        placeholder="目标设备:全部设备(默认)"
-        value={pushTargets}
-        onChange={setPushTargets}
-        options={devices.map(d => ({ value: d.id, label: d.online ? d.name : d.name + '（离线）' }))}
-        maxTagCount="responsive"
-        style={{ width: '100%', marginBottom: 10 }}
-      />
-      <div
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault()
-          const files = [...e.dataTransfer.files].filter(f => f.type.startsWith('image/'))
-          if (files.length > 0) setPushImages(arr => [...arr, ...files])
-        }}
-      >
-        <TextArea
-          rows={4}
-          placeholder="输入要发送的文本,支持 Ctrl+V 粘贴截图或拖拽图片添加附件..."
-          value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
-          onPaste={(e) => {
-            const items = e.clipboardData?.items
-            if (items) {
-              for (let i = 0; i < items.length; i++) {
-                if (items[i].type.startsWith('image/')) {
-                  const file = items[i].getAsFile()
-                  if (file) {
-                    e.preventDefault()
-                    setPushImages(arr => [...arr, file])
-                    return
-                  }
-                }
-              }
-            }
-          }}
-          style={{ borderRadius: 10, resize: 'none' }}
-        />
-        {/* 图片附件胶囊,可单个移除 */}
-        {pushImages.length > 0 && (
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
-            {pushImages.map((f, i) => (
-              <Tag
-                key={i}
-                closable
-                onClose={() => setPushImages(arr => arr.filter((_, j) => j !== i))}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, margin: 0, maxWidth: 220 }}
-              >
-                <ImageIcon size={12} />
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name || '图片'}</span>
-              </Tag>
-            ))}
+      <div style={{ flex: 1, minHeight: 180, display: 'flex', flexDirection: 'column' }}>
+        {chatMsgs.length === 0 ? (
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还没有同步消息,发送后会以聊天气泡呈现在这里" />
           </div>
+        ) : (
+          <Bubble.List
+            autoScroll
+            style={{ flex: 1, minHeight: 0 }}
+            items={chatMsgs.map(m => ({
+              key: m.id,
+              role: m.direction === 'out' ? 'user' : 'ai',
+              placement: m.direction === 'out' ? 'end' : 'start',
+              avatar: m.direction === 'out'
+                ? <Cloud size={15} />
+                : <Monitor size={15} />,
+              content: m.content,
+              footer: m.direction === 'out'
+                ? '→ '+ (m.targets?.map(id => devices.find(d => d.id === id)?.name ?? id).join(' · ') || '全部设备') + ' · '+ dayjs(m.createdAt).fromNow()
+                : '来自 '+ (m.deviceName ?? '其他设备') + ' · '+ dayjs(m.createdAt).fromNow(),
+            }))}
+          />
         )}
       </div>
-      <div style={{ display: 'flex', gap: 10, marginTop: 12, alignItems: 'center' }}>
-        <Upload
-          showUploadList={false}
-          accept="image/*"
-          multiple
-          beforeUpload={(file) => {
-            setPushImages(arr => [...arr, file])
-            return false
-          }}
-        >
-          <Button icon={<ImageIcon size={15} />} style={{ borderRadius: 8 }}>
-            添加图片
-          </Button>
-        </Upload>
-        <div style={{ flex: 1 }} />
-        <Tooltip title={inputText.trim() || pushImages.length > 0 ? '' : '先输入文本或添加图片'}>
-          <Button
-            type="primary"
-            icon={<Send size={15} />}
-            loading={sendingText}
-            disabled={!inputText.trim() && pushImages.length === 0}
-            onClick={handlePushComposer}
-            style={{ borderRadius: 8, minWidth: 96 }}
-          >
-            发送
-          </Button>
-        </Tooltip>
-      </div>
+      <Sender
+        value={chatText}
+        onChange={setChatText}
+        onSubmit={handleChatSend}
+        loading={chatSending}
+        placeholder="输入要推送的内容,Enter 发送..."
+        autoSize={{ minRows: 1, maxRows: 4 }}
+        style={{ marginTop: 'auto' }}
+        footer={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <Select
+              mode="multiple"
+              allowClear
+              value={chatTargets}
+              onChange={setChatTargets}
+              placeholder="目标设备(空=全部在线设备)"
+              style={{ minWidth: 200, flex: 1 }}
+              maxTagCount="responsive"
+              options={devices.map(d => ({ value: d.id, label: d.online ? d.name : d.name + '（离线）' }))}
+            />
+            <a
+              onClick={() => setChatTargets(onlineDevices.map(d => d.id))}
+              style={{ color: '#2563EB', whiteSpace: 'nowrap', fontSize: 13 }}
+            >
+              全选在线设备
+            </a>
+            <Upload
+              showUploadList={false}
+              accept="image/*"
+              multiple
+              beforeUpload={(file) => {
+                quickSendImage(file as File)
+                return false
+              }}
+            >
+              <Button icon={<ImageIcon size={14} />} style={{ borderRadius: 8 }}>图片</Button>
+            </Upload>
+          </div>
+        }
+      />
     </>
   )
-
   if (firstLoading && !userName && devices.length === 0) {
     return (
       <div style={{ maxWidth: 1040, margin: '0 auto', padding: '16px 8px' }}>
@@ -715,12 +709,13 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
                   title={
                     <Space>
                       <Send size={16} color="#2563EB" />
-                      <span>快速推送至所有设备</span>
+                      <span>快速同步</span>
                     </Space>
                   }
-                  style={{ borderRadius: 16, height: '100%' }}
+                  style={{ borderRadius: 16, height: '100%', display: 'flex', flexDirection: 'column' }}
+                  styles={{ body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } }}
                 >
-                  {pushPanel}
+                  {chatPanel}
                 </Card>
               </Col>
             )}
@@ -1472,7 +1467,7 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
         <>
           {/* 悬浮推送按钮:仅总览页出现 */}
           {activeTab === 'home' && (
-            <Tooltip title="快速推送至所有设备">
+            <Tooltip title="快速同步">
               <Button
                 type="primary"
                 shape="circle"
@@ -1515,14 +1510,14 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
           </nav>
           {/* 快速推送底部抽屉 (高度贴合内容) */}
           <Drawer
-            title={<span style={{ fontSize: 16, fontWeight: 600 }}>快速推送至所有设备</span>}
+            title={<span style={{ fontSize: 16, fontWeight: 600 }}>快速同步</span>}
             placement="bottom"
             open={pushOpen}
             onClose={() => setPushOpen(false)}
-            height={pushImages.length > 0 ? 340 : 288}
-            styles={{ header: { padding: '14px 16px' }, body: { paddingBottom: 20 } }}
+            height="78vh"
+            styles={{ header: { padding: '14px 16px' }, body: { padding: 16, display: 'flex', flexDirection: 'column', minHeight: 0 } }}
           >
-            {pushPanel}
+            {chatPanel}
           </Drawer>
         </>
       )}
