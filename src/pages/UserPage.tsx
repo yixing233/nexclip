@@ -17,7 +17,7 @@ import {
   IconDeviceDesktop as Monitor,
   IconTrash as Trash2,
   IconSearch as Search,
-  IconSend as Send,
+  IconSend2 as Send,
   IconPhoto as ImageIcon,
   IconCode as Code2,
   IconWorld as Globe,
@@ -1119,37 +1119,7 @@ export default function UserPage({ refreshTick, fileTick, onLogout }: { refreshT
             </Card>
           )}
 
-          {/* 用户身份与快捷配对操作卡片 */}
-          <Card style={{ borderRadius: 16 }} styles={{ body: { padding: '20px' } }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
-              <div>
-                <div style={{ fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <ShieldCheck size={18} color="#2563EB" />
-                  <span>设备组与配对中心</span>
-                </div>
-                <div style={{ fontSize: 13, color: '#6B7280', marginTop: 4 }}>
-                  当前用户组拥有 <Text strong style={{ color: '#2563EB' }}>{devices.length}</Text> 台已绑定设备，
-                  生成配对码可快速将新手机或桌面端加入本组。
-                </div>
-              </div>
-
-              <Space size={10} style={isMobile ? { width: '100%' } : undefined}>
-                <Button
-                  type="primary"
-                  size="middle"
-                  block={isMobile}
-                  icon={<KeyRound size={15} />}
-                  loading={pairLoading}
-                  onClick={genCode}
-                  style={{ borderRadius: 8, fontWeight: 600 }}
-                >
-                  {isMobile ? '生成配对码' : '生成配对码 (添加新设备)'}
-                </Button>
-              </Space>
-            </div>
-          </Card>
-
-          {/* 设备列表与同步日志 */}
+          {/* 设备列表与同步日志 (生成配对码收在设备卡头) */}
           <Row gutter={[16, 16]}>
             {/* 我的设备列表 */}
             <Col xs={24} lg={15}>
@@ -1161,12 +1131,24 @@ export default function UserPage({ refreshTick, fileTick, onLogout }: { refreshT
                   </Space>
                 }
                 extra={
-                  <Button type="link" size="small" icon={<RefreshCw size={13} />} onClick={loadAll}>
-                    刷新
-                  </Button>
+                  <Space size={4} wrap>
+                    <Button
+                      type="primary"
+                      size="small"
+                      icon={<KeyRound size={13} />}
+                      loading={pairLoading}
+                      onClick={genCode}
+                      style={{ borderRadius: 6, fontWeight: 600 }}
+                    >
+                      生成配对码
+                    </Button>
+                    <Button type="link" size="small" icon={<RefreshCw size={13} />} onClick={loadAll}>
+                      刷新
+                    </Button>
+                  </Space>
                 }
                 style={{ borderRadius: 16, height: '100%' }}
-                styles={{ body: { overflow: 'auto' } }}
+                styles={{ header: { flexWrap: 'wrap', gap: 6 }, body: { overflow: 'auto' } }}
               >
                 {devices.length === 0 ? (
                   <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="本组暂无已配对设备" />
