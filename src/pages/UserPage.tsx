@@ -417,6 +417,29 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
 
 
   /** 聊天流(旧消息在上,新消息在下) */
+  /** 目标设备选择(放在聊天面板顶栏) */
+  const targetPicker = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <Select
+        mode="multiple"
+        allowClear
+        size="small"
+        value={chatTargets}
+        onChange={setChatTargets}
+        placeholder="目标设备"
+        style={{ minWidth: 150 }}
+        maxTagCount="responsive"
+        options={devices.map(d => ({ value: d.id, label: d.online ? d.name : d.name + '（离线）' }))}
+      />
+      <a
+        onClick={() => setChatTargets(onlineDevices.map(d => d.id))}
+        style={{ color: '#2563EB', whiteSpace: 'nowrap', fontSize: 12 }}
+      >
+        全选在线
+      </a>
+    </div>
+  )
+
   const chatPanel = (
     <>
       <div style={{ flex: 1, minHeight: 180, display: 'flex', flexDirection: 'column' }}>
@@ -453,22 +476,6 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
         style={{ marginTop: 'auto' }}
         footer={
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <Select
-              mode="multiple"
-              allowClear
-              value={chatTargets}
-              onChange={setChatTargets}
-              placeholder="目标设备(空=全部在线设备)"
-              style={{ minWidth: 200, flex: 1 }}
-              maxTagCount="responsive"
-              options={devices.map(d => ({ value: d.id, label: d.online ? d.name : d.name + '（离线）' }))}
-            />
-            <a
-              onClick={() => setChatTargets(onlineDevices.map(d => d.id))}
-              style={{ color: '#2563EB', whiteSpace: 'nowrap', fontSize: 13 }}
-            >
-              全选在线设备
-            </a>
             <Upload
               showUploadList={false}
               accept="image/*"
@@ -707,11 +714,12 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
               <Col xs={24} lg={9}>
                 <Card
                   title={
-                    <Space>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                       <Send size={16} color="#2563EB" />
                       <span>快速同步</span>
-                    </Space>
+                    </div>
                   }
+                  extra={targetPicker}
                   style={{ borderRadius: 16, height: '100%', display: 'flex', flexDirection: 'column' }}
                   styles={{ body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' } }}
                 >
@@ -1510,7 +1518,12 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
           </nav>
           {/* 快速推送底部抽屉 (高度贴合内容) */}
           <Drawer
-            title={<span style={{ fontSize: 16, fontWeight: 600 }}>快速同步</span>}
+            title={
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <span style={{ fontSize: 16, fontWeight: 600 }}>快速同步</span>
+                {targetPicker}
+              </div>
+            }
             placement="bottom"
             open={pushOpen}
             onClose={() => setPushOpen(false)}
