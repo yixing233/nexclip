@@ -109,6 +109,32 @@ export async function checkUpdate(): Promise<UpdateResult> {
   return invoke<UpdateResult>("check_update");
 }
 
+/// 更新下载进度(事件 update-download-progress 载荷)
+export interface DownloadProgress {
+  downloaded: number;
+  total: number | null;
+  /** 0-100;total 未知时为 -1 */
+  percent: number;
+  done: boolean;
+  error: string | null;
+}
+
+export async function downloadUpdate(url: string, sha256: string | null): Promise<string> {
+  return invoke<string>("download_update", { url, sha256 });
+}
+
+export async function updateDownloadState(): Promise<DownloadProgress | null> {
+  return invoke<DownloadProgress | null>("update_download_state");
+}
+
+export function cancelUpdateDownload(): Promise<void> {
+  return invoke("cancel_update_download");
+}
+
+export async function runUpdateInstaller(path: string): Promise<void> {
+  await invoke("run_update_installer", { path });
+}
+
 /// 设备"最后在线"文案,与旧版 LastSeenText 一致
 export function lastSeenText(online: boolean | undefined, lastSeenAt: string | null | undefined): string {
   if (online) return "在线";

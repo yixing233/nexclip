@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   Layout, Menu, Switch, Input, InputNumber, Select, Button, Tooltip,
-  Popconfirm, Checkbox, App as AntApp, Typography, Tag, Card, Modal,
+  Popconfirm, Checkbox, App as AntApp, Typography, Tag, Card, Modal, Progress,
 } from "antd";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -14,12 +14,15 @@ import {
 } from "lucide-react";
 import {
   settingsGet, settingsSet, historyStats, historyClear, openInExplorer,
-  appInfo, formatBytes, devicesCached, checkUpdate, lastSeenText,
+  appInfo, formatBytes, devicesCached, lastSeenText,
   syncGetState, syncPairCreate, syncPairConfirm, syncTestConnection,
   syncRemoveDevice, syncRenameDevice, syncDevicesRefresh, syncPairRevoke,
   listUserProcesses, pickFolder,
+  checkUpdate as checkUpdateApi, downloadUpdate, updateDownloadState,
+  cancelUpdateDownload, runUpdateInstaller,
   type SettingsDto, type SettingsPatch, type HistoryStats,
   type DeviceInfo, type UpdateResult, type SyncState, type PairingCode,
+  type DownloadProgress,
 } from "../ipc/settings";
 import { QRCodeSVG } from "qrcode.react";
 
@@ -1047,12 +1050,42 @@ function AboutSection({
   const { message } = AntApp.useApp();
   const [checking, setChecking] = useState(false);
   const [result, setResult] = useState<UpdateResult | null>(null);
+  // 内置下载状态:null 空闲 / 进度对象(进行中或已完成)
+  const [dl, setDl] = useState<DownloadProgress | null>(null);
+  const [dlPath, setDlPath] = useState<string | null>(null);
+
+  // 挂载时恢复下载状态(下载中切换设置页回来不丢进度)
+  useEffect(() => {
+    void updateDownloadState().then((st) => {
+      if (st && !st.done) setDl(st);
+    });
+  }, []);
+
+  // 进度事件订阅
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlisten = await listen<DownloadProgress>("update-download-progress", (e) => {
+          setDl(e.payload);
+          if (e.payload.done && e.payload.error == null) {
+            void message.success("安装包下载完成,可立即安装");
+          } else if (e.payload.done && e.payload.error != null) {
+            void message.error(`下载失败:${e.payload.error}`);
+          }
+        });
+      } catch { /* 浏览器环境 */ }
+    })();
+    return () => unlisten?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const doCheck = async () => {
     setChecking(true);
     setResult(null);
     try {
-      const r = await checkUpdate();
+      const r = await checkUpdateApi();
       setResult(r);
       if (!r.success) {
         void message.error(`检查更新失败:${r.errorMessage ?? "未知错误"}`);
@@ -1063,6 +1096,33 @@ function AboutSection({
       void message.error(String(e));
     } finally {
       setChecking(false);
+    }
+  };
+
+  const startDownload = async () => {
+    if (!result?.downloadUrl) return;
+    setDlPath(null);
+    setDl({ downloaded: 0, total: result.fileSize ?? null, percent: 0, done: false, error: null });
+    try {
+      const path = await downloadUpdate(result.downloadUrl, result.sha256);
+      setDlPath(path);
+    } catch (e) {
+      if (String(e).includes("__cancelled__")) {
+        void message.info("下载已取消");
+      } else {
+        void message.error(String(e));
+      }
+      setDl(null);
+    }
+  };
+
+  const doInstall = async () => {
+    if (!dlPath) return;
+    try {
+      await runUpdateInstaller(dlPath);
+      void message.success("安装程序已启动;建议退出 NexClip 后完成安装");
+    } catch (e) {
+      void message.error(String(e));
     }
   };
 
@@ -1122,22 +1182,65 @@ function AboutSection({
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{result.releaseNotes}</ReactMarkdown>
             </div>
           )}
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <Button
-              size="small"
-              type="primary"
-              icon={<ExternalLink size={13} />}
-              onClick={() => void openInExplorer(result.downloadUrl || result.releaseUrl)}
-            >
-              下载安装包
-            </Button>
-            <Button
-              size="small"
-              onClick={() => void openInExplorer(result.releaseUrl)}
-            >
-              发布页
-            </Button>
-          </div>
+          {/* 操作区三态:空闲下载 / 进度中 / 已完成待安装 */}
+          {!dl && (
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <Button size="small" type="primary" onClick={() => void startDownload()}>
+                下载更新
+              </Button>
+              <Button size="small" onClick={() => void openInExplorer(result.releaseUrl)}>
+                发布页
+              </Button>
+            </div>
+          )}
+          {dl && !dl.done && (
+            <div style={{ marginTop: 10 }}>
+              <Progress
+                percent={dl.percent < 0 ? 0 : dl.percent}
+                size="small"
+                status="active"
+                format={(p) => `${p ?? 0}%`}
+              />
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+                <span style={{ fontSize: 11, color: "var(--ant-color-text-tertiary, #999)" }}>
+                  {dl.total
+                    ? `${formatBytes(dl.downloaded)} / ${formatBytes(dl.total)}`
+                    : formatBytes(dl.downloaded)}
+                </span>
+                <Button
+                  size="small"
+                  type="text"
+                  danger
+                  onClick={() => void cancelUpdateDownload()}
+                >
+                  取消
+                </Button>
+              </div>
+            </div>
+          )}
+          {dl?.done && dl.error == null && (
+            <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
+              <Button size="small" type="primary" onClick={() => void doInstall()}>
+                立即安装
+              </Button>
+              <Button size="small" onClick={() => void openInExplorer(dlPath ?? "")}>
+                打开所在文件夹
+              </Button>
+              <span style={{ fontSize: 11, color: "var(--ant-color-text-tertiary, #999)" }}>
+                安装前建议退出 NexClip
+              </span>
+            </div>
+          )}
+          {dl?.done && dl.error != null && (
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <Button size="small" onClick={() => void startDownload()}>
+                重试下载
+              </Button>
+              <Button size="small" onClick={() => void openInExplorer(result.releaseUrl)}>
+                发布页
+              </Button>
+            </div>
+          )}
         </Card>
       )}
       <Row title="项目主页">
