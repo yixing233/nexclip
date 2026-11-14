@@ -393,27 +393,57 @@ class SyncApi(
     // ---------- 文件互传(/api/files, 2026-11-13 服务端新增) ----------
 
     /**
-     * 上传任意文件。
+     * 上传任意文件(带进度回调 + 定向推送 + 长超时)。
      *
      * 与 uploadImage 的差异:文件走独立的 Files 表,不会进入剪贴板历史,
-     * 各端收到的是 FileTransferred 推送而非 ClipboardUpdated ——
-     * 这保证了「传文件」不会触发接收端的自动粘贴链路。
+     * 各端收到的是 FileTransferred 推送而非 ClipboardUpdated。
+     *
+     * @param targetDeviceIds 目标设备 id;空集合 = 全员广播(含网页会话)
+     * @param onProgress (已发送字节, 总字节) —— 流式写出时按块回调,UI 据此算速率
      */
     fun uploadFile(
         file: java.io.File,
         deviceId: String,
         deviceName: String,
+        targetDeviceIds: Set<String> = emptySet(),
+        onProgress: ((sent: Long, total: Long) -> Unit)? = null,
     ): FileTransferInfo {
         val mime = mimeTypeOf(file.name)
-        val body = MultipartBody.Builder().setType(MultipartBody.FORM)
-            .addFormDataPart("file", file.name, file.asRequestBody(mime.toMediaType()))
+        val fileBody = object : okhttp3.RequestBody() {
+            override fun contentType(): okhttp3.MediaType? = mime.toMediaType()
+            override fun contentLength(): Long = file.length()
+            override fun writeTo(sink: okio.BufferedSink) {
+                val total = file.length()
+                var sent = 0L
+                file.inputStream().use { input ->
+                    val buf = ByteArray(64 * 1024)
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        sink.write(buf, 0, n)
+                        sent += n
+                        onProgress?.invoke(sent, total)
+                    }
+                }
+            }
+        }
+        val builder = MultipartBody.Builder().setType(MultipartBody.FORM)
+            .addFormDataPart("file", file.name, fileBody)
             .addFormDataPart("deviceId", deviceId)
             .addFormDataPart("deviceName", deviceName)
             .addFormDataPart("platform", "Android")
             .addFormDataPart("version", android.os.Build.VERSION.RELEASE)
+        if (targetDeviceIds.isNotEmpty()) {
+            builder.addFormDataPart("deviceIds", targetDeviceIds.joinToString(","))
+        }
+        val req = builder("POST", "/api/files").post(builder.build()).build()
+        // 上传可能远超 30s readTimeout:大文件在 Wi-Fi 上 2MB/s 也需要分钟级
+        val longClient = client.newBuilder()
+            .readTimeout(120, TimeUnit.SECONDS)
+            .writeTimeout(120, TimeUnit.SECONDS)
+            .callTimeout(300, TimeUnit.SECONDS)
             .build()
-        val req = builder("POST", "/api/files").post(body).build()
-        val resp = execute(req)
+        val resp = longClient.newCall(req).execute()
         resp.use {
             val json = JSONObject(it.body?.string() ?: "{}")
             return FileTransferInfo(
