@@ -289,6 +289,7 @@ function AdminConsole({
 }
 
 export default function App() {
+  const appScreens = Grid.useBreakpoint()
   const [authed, setAuthed] = useState<boolean>(() => !!localStorage.getItem('clipsync_token'))
   const [hubStatus, setHubStatus] = useState<'connected' | 'reconnecting' | 'disconnected'>('disconnected')
   const [refreshTick, setRefreshTick] = useState(0)
@@ -431,7 +432,7 @@ export default function App() {
             !authed ? (
               <Navigate to="/index/login" replace />
             ) : role === 'user' ? (
-              <div style={{ minHeight: '100vh', background: isDark ? '#0D1117' : '#F3F4F6', padding: 24 }}>
+              <div style={{ minHeight: '100vh', background: isDark ? '#0D1117' : '#F3F4F6', padding: appScreens.md === false ? 12 : 24 }}>
                 <UserPage refreshTick={refreshTick} fileTick={fileTick} onLogout={logout} />
               </div>
             ) : (
