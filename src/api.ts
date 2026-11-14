@@ -262,12 +262,15 @@ export function listFiles(offset = 0, limit = 50): Promise<FileListPage> {
  * 走 XHR 以支持上传进度(onProgress 报告 0-100);fetch 没有上传进度。
  * targets 非空时服务端只向这些设备定向推送 FileTransferred,缺省全员广播。
  */
-export function uploadFile(file: File, opts?: { targets?: string[]; onProgress?: (pct: number) => void }): Promise<FileItem> {
+export function uploadFile(file: File, opts?: { targets?: string[]; requestId?: string; onProgress?: (pct: number) => void }): Promise<FileItem> {
   return new Promise<FileItem>((resolve, reject) => {
     const form = new FormData();
     form.append('file', file);
     form.append('deviceName', getDefaultDeviceName());
     form.append('platform', getBrowserPlatform());
+    if (opts?.requestId) {
+      form.append('requestId', opts.requestId);
+    }
     if (opts?.targets && opts.targets.length > 0) {
       form.append('deviceIds', opts.targets.join(','));
     }
@@ -303,6 +306,14 @@ export function uploadFile(file: File, opts?: { targets?: string[]; onProgress?:
     };
     xhr.onerror = () => reject(new Error('网络错误,上传中断'));
     xhr.send(form);
+  });
+}
+
+/** 确认制传输第一步:只登记请求(仅元数据,不含文件本体),目标设备接受后才开始上传 */
+export function requestFileTransfer(fileName: string, size: number, targets: string[]): Promise<FileItem> {
+  return request<FileItem>('/api/files/request', {
+    method: 'POST',
+    body: JSON.stringify({ fileName, size, deviceIds: targets }),
   });
 }
 

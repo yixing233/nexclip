@@ -8,7 +8,7 @@ import {
   IconDeviceMobile, IconX, IconClock,
 } from '@tabler/icons-react'
 import {
-  uploadFile, downloadFile, deleteFile, acceptFile, rejectFile,
+  uploadFile, downloadFile, deleteFile, acceptFile, rejectFile, requestFileTransfer,
   getDefaultDeviceName, getBrowserPlatform,
   type FileItem, type DeviceInfo,
 } from '../api'
@@ -79,7 +79,12 @@ export default function FileTransferPanel({
     if (fresh.length === 0) return
     setTasks(arr => arr.map(t => {
       const ev = fresh.find(e => e.fileId === t.fileId && t.status === 'pending')
-      return ev ? { ...t, status: ev.action === 'accepted' ? 'done' : 'rejected' } : t
+      if (ev && ev.action === 'accepted') {
+        // 对方已接受 → 开始传输文件本体
+        doUpload(t.key, t.file, ev.fileId)
+        return { ...t, status: 'uploading', pct: 0 }
+      }
+      return ev ? { ...t, status: 'rejected' } : t
     }))
   }, [respondedEvents])
 
@@ -96,18 +101,27 @@ export default function FileTransferPanel({
     )))
   }, [deletedFileIds])
 
-  const sendOne = (key: string, file: File) => {
+  /** 确认制:对方已接受 → 上传文件本体(带 requestId 挂到既有请求) */
+  const doUpload = (key: string, file: File, fileId: string) => {
+    setTasks(arr => arr.map(t => (t.key === key ? { ...t, status: 'uploading', pct: 0, error: undefined } : t)))
+    uploadFile(file, { requestId: fileId, onProgress: (pct) => setTasks(arr => arr.map(t => (t.key === key ? { ...t, pct } : t))) })
+      .then(() => {
+        setTasks(arr => arr.map(t => (t.key === key ? { ...t, status: 'done', pct: 100 } : t)))
+      })
+      .catch((e: unknown) => {
+        const msg = e instanceof Error ? e.message : String(e)
+        setTasks(arr => arr.map(t => (t.key === key ? { ...t, status: 'failed', error: msg } : t)))
+      })
+  }
+
+  /** 不选目标 = 全员广播,无需确认,直接上传 */
+  const sendBroadcast = (key: string, file: File) => {
     setTasks(arr => arr.map(t => (t.key === key ? { ...t, status: 'uploading', pct: 0, error: undefined } : t)))
     uploadFile(file, {
-      targets,
       onProgress: (pct) => setTasks(arr => arr.map(t => (t.key === key ? { ...t, pct } : t))),
     })
-      .then((dto) => {
-        setTasks(arr => arr.map(t => (
-          t.key === key
-            ? { ...t, fileId: dto.fileId, status: dto.transferStatus === 'pending' ? 'pending' : 'done', pct: 100 }
-            : t
-        )))
+      .then(() => {
+        setTasks(arr => arr.map(t => (t.key === key ? { ...t, status: 'done', pct: 100 } : t)))
       })
       .catch((e: unknown) => {
         const msg = e instanceof Error ? e.message : String(e)
@@ -120,7 +134,20 @@ export default function FileTransferPanel({
     for (const f of files) {
       const key = 't' + Date.now() + '-' + ++seqRef.current
       setTasks(arr => [...arr, { key, file: f, pct: 0, status: 'uploading' }])
-      sendOne(key, f)
+      if (targets.length === 0) {
+        sendBroadcast(key, f)
+        continue
+      }
+      // 确认制第一步:只发请求(元数据),对方接受后才开始上传文件本体
+      setTasks(arr => arr.map(t => (t.key === key ? { ...t, status: 'pending' } : t)))
+      requestFileTransfer(f.name, f.size, targets)
+        .then((dto) => {
+          setTasks(arr => arr.map(t => (t.key === key ? { ...t, fileId: dto.fileId, status: 'pending' } : t)))
+        })
+        .catch((e: unknown) => {
+          const msg = e instanceof Error ? e.message : String(e)
+          setTasks(arr => arr.map(t => (t.key === key ? { ...t, status: 'failed', error: msg } : t)))
+        })
     }
   }
 
@@ -254,7 +281,7 @@ export default function FileTransferPanel({
                     <Tooltip title={t.error}>
                       <Tag color="error" icon={<IconAlertCircle size={12} />} style={{ margin: 0 }}>失败</Tag>
                     </Tooltip>
-                    <Button size="small" icon={<IconRefresh size={13} />} onClick={() => sendOne(t.key, t.file)}>
+                    <Button size="small" icon={<IconRefresh size={13} />} onClick={() => { setTasks(arr => arr.filter(x => x.key !== t.key)); addFiles([t.file]) }}>
                       重试
                     </Button>
                   </Space>
