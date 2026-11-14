@@ -478,7 +478,8 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
         loading={chatSending}
         placeholder="输入要推送的内容,Enter 发送..."
         autoSize={{ minRows: 1, maxRows: 4 }}
-        style={{ marginTop: 'auto' }}
+        style={{ marginTop: 'auto', borderRadius: 12 }}
+        styles={{ root: { borderRadius: 12 } }}
         header={
           chatImages.length > 0 ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '8px 4px 0' }}>
