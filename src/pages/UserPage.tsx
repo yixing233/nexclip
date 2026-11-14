@@ -959,24 +959,27 @@ export default function UserPage({ refreshTick, fileTick, onLogout }: { refreshT
                               lineHeight: 1.5,
                               wordBreak: 'break-word',
                               whiteSpace: 'pre-wrap',
-                              maxHeight: 240,
+                              maxHeight: isMobile ? 160 : 240,
                               overflowY: 'auto',
                             }}
                           >
                             {item.text}
                           </div>
                         ) : type === 'link' ? (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <a
-                              href={item.text ?? '#'}
-                              target="_blank"
-                              rel="noreferrer"
-                              style={{ fontSize: 14, wordBreak: 'break-all', color: '#2563EB' }}
+                          <a
+                            href={item.text ?? '#'}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#2563EB', minWidth: 0 }}
+                          >
+                            <ExternalLink size={14} color="#2563EB" style={{ flexShrink: 0 }} />
+                            <Paragraph
+                              ellipsis={{ rows: isMobile ? 2 : 3, tooltip: { title: item.text } }}
+                              style={{ fontSize: 14, wordBreak: 'break-all', color: '#2563EB', flex: 1, minWidth: 0, lineHeight: 1.5, margin: 0 }}
                             >
                               {item.text}
-                            </a>
-                            <ExternalLink size={14} color="#2563EB" />
-                          </div>
+                            </Paragraph>
+                          </a>
                         ) : (
                           <Paragraph
                             ellipsis={{ rows: isMobile ? 3 : 4, expandable: true, symbol: '展开全文' }}
