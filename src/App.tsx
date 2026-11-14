@@ -29,7 +29,7 @@ import UsersPage from './pages/UsersPage'
 import UserPage from './pages/UserPage'
 import LandingPage from './pages/LandingPage'
 import { connectHub, disconnectHub } from './hub'
-import { getThemeMode, logout as apiLogout, deviceId, getRole, getMe, getHealth } from './api'
+import { getThemeMode, logout as apiLogout, deviceId, getRole, getMe, getHealth, type FileItem } from './api'
 import { addIncoming } from './chatStore'
 
 const { Header, Sider, Content } = Layout
@@ -306,8 +306,10 @@ export default function App() {
   const [refreshTick, setRefreshTick] = useState(0)
   const [themeMode, setThemeModeState] = useState<'light' | 'dark' | 'system'>(getThemeMode())
   const [userFilter, setUserFilter] = useState<string | null>(null)
-  // 文件互传:hub 推送到达时 bump 计数驱动 FilesPage 重拉
+  // 文件互传:hub 推送到达时 bump 计数驱动管理端 FilesPage 重拉
   const [fileTick, setFileTick] = useState(0)
+  // 用户端即时互传:本次会话收到的文件(内存态,排除本机回声)
+  const [receivedFiles, setReceivedFiles] = useState<FileItem[]>([])
 
   /** 手动刷新:驱动全部页面的 refreshTick 重新拉取 */
   const refreshAll = () => setRefreshTick(t => t + 1)
@@ -344,12 +346,15 @@ export default function App() {
         setRefreshTick(t => t + 1)
       },
       onFileTransferred: (file) => {
-        const f = file as { fileName?: string; deviceName?: string } | null
-        if (f?.fileName) {
-          message.info('收到新文件: ' + f.fileName + (f.deviceName ? '（来自 ' + f.deviceName + '）' : ''))
-        } else {
+        const f = file as FileItem | null
+        if (!f?.fileId) {
           message.info('收到新文件')
+          setFileTick(t => t + 1)
+          return
         }
+        if (f.deviceId && f.deviceId === deviceId()) return // 本机上传回声,不算接收
+        message.info('收到新文件: ' + f.fileName + (f.deviceName ? '（来自 ' + f.deviceName + '）' : ''))
+        setReceivedFiles(arr => [...arr.slice(-19), f]) // 会话内存态,最多留 20 条
         setFileTick(t => t + 1)
       },
       onFileDeleted: () => {
@@ -444,7 +449,7 @@ export default function App() {
               <Navigate to="/index/login" replace />
             ) : role === 'user' ? (
               <div style={{ minHeight: '100vh', background: isDark ? '#0D1117' : '#F3F4F6', padding: appScreens.md === false ? 12 : 24 }}>
-                <UserPage refreshTick={refreshTick} fileTick={fileTick} onLogout={logout} />
+                <UserPage refreshTick={refreshTick} receivedFiles={receivedFiles} onLogout={logout} />
               </div>
             ) : (
               <Navigate to="/pro/overview" replace />

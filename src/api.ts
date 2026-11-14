@@ -252,12 +252,54 @@ export function listFiles(offset = 0, limit = 50): Promise<FileListPage> {
   return request<FileListPage>('/api/files?offset=' + offset + '&limit=' + limit);
 }
 
-export function uploadFile(file: File): Promise<FileItem> {
-  const form = new FormData();
-  form.append('file', file);
-  form.append('deviceName', getDefaultDeviceName());
-  form.append('platform', getBrowserPlatform());
-  return request<FileItem>('/api/files', { method: 'POST', body: form });
+/**
+ * 上传文件(即时互传)。
+ *
+ * 走 XHR 以支持上传进度(onProgress 报告 0-100);fetch 没有上传进度。
+ * targets 非空时服务端只向这些设备定向推送 FileTransferred,缺省全员广播。
+ */
+export function uploadFile(file: File, opts?: { targets?: string[]; onProgress?: (pct: number) => void }): Promise<FileItem> {
+  return new Promise<FileItem>((resolve, reject) => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('deviceName', getDefaultDeviceName());
+    form.append('platform', getBrowserPlatform());
+    if (opts?.targets && opts.targets.length > 0) {
+      form.append('deviceIds', opts.targets.join(','));
+    }
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/files');
+    const token = getToken();
+    if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && opts?.onProgress) opts.onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      if (xhr.status === 401) {
+        setToken(null);
+        window.dispatchEvent(new Event('clipsync:unauthorized'));
+        reject(new Error('登录已失效,请重新登录'));
+        return;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as FileItem);
+        } catch {
+          reject(new Error('服务器返回了无效响应(' + xhr.status + ')'));
+        }
+        return;
+      }
+      let errMsg = '请求失败: ' + xhr.status;
+      try {
+        const data = JSON.parse(xhr.responseText);
+        if (data && typeof data.error === 'string') errMsg = data.error;
+      } catch { /* 非 JSON 响应,用状态码文案 */ }
+      reject(new Error(errMsg));
+    };
+    xhr.onerror = () => reject(new Error('网络错误,上传中断'));
+    xhr.send(form);
+  });
 }
 
 export function deleteFile(fileId: string): Promise<void> {

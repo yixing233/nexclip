@@ -37,19 +37,19 @@ import type { ColumnsType } from 'antd/es/table'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import Grid from 'antd/es/grid'
-import FilesPage from './FilesPage'
+import FileTransferPanel from './FileTransferPanel'
 import {
   getUserId, createPairingCode, revokePairingCode,
   getDevices, removeDevice, getUser, renameUser, getActivities, deviceId,
   getHistory, deleteEntry, clearHistory, pushText, pushImage, sendToDevices, getCurrentClipboard,
-  imageUrl, type DeviceInfo, type ActivityLog, type ClipboardEntry,
+  imageUrl, type DeviceInfo, type ActivityLog, type ClipboardEntry, type FileItem,
 } from '../api'
 
 dayjs.extend(relativeTime)
 const { Text, Title, Paragraph } = Typography
 const { TextArea } = Input
 
-export default function UserPage({ refreshTick, fileTick, onLogout }: { refreshTick: number; fileTick: number; onLogout: () => void }) {
+export default function UserPage({ refreshTick, receivedFiles, onLogout }: { refreshTick: number; receivedFiles: FileItem[]; onLogout: () => void }) {
   const uid = getUserId() ?? ''
   const screens = Grid.useBreakpoint()
   const isMobile = screens.md === false
@@ -1081,8 +1081,8 @@ export default function UserPage({ refreshTick, fileTick, onLogout }: { refreshT
         </div>
       )}
 
-      {/* ==================== 2.5 【文件互传】板块 (Files, 复用管理端 FilesPage) ==================== */}
-      {activeTab === 'files' && <FilesPage refreshTick={fileTick} />}
+      {/* ==================== 2.5 【文件互传】板块 (即时传输面板) ==================== */}
+      {activeTab === 'files' && <FileTransferPanel devices={devices} receivedFiles={receivedFiles} />}
 
       {/* ==================== 3. 【设置与设备】板块 (Settings & Devices) ==================== */}
       {activeTab === 'settings' && (
