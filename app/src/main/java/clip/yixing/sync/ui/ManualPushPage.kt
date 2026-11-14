@@ -378,6 +378,11 @@ fun ManualPushPage(
         modifier = modifier
             .fillMaxSize()
             .background(MiuixTheme.colorScheme.background)
+            // 消费空白区点击:覆盖层不做触摸穿透(与 FilesPage 同款修复)
+            .clickable(
+                indication = null,
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+            ) { }
     ) {
         // 1. 聊天消息流列表（置于底层，穿透并在顶部/底部毛玻璃下产生模糊折射）
         Box(

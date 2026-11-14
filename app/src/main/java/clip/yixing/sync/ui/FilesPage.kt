@@ -290,6 +290,9 @@ fun FilesPage(
         modifier = Modifier
             .fillMaxSize()
             .background(MiuixTheme.colorScheme.background)
+            // 消费空白区点击:否则触摸穿透到底下的 Pager,误触首页剪贴板卡片
+            // (真机确认:文件页点中间会点开首页当前图片)。
+            .clickable(indication = null, interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }) { }
     ) {
         // 1. 任务时间线
         Box(
