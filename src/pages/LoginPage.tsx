@@ -267,11 +267,10 @@ export default function LoginPage({ mode, onLogin }: { mode: 'user' | 'admin'; o
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          background: 'linear-gradient(135deg, ' + token.colorPrimaryBg + ' 0%, ' + token.colorBgLayout + ' 100%)',
-          padding: 16,
+            padding: 16,
         }}
       >
-        <div style={{ width: '100%', maxWidth: 420, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ width: '100%', maxWidth: 420, display: 'flex', flexDirection: 'column', gap: 14, position: 'relative', zIndex: 1 }}>
           <div style={{ textAlign: 'center', padding: '4px 0 2px' }}>
             <img
               src="/logo.png"
@@ -334,12 +333,13 @@ export default function LoginPage({ mode, onLogin }: { mode: 'user' | 'admin'; o
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: 'linear-gradient(135deg, ' + token.colorPrimaryBg + ' 0%, ' + token.colorBgLayout + ' 100%)',
         padding: 16,
       }}
     >
       <div
         style={{
+          position: 'relative',
+          zIndex: 1,
           display: 'flex',
           flexDirection: 'row',
           alignItems: 'stretch',

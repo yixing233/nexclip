@@ -71,3 +71,53 @@ html[data-theme='dark'] * {
   from { opacity: 1; transform: scale(1) translateY(0); }
   to { opacity: 0; transform: scale(0.97) translateY(10px); }
 }
+
+/* ===== 配对登录页:动态渐变背景 + 漂移光斑 ===== */
+.clipsync-login-page {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(120deg, #eef4ff 0%, #dbeafe 25%, #ede9fe 55%, #e0f2fe 80%, #eef4ff 100%);
+  background-size: 300% 300%;
+  animation: login-bg-shift 18s ease-in-out infinite;
+}
+.clipsync-login-page::before,
+.clipsync-login-page::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  opacity: 0.45;
+  pointer-events: none;
+}
+.clipsync-login-page::before {
+  width: 460px; height: 460px;
+  background: #93c5fd;
+  top: -140px; left: -110px;
+  animation: login-blob-drift 20s ease-in-out infinite alternate;
+}
+.clipsync-login-page::after {
+  width: 420px; height: 420px;
+  background: #c4b5fd;
+  bottom: -150px; right: -100px;
+  animation: login-blob-drift 24s ease-in-out infinite alternate-reverse;
+}
+@keyframes login-bg-shift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes login-blob-drift {
+  from { transform: translate(0, 0) scale(1); }
+  to { transform: translate(70px, 50px) scale(1.12); }
+}
+html[data-theme='dark'] .clipsync-login-page {
+  background: linear-gradient(120deg, #0d1117 0%, #101a2e 30%, #1a1233 65%, #0d1117 100%);
+  background-size: 300% 300%;
+}
+html[data-theme='dark'] .clipsync-login-page::before { background: #1d4ed8; opacity: 0.22; }
+html[data-theme='dark'] .clipsync-login-page::after { background: #4c1d95; opacity: 0.22; }
+@media (prefers-reduced-motion: reduce) {
+  .clipsync-login-page,
+  .clipsync-login-page::before,
+  .clipsync-login-page::after { animation: none; }
+}
