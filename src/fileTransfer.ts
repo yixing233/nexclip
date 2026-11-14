@@ -86,9 +86,57 @@ CREATE INDEX IF NOT EXISTS "IX_Files_CreatedAt" ON "Files" ("CreatedAt");
   }
 
   /**
-   * 上传文件。
+   * 确认制第一步:只登记传输请求(仅元数据,无文件本体),向目标设备广播 FileTransferRequested。
+   * 对方接受后,发送方才通过 attach 上传文件本体。
+   */
+  createRequest(fileName: string, size: number, deviceId: string, deviceName: string | null, userId: string | null, targets: ReadonlySet<string>): FileDto {
+    const safeName = sanitizeFileName(fileName || 'file');
+    const fileId = randomHex(16);
+    const now = dbNow();
+    this.db.prepare(
+      `INSERT INTO "Files" ("FileId","FileName","Size","ContentHash","StoragePath","DeviceId","DeviceName","UserId","CreatedAt","TargetIds","TransferStatus")
+       VALUES (?,?,?,?,'',?,?,?,?,?,?)`
+    ).run(fileId, safeName, size, '', deviceId, deviceName, userId, now, [...targets].join(','), 'pending');
+
+    const dto = this.toDto(this.getByFileId(fileId)!);
+    this.hub.broadcastFileTransferRequested(dto, targets);
+    return dto;
+  }
+
+  /**
+   * 确认制第二步:目标设备已接受,发送方上传文件本体并挂到既有请求记录上。
+   * 广播 FileTransferred 只给目标设备(接收端据此把文件加入可下载列表)。
    *
-   * @param targets 指定接收设备的 deviceId 集合;提供时只定向通知这些设备,缺省全员广播
+   * @returns null = 请求不存在/未 accepted/与上传者身份不匹配
+   */
+  attach(requestId: string, fileName: string, data: Buffer, deviceId: string, deviceName: string | null, userId: string | null): FileDto | null {
+    const row = this.getByFileId(requestId);
+    if (!row || row.TransferStatus !== 'accepted') return null;
+    if (row.DeviceId !== deviceId) return null;
+    if (userId && row.UserId && row.UserId !== userId) return null;
+
+    const safeName = sanitizeFileName(fileName || row.FileName || 'file');
+    const hash = sha256Bytes(data);
+    const dir = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const fullDir = join(this.storageRoot, dir);
+    mkdirSync(fullDir, { recursive: true });
+    const ext = extname(safeName).toLowerCase();
+    const storageRel = dir + '/' + row.FileId + ext;
+    writeFileSync(join(this.storageRoot, storageRel), data);
+
+    this.db.prepare(
+      `UPDATE "Files" SET "FileName"=?, "Size"=?, "ContentHash"=?, "StoragePath"=?, "DeviceName"=? WHERE "FileId"=?`
+    ).run(safeName, data.length, hash, storageRel, deviceName ?? row.DeviceName, row.FileId);
+
+    const targetIds = new Set((row.TargetIds ?? '').split(',').filter(Boolean));
+    const dto = this.toDto(this.getByFileId(row.FileId)!);
+    this.hub.broadcastFileTransferredTo(dto, targetIds);
+    return dto;
+  }
+
+  /**
+   * 直接上传文件(旧式:不选目标=全员广播;带 targets=定向立即送达,无确认环节)。
+   *
    * @returns 文件 DTO;size 超限抛 RangeError 由控制器转 413
    */
   upload(fileName: string, data: Buffer, deviceId: string, deviceName: string | null, userId: string | null, targets?: ReadonlySet<string>): FileDto {
@@ -110,11 +158,8 @@ CREATE INDEX IF NOT EXISTS "IX_Files_CreatedAt" ON "Files" ("CreatedAt");
 
     const dto = this.toDto(this.getByFileId(fileId)!);
     if (targets && targets.size > 0) {
-      // 确认制:标记待确认,只向目标设备广播 FileTransferRequested(发送方不收自己的回声)
-      this.db.prepare('UPDATE "Files" SET "TargetIds" = ?, "TransferStatus" = ? WHERE "FileId" = ?')
-        .run([...targets].join(','), 'pending', fileId);
-      dto.transferStatus = 'pending';
-      this.hub.broadcastFileTransferRequested(dto, targets);
+      // 定向立即送达(无确认环节,供旧客户端/无确认场景使用)
+      this.hub.broadcastFileTransferredTo(dto, targets);
     } else {
       // 与 broadcastUpdated 的用户组隔离语义一致:userId 为 null 时全量广播
       this.hub.broadcastFileTransferred(dto, userId);
@@ -140,17 +185,19 @@ CREATE INDEX IF NOT EXISTS "IX_Files_CreatedAt" ON "Files" ("CreatedAt");
       this.hub.broadcastFileResponded(fileId, 'accepted', row.DeviceId);
       return true;
     }
-    // 拒绝:立即删除文件行与磁盘内容,只给发送方一条"已拒绝"
+    // 拒绝:立即删除记录与磁盘内容(仅元数据的请求记录没有磁盘文件),只给发送方一条"已拒绝"
     this.db.prepare('DELETE FROM "Files" WHERE "FileId" = ?').run(fileId);
-    this.withSafePath(row.StoragePath, (full) => {
-      if (existsSync(full)) runCatching(() => unlinkSync(full));
-      return null;
-    });
+    if (row.StoragePath) {
+      this.withSafePath(row.StoragePath, (full) => {
+        if (existsSync(full)) runCatching(() => unlinkSync(full));
+        return null;
+      });
+    }
     this.hub.broadcastFileResponded(fileId, 'rejected', row.DeviceId);
     return true;
   }
 
-  /** 清扫超时未确认的 pending 文件(即时互传不悬挂垃圾),逐个广播 FileDeleted 让发送方显示"已过期" */
+  /** 清扫超时未确认的 pending 请求/文件(即时互传不悬挂垃圾),逐个广播 FileDeleted 让发送方显示"已过期" */
   sweepExpiredPending(ttlSeconds: number): void {
     const cutoff = Date.now() - Math.max(5, ttlSeconds) * 1000;
     const rows = this.db.prepare(
@@ -159,10 +206,12 @@ CREATE INDEX IF NOT EXISTS "IX_Files_CreatedAt" ON "Files" ("CreatedAt");
     for (const row of rows) {
       if (Date.parse(toIso(row.CreatedAt)) >= cutoff) continue;
       this.db.prepare('DELETE FROM "Files" WHERE "FileId" = ?').run(row.FileId);
-      this.withSafePath(row.StoragePath, (full) => {
-        if (existsSync(full)) runCatching(() => unlinkSync(full));
-        return null;
-      });
+      if (row.StoragePath) {
+        this.withSafePath(row.StoragePath, (full) => {
+          if (existsSync(full)) runCatching(() => unlinkSync(full));
+          return null;
+        });
+      }
       this.hub.broadcastFileDeleted(row.FileId, row.UserId);
     }
   }
@@ -215,10 +264,13 @@ CREATE INDEX IF NOT EXISTS "IX_Files_CreatedAt" ON "Files" ("CreatedAt");
     const row = this.getByFileId(fileId);
     if (!row) return false;
     if (userId && row.UserId && row.UserId !== userId) return false; // 越权删除
-    this.withSafePath(row.StoragePath, (full) => {
-      if (existsSync(full)) runCatching(() => unlinkSync(full));
-      return null;
-    });
+    if (row.StoragePath) {
+      // 确认制请求记录 StoragePath 为空(文件本体尚未上传),只删行
+      this.withSafePath(row.StoragePath, (full) => {
+        if (existsSync(full)) runCatching(() => unlinkSync(full));
+        return null;
+      });
+    }
     this.db.prepare('DELETE FROM "Files" WHERE "FileId" = ?').run(fileId);
     this.hub.broadcastFileDeleted(fileId, row.UserId);
     return true;

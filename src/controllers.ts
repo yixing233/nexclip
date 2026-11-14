@@ -245,6 +245,30 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     return true;
   }
 
+  // 确认制第一步:登记传输请求(仅元数据,无文件本体)。对方接受后发送方再 attach 上传。
+  if (p === '/api/files/request' && method === 'POST') {
+    if (!requireDeviceOrSession()) return true;
+    if (!ctx.rate.allow('files:' + (ctx.actor?.userId ?? deviceActor?.Id ?? remoteIp(req)), 30, 60_000)) {
+      sendJson(res, 429, { error: '上传过于频繁,请稍后再试' });
+      return true;
+    }
+    const body = await readBody(req, 16 * 1024);
+    let json: Record<string, unknown>;
+    try { json = JSON.parse(body.toString('utf8')); } catch { sendJson(res, 400, { error: '无效的 JSON' }); return true; }
+    const fileName = typeof json.fileName === 'string' && json.fileName.trim() ? json.fileName.trim() : 'file';
+    const size = typeof json.size === 'number' && Number.isFinite(json.size) && json.size >= 0 ? Math.floor(json.size) : 0;
+    if (size > cfg.maxImageSizeBytes) { sendJson(res, 400, { error: '文件超过大小限制(' + Math.floor(cfg.maxImageSizeBytes / 1024 / 1024) + 'MB)' }); return true; }
+    const rawTargets = Array.isArray(json.deviceIds) ? json.deviceIds.filter((x): x is string => typeof x === 'string' && !!x.trim()) : [];
+    const targets = new Set(rawTargets.map(t => t.trim()).filter(Boolean));
+    if (targets.size === 0) { sendJson(res, 400, { error: '缺少目标设备' }); return true; }
+    const deviceId = deviceActor?.Id ?? ctx.actor?.deviceId ?? 'web-' + randomHex(4);
+    const deviceName = deviceActor?.Name || ctx.actor?.deviceId || '网页';
+    const userId = deviceActor?.UserId ?? ctx.actor?.userId ?? null;
+    const dto = ctx.files.createRequest(fileName, size, deviceId, deviceName, userId, targets);
+    sendJson(res, 200, dto);
+    return true;
+  }
+
   // ============ /api/files 网页文件互传 ============
   // 上限沿用 maxImageSizeBytes(可经 SC_MAX_IMAGE_BYTES 调大);限速 30 次/分钟防刷盘。
   if (p === '/api/files' && method === 'POST') {
@@ -267,6 +291,14 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     const deviceId = deviceActor?.Id ?? ctx.actor?.deviceId ?? 'web-' + randomHex(4);
     const deviceName = mp.fields.deviceName || deviceActor?.Name || ctx.actor?.deviceId || '网页';
     const userId = deviceActor?.UserId ?? ctx.actor?.userId ?? null;
+    // 确认制第二步:对方已接受,发送方携带 requestId 上传文件本体挂到既有请求上
+    const requestId = (mp.fields.requestId ?? '').trim();
+    if (requestId) {
+      const dto = ctx.files.attach(requestId, mp.file.filename || 'file', mp.file.data, deviceId, deviceName, userId);
+      if (!dto) { sendJson(res, 404, { error: '无对应的传输请求或尚未被接受' }); return true; }
+      sendJson(res, 200, dto);
+      return true;
+    }
     // 定向传输:deviceIds 为逗号分隔的目标设备 id;缺省回退全员广播(老客户端行为不变)
     const targets = new Set(
       (mp.fields.deviceIds ?? '')
