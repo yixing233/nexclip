@@ -878,18 +878,25 @@ export default function UserPage({ refreshTick, fileTick, onLogout }: { refreshT
                 value={historyFilter}
                 onChange={(val) => setHistoryFilter(val as any)}
                 options={[
-                  { value: 'all', icon: <Filter size={14} />, title: '全部' },
-                  { value: 'text', icon: <FileText size={14} />, title: '文本' },
-                  { value: 'code', icon: <Code2 size={14} />, title: '代码' },
-                  { value: 'image', icon: <ImageIcon size={14} />, title: '图片' },
-                  { value: 'link', icon: <Globe size={14} />, title: '链接' },
+                  { value: 'all', icon: <Filter size={15} />, title: '全部' },
+                  { value: 'text', icon: <FileText size={15} />, title: '文本' },
+                  { value: 'code', icon: <Code2 size={15} />, title: '代码' },
+                  { value: 'image', icon: <ImageIcon size={15} />, title: '图片' },
+                  { value: 'link', icon: <Globe size={15} />, title: '链接' },
                 ].map(o => ({
                   value: o.value,
                   label: (
                     <Tooltip title={o.title}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 4px' }}>
-                        {o.icon}
-                        {!isMobile && <span>{o.title}</span>}
+                      <div
+                        style={{
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          gap: 6, height: 20, minWidth: 20,
+                        }}
+                      >
+                        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 0 }}>
+                          {o.icon}
+                        </span>
+                        {!isMobile && <span style={{ lineHeight: '20px' }}>{o.title}</span>}
                       </div>
                     </Tooltip>
                   ),
