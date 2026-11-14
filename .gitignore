@@ -1,29 +1,20 @@
-# Visual Studio / MSBuild 构建产物
-bin/
-obj/
-publish/
-AppPackages/
-BundleArtifacts/
-Generated Files/
-GeneratedFiles/
+# Node / Vite（desktop-tauri 前端）
+node_modules/
+dist/
 
-# 安装器打包/验证产物(NexClip_Setup.exe 与 pdb,数十 MB)
-.artifacts/
+# Rust / Cargo（desktop-tauri 后端）
+desktop-tauri/src-tauri/target/
+*.local
 
-# build-installer.ps1 的输出目录(最终安装包通过 GitHub Release 分发,不入库)
-release-out/
+# Tauri 构建中间产物
+desktop-tauri/src-tauri/gen/
 
 # IDE 与用户配置
 .vs/
+.vscode/
+.idea/
 *.user
 *.suo
-*.userosscache
-*.sln.docstates
-.vscode/
-
-# 日志
-*.log
-*.tlog
 
 # 操作系统临时文件
 Thumbs.db

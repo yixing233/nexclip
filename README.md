@@ -1,23 +1,21 @@
-# NexClip Windows 桌面端
+# NexClip Windows 桌面端（Tauri 版）
 
-NexClip Windows 桌面端基于 WinUI 3 (Windows App SDK) 与 .NET 9 打造，深度融合 Windows 11 Fluent Design 与 Mica 材质。
+NexClip Windows 桌面端的下一代实现：**Tauri 2 + React 18 + antd 5**（前端）与 **Rust**（后端），
+替代此前的 WinUI 3 版本（WinUI 源码在 `Windows-WinUI` 分支留存）。
 
 ---
 
 ## 核心特性
 
-- **原生 WinUI 3 体验**：Mica 背景材质、流畅动效、自适应暗色/亮色主题。
-- **系统托盘与全局热键**：
-  - 默认全局热键快速唤出主剪贴板面板与搜索框。
-  - 托盘右键菜单支持快速退出、清空历史、切换同步状态。
-- **多种剪贴板类型支持**：
-  - 纯文本与多行代码。
-  - 高清图片预览与无损同步。
-  - 拖拽发送：拖入图片文件按图片发送，拖入文本内容按文本发送至已同步设备。
-- **智能动作引擎 (SmartAction)**：
-  - 自动识别链接（一键打开浏览器）、手机号（一键呼叫/复制）、验证码（一键复制）、IP/邮箱等。
-- **拼音与全文检索**：支持拼音首字母与全拼模糊搜索历史记录。
-- **免安装便携与自研 Native 安装器**：支持单文件运行，或由 `NexClip.Installer.Native` 生成的单文件安装包部署（自动补齐运行环境依赖）。
+- **轻量运行时**：Tauri 2 + 系统 WebView2，告别 .NET / WinAppSDK 运行环境依赖。
+- **三窗口架构**：主剪贴板弹窗（无边框、光标处呼出）、设置窗口、智能直达 toast。
+- **多种剪贴板类型**：纯文本、HTML、高清图片、文件元数据，去重入库。
+- **系统托盘与全局热键**：呼出主面板 / 打开直达链接 / 置顶切换等，均可配置。
+- **多设备同步**：REST + 原生 WebSocket 推送（协议见 `desktop-tauri/docs/ws-protocol.md`），
+  支持配对码配对、文件互传聊天。
+- **智能直达 (SmartAction)**：链接 / 网盘 / 色值 / 本地路径 / 提取码识别与一键直达。
+- **拼音与全文检索**：拼音首字母与全拼模糊搜索历史记录。
+- **应用内更新**：双通道更新检查（GitHub Releases / 直连服务器），下载进度事件、SHA-256 校验、一键安装。
 
 ---
 
@@ -25,50 +23,58 @@ NexClip Windows 桌面端基于 WinUI 3 (Windows App SDK) 与 .NET 9 打造，�
 
 ### 环境要求
 - Windows 10 (1809+) 或 Windows 11
-- .NET 9.0 SDK
-- Visual Studio 2022 (包含 ".NET 桌面开发" 及 "通用 Windows 平台开发" 工作负荷)
+- Node.js 18+ 与 npm
+- Rust 1.77+（MSVC 工具链）
+- WebView2 Runtime（Win11 自带）
 
-### 编译指令
+### 常用命令
 
-```powershell
-# 编译 Release 版本
-dotnet build NexClip.Desktop.csproj -c Release
+```bash
+cd desktop-tauri
 
-# 独立发布 (Self-contained)
-dotnet publish NexClip.Desktop.csproj -c Release -r win-x64 --self-contained false
+npm install          # 安装前端依赖（首次）
+
+npm run tauri dev    # 开发模式（Vite 1420 端口 + Rust 增量编译）
+npm run tauri build  # 打包 NSIS 安装包
+npm run build        # 仅构建前端（tsc --noEmit + vite build）
+
+# 真实数据兼容性验证（拷贝 %LOCALAPPDATA%\NexClip 到临时目录校验，不碰原库）
+cargo run --example verify_compat
 ```
 
 ---
 
-## 安装器与运行环境依赖
+## 目录结构
 
-安装器为 Native AOT 单文件程序（`NexClip.Installer.Native`），启动时并行检测并按需自动下载安装三项运行环境依赖：
-Visual C++ x64 运行库、.NET 9 Desktop Runtime、Windows App SDK 1.8 Runtime（框架包 + Main 包）。
-
-- 固定下载地址、SHA-256 与体积集中在 `installer/setup-dependencies.json` 维护，作为嵌入资源随安装器打包。
-- `build-installer.ps1` 打包前调用 `installer/resolve-setup-dependencies.ps1` 校验域名白名单、哈希格式与 Windows App SDK 版本一致性。
-- 下载支持主源（校验 SHA-256）→ evergreen 备用源（校验 Authenticode 签名）回退、断点续传与指数退避重试；
-  安装包缓存在 `%TEMP%\NexClip-Setup\cache`，失败重试可直接复用已下载内容，超过 7 天的缓存自动清理。
-- 诊断日志位于 `%TEMP%\NexClip-Setup\logs\dependency-setup.log`。
-
-### 命令行参数
-
-```powershell
-NexClip_Setup.exe                       # 交互式安装
-NexClip_Setup.exe /silent               # 无人值守安装（别名 /verysilent、/quiet）
-NexClip_Setup.exe /silent /dir="D:\Apps\NexClip" /nodesktopicon /autostart
-NexClip_Setup.exe /uninstall            # 卸载
-NexClip_Setup.exe /diagnose=report.txt  # 生成运行环境诊断报告
+```
+desktop-tauri/
+├── src/                  # React 前端（按 Tauri 窗口 label 路由）
+│   ├── pages/            # ClipboardPopup / Settings / TransferChat / LinkToast
+│   └── ipc/              # invoke 封装（history / chat / settings）
+└── src-tauri/            # Rust 后端
+    └── src/
+        ├── lib.rs        # 窗口 / 托盘 / 热键总装
+        ├── capture.rs    # 剪贴板采集管线（防环 / 去抖 / 过滤）
+        ├── commands/     # 39 个 tauri command
+        ├── history/      # SQLite 存储（WAL + 兼容迁移）+ 拼音检索
+        ├── sync/         # REST API + 原生 WS 推送 + 同步引擎
+        ├── smart.rs      # 智能直达识别
+        ├── update.rs     # 应用内更新
+        └── platform/     # 热键 / 监听 / 写入线程 / 粘贴回注
 ```
 
-退出码：`0` 成功、`1` 失败、`2` 取消、`3010` 成功但需重启系统。
+---
+
+## 数据兼容
+
+新版本直接打开旧 WinUI 版的 `%LOCALAPPDATA%\NexClip\history.db`：
+建表用 `CREATE TABLE IF NOT EXISTS`，新列按 `PRAGMA table_info` 逐列 `ALTER TABLE` 迁移，
+存量数据自动回填内容哈希与拼音索引。
 
 ---
 
 ## 独立分支
 
-本项目已支持独立分支拉取与开发：
 ```bash
-git clone -b windows https://github.com/yixing233/nexclip.git
+git clone -b Windows-Tauri https://github.com/yixing233/nexclip.git
 ```
-拉取后根目录即为 WinUI 3 原生工程，可直接使用 Visual Studio 2022 打开。
