@@ -1498,7 +1498,7 @@ export default function UserPage({ refreshTick, fileTick, onLogout }: { refreshT
             placement="bottom"
             open={pushOpen}
             onClose={() => setPushOpen(false)}
-            height={322}
+            height={pushImages.length > 0 ? 340 : 288}
             styles={{ header: { padding: '14px 16px' }, body: { paddingBottom: 20 } }}
           >
             {pushPanel}
