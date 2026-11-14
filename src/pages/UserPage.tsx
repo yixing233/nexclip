@@ -86,6 +86,8 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
   const [chatSending, setChatSending] = useState(false)
   const [chatTargets, setChatTargets] = useState<string[]>([])
   const [chatMsgs, setChatMsgs] = useState<ChatMsg[]>(getChatMsgs())
+  // 待发送图片附件(选图后先入队,随消息一起发送;可见胶囊可单个移除)
+  const [chatImages, setChatImages] = useState<File[]>([])
   useEffect(() => subscribeChatMsgs(() => setChatMsgs(getChatMsgs())), [])
   // 移动端快速推送:悬浮按钮 + 底部抽屉
   const [pushOpen, setPushOpen] = useState(false)
@@ -240,35 +242,38 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
     }
   }, [onlineDevices.length]) // eslint-disable-line
 
-  /** 聊天发送:文本按所选设备定向(空=全员广播) */
+  /** 聊天发送:文本按所选设备定向(空=全员广播);图片随消息一起推送(服务端仅支持全员广播) */
   const handleChatSend = async (msg: string) => {
     const text = msg.trim()
-    if (!text) { message.warning('请输入要发送的内容'); return }
+    if (!text && chatImages.length === 0) { message.warning('请输入内容或添加图片'); return }
     const targets = chatTargets.length > 0 ? chatTargets : onlineDevices.map(d => d.id)
-    if (targets.length === 0) { message.warning('没有在线设备可推送'); return }
+    if (text && targets.length === 0) { message.warning('没有在线设备可推送'); return }
     setChatSending(true)
     try {
-      await sendToDevices(text, targets)
-      addOutgoing(text, targets)
+      if (text) {
+        await sendToDevices(text, targets)
+        addOutgoing(text, targets)
+      }
+      for (const f of chatImages) {
+        await pushImage(f, deviceId(), 'Web 控制台')
+      }
+      if (chatImages.length > 0) {
+        addOutgoing('[图片] ' + chatImages.map(f => f.name || '图片').join('、'), devices.map(d => d.id))
+        if (text) message.info('图片已同步至所有在线设备')
+      }
       setChatText('')
+      setChatImages([])
       loadAll()
     } catch (e) {
-      message.error((e as Error).message)
+      message.error('发送失败:' + (e as Error).message)
     } finally {
       setChatSending(false)
     }
   }
 
-  /** 聊天里的图片推送:服务端图片仅支持全员广播,发送后记录为出站消息 */
-  const quickSendImage = async (file: File) => {
-    try {
-      await pushImage(file, deviceId(), 'Web 控制台')
-      addOutgoing('[图片] '+ (file.name || '图片'), devices.map(d => d.id))
-      message.success('图片已同步至所有在线设备！')
-      loadAll()
-    } catch (e) {
-      message.error('图片上传失败:' + (e as Error).message)
-    }
+  /** 选图先入待发送队列(不立即上传),发送时随消息一起推送 */
+  const addChatImage = (file: File) => {
+    setChatImages(arr => [...arr, file])
   }
 
   // 清空历史
@@ -474,6 +479,23 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
         placeholder="输入要推送的内容,Enter 发送..."
         autoSize={{ minRows: 1, maxRows: 4 }}
         style={{ marginTop: 'auto' }}
+        header={
+          chatImages.length > 0 ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '8px 4px 0' }}>
+              {chatImages.map((f, i) => (
+                <Tag
+                  key={i}
+                  closable
+                  onClose={() => setChatImages(arr => arr.filter((_, j) => j !== i))}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4, margin: 0, maxWidth: 180 }}
+                >
+                  <ImageIcon size={12} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name || '图片'}</span>
+                </Tag>
+              ))}
+            </div>
+          ) : null
+        }
         footer={
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <Upload
@@ -481,11 +503,11 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
               accept="image/*"
               multiple
               beforeUpload={(file) => {
-                quickSendImage(file as File)
-                return false
+                addChatImage(file as File)
+                return Upload.LIST_IGNORE
               }}
             >
-              <Button icon={<ImageIcon size={14} />} style={{ borderRadius: 8 }}>图片</Button>
+              <Button icon={<ImageIcon size={14} />} style={{ borderRadius: 8 }}>添加图片</Button>
             </Upload>
           </div>
         }
