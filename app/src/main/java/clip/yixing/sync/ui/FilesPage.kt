@@ -14,6 +14,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -449,33 +450,66 @@ fun FilesPage(
             }
 
             if (pendingFiles.isEmpty() && sendTasks.isEmpty()) {
-                Column(
+                // 空状态卡片化:对齐首页设计语言(浅蓝图标底 + 白卡 + 主行动按钮),
+                // 替代裸图标+裸文本的"毛坯"观感
+                top.yukonga.miuix.kmp.basic.Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 120.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
+                        .padding(top = 40.dp),
+                    insideMargin = PaddingValues(horizontal = 20.dp, vertical = 28.dp),
                 ) {
-                    Icon(
-                        imageVector = LucideIcons.UploadCloud,
-                        contentDescription = null,
-                        modifier = Modifier.size(44.dp),
-                        tint = MiuixTheme.colorScheme.primary.copy(alpha = 0.5f)
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        text = "选择文件发送给在线设备",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MiuixTheme.colorScheme.onSurface
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "支持多选;发送前可移除不需要的文件。文件将即时送达所选设备。",
-                        fontSize = 13.sp,
-                        color = MiuixTheme.colorScheme.onBackgroundVariant,
-                        textAlign = TextAlign.Center,
-                        lineHeight = 18.sp
-                    )
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(64.dp)
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = LucideIcons.UploadCloud,
+                                contentDescription = null,
+                                modifier = Modifier.size(30.dp),
+                                tint = MiuixTheme.colorScheme.primary
+                            )
+                        }
+                        Spacer(Modifier.height(14.dp))
+                        Text(
+                            text = "即时文件互传",
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MiuixTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = "选择文件发送给所选设备,对方收到即可保存打开。\n支持多选,发送前可移除。",
+                            fontSize = 13.sp,
+                            color = MiuixTheme.colorScheme.onBackgroundVariant,
+                            textAlign = TextAlign.Center,
+                            lineHeight = 19.sp
+                        )
+                        Spacer(Modifier.height(18.dp))
+                        top.yukonga.miuix.kmp.basic.Button(
+                            onClick = { pickFilesLauncher.launch(arrayOf("*/*")) },
+                            colors = top.yukonga.miuix.kmp.basic.ButtonDefaults.buttonColorsPrimary(),
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = LucideIcons.UploadCloud,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = Color.White
+                                )
+                                Text("选择文件", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -607,7 +641,7 @@ fun FilesPage(
     }
 }
 
-/** 目标设备选择行(仿即时互传页 chips;文件互传是定向推送,必须选择) */
+/** 目标设备选择行(首页式卡片语言:浅蓝图标底 + 选中描边 + 在线绿点) */
 @Composable
 private fun DevicePickerRow(
     devices: List<clip.yixing.sync.data.DeviceInfo>,
@@ -618,12 +652,12 @@ private fun DevicePickerRow(
         modifier = Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (devices.isEmpty()) {
             Text(
-                text = "暂无其它设备",
+                text = "暂无其它设备,先在其它端配对",
                 fontSize = 12.sp,
                 color = MiuixTheme.colorScheme.onBackgroundVariant,
                 modifier = Modifier.padding(vertical = 6.dp)
@@ -631,43 +665,52 @@ private fun DevicePickerRow(
         }
         devices.forEach { dev ->
             val selected = dev.id in selectedIds
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(
-                        if (selected) MiuixTheme.colorScheme.primary.copy(alpha = 0.15f)
-                        else MiuixTheme.colorScheme.surfaceContainer
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MiuixTheme.colorScheme.surfaceContainer)
+                    .border(
+                        width = 2.dp,
+                        color = if (selected) MiuixTheme.colorScheme.primary else Color.Transparent,
+                        shape = RoundedCornerShape(14.dp),
                     )
                     .clickable { onToggle(dev.id) }
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .padding(horizontal = 18.dp, vertical = 12.dp)
             ) {
-                Icon(
-                    imageVector = resolveDeviceIcon(dev.name, dev.platform),
-                    contentDescription = null,
-                    modifier = Modifier.size(15.dp),
-                    tint = if (selected) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackgroundVariant
-                )
-                Spacer(Modifier.width(6.dp))
-                Column {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = dev.name,
-                            fontSize = 12.sp,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (selected) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                // 浅蓝图标底(首页"即时互传"卡片同款语言)
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = resolveDeviceIcon(dev.name, dev.platform),
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MiuixTheme.colorScheme.primary
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = dev.name,
+                        fontSize = 12.sp,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                        color = if (selected) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (dev.online) {
+                        Spacer(Modifier.width(4.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(Color(0xFF34C759))
                         )
-                        if (dev.online) {
-                            Spacer(Modifier.width(4.dp))
-                            Box(
-                                modifier = Modifier
-                                    .size(5.dp)
-                                    .clip(RoundedCornerShape(2.5.dp))
-                                    .background(Color(0xFF34C759))
-                            )
-                        }
                     }
                 }
             }
