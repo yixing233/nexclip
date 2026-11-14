@@ -1,0 +1,66 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "NexClip",
+  "version": "2.0.0-dev",
+  "identifier": "com.nexclip.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "NexClip",
+        "width": 420,
+        "height": 560,
+        "minWidth": 320,
+        "minHeight": 420,
+        "resizable": true,
+        "decorations": false,
+        "skipTaskbar": true,
+        "center": true,
+        "visible": false
+      },
+      {
+        "label": "settings",
+        "title": "设置",
+        "width": 860,
+        "height": 620,
+        "minWidth": 700,
+        "minHeight": 500,
+        "visible": false
+      },
+      {
+        "label": "toast",
+        "title": "NexClip 智能直达",
+        "width": 360,
+        "height": 132,
+        "resizable": false,
+        "decorations": false,
+        "skipTaskbar": true,
+        "alwaysOnTop": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**"]
+      },
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    }
+  }
+}
