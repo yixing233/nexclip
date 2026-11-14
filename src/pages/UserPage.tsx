@@ -461,13 +461,26 @@ export default function UserPage({ refreshTick, receivedFiles, requestedFiles, r
               key: m.id,
               role: m.direction === 'out' ? 'user' : 'ai',
               placement: m.direction === 'out' ? 'end' : 'start',
-              avatar: m.direction === 'out'
-                ? <Cloud size={15} />
-                : <Monitor size={15} />,
+              avatar: (
+                <span
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    width: 30, height: 30, borderRadius: '50%',
+                    background: m.direction === 'out' ? '#EFF6FF' : '#F3F4F6',
+                    color: m.direction === 'out' ? '#2563EB' : '#4B5563',
+                  }}
+                >
+                  {m.direction === 'out' ? <Cloud size={16} /> : <Monitor size={16} />}
+                </span>
+              ),
               content: m.content,
-              footer: m.direction === 'out'
-                ? '→ '+ (m.targets?.map(id => devices.find(d => d.id === id)?.name ?? id).join(' · ') || '全部设备') + ' · '+ dayjs(m.createdAt).fromNow()
-                : '来自 '+ (m.deviceName ?? '其他设备') + ' · '+ dayjs(m.createdAt).fromNow(),
+              footer: (
+                <span style={{ fontSize: 11, color: '#9CA3AF', lineHeight: '16px' }}>
+                  {m.direction === 'out'
+                    ? '→ ' + (m.targets?.map(id => devices.find(d => d.id === id)?.name ?? id).join(' · ') || '全部设备') + ' · ' + dayjs(m.createdAt).fromNow()
+                    : '来自 ' + (m.deviceName ?? '其他设备') + ' · ' + dayjs(m.createdAt).fromNow()}
+                </span>
+              ),
             }))}
           />
         )}

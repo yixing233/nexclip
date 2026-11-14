@@ -136,3 +136,16 @@ html[data-theme='dark'] .clipsync-login-page::after { background: #4c1d95; opaci
 .ant-bubble .ant-bubble-footer {
   text-align: inherit;
 }
+
+/* ===== 快速同步气泡:头像圆形底托尺寸 + footer 细字 ===== */
+.ant-bubble .ant-bubble-avatar {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+}
+.ant-bubble .ant-bubble-footer {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #9CA3AF;
+  line-height: 16px;
+}
