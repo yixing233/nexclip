@@ -243,6 +243,8 @@ export interface FileItem {
   deviceName?: string | null;
   createdAt: string;
   downloadUrl: string;
+  /** 确认制状态:pending/accepted/rejected;null=旧式广播 */
+  transferStatus?: string | null;
 }
 
 export interface FileListPage {
@@ -302,6 +304,16 @@ export function uploadFile(file: File, opts?: { targets?: string[]; onProgress?:
     xhr.onerror = () => reject(new Error('网络错误,上传中断'));
     xhr.send(form);
   });
+}
+
+/** 确认制传输:本端接受目标请求(仅目标设备可调) */
+export function acceptFile(fileId: string): Promise<{ ok: boolean; action: string }> {
+  return request('/api/files/' + encodeURIComponent(fileId) + '/accept', { method: 'POST' });
+}
+
+/** 确认制传输:本端拒绝目标请求(服务端立即删除文件) */
+export function rejectFile(fileId: string): Promise<{ ok: boolean; action: string }> {
+  return request('/api/files/' + encodeURIComponent(fileId) + '/reject', { method: 'POST' });
 }
 
 export function deleteFile(fileId: string): Promise<void> {

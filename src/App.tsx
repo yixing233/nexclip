@@ -310,6 +310,10 @@ export default function App() {
   const [fileTick, setFileTick] = useState(0)
   // 用户端即时互传:本次会话收到的文件(内存态,排除本机回声)
   const [receivedFiles, setReceivedFiles] = useState<FileItem[]>([])
+  // 确认制传输:发给我的请求 / 本端发起的响应事件 / 已删除的文件
+  const [requestedFiles, setRequestedFiles] = useState<FileItem[]>([])
+  const [respondedEvents, setRespondedEvents] = useState<{ fileId: string; action: 'accepted' | 'rejected' }[]>([])
+  const [deletedFileIds, setDeletedFileIds] = useState<string[]>([])
 
   /** 手动刷新:驱动全部页面的 refreshTick 重新拉取 */
   const refreshAll = () => setRefreshTick(t => t + 1)
@@ -357,8 +361,19 @@ export default function App() {
         setReceivedFiles(arr => [...arr.slice(-19), f]) // 会话内存态,最多留 20 条
         setFileTick(t => t + 1)
       },
-      onFileDeleted: () => {
+      onFileDeleted: (fileId) => {
+        setDeletedFileIds(arr => [...arr.slice(-29), fileId])
         setFileTick(t => t + 1)
+      },
+      onFileTransferRequested: (file) => {
+        const f = file as FileItem | null
+        if (!f?.fileId) return
+        if (f.deviceId && f.deviceId === deviceId()) return // 本机发起,不是给我的请求
+        message.info(f.deviceName + ' 请求发送文件: ' + f.fileName)
+        setRequestedFiles(arr => [...arr.slice(-9), f])
+      },
+      onFileTransferResponded: (resp) => {
+        setRespondedEvents(arr => [...arr.slice(-29), resp])
       },
       onStatusChange: (s) => {
         if (s === 'connected' || s === 'reconnecting' || s === 'disconnected') {
@@ -449,7 +464,14 @@ export default function App() {
               <Navigate to={'/index/login' + window.location.search} replace />
             ) : role === 'user' ? (
               <div style={{ minHeight: '100vh', background: isDark ? '#0D1117' : '#F3F4F6', padding: appScreens.md === false ? 12 : 24 }}>
-                <UserPage refreshTick={refreshTick} receivedFiles={receivedFiles} onLogout={logout} />
+                <UserPage
+                  refreshTick={refreshTick}
+                  receivedFiles={receivedFiles}
+                  requestedFiles={requestedFiles}
+                  respondedEvents={respondedEvents}
+                  deletedFileIds={deletedFileIds}
+                  onLogout={logout}
+                />
               </div>
             ) : (
               <Navigate to="/pro/overview" replace />

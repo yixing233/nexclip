@@ -49,7 +49,14 @@ dayjs.extend(relativeTime)
 const { Text, Title, Paragraph } = Typography
 const { TextArea } = Input
 
-export default function UserPage({ refreshTick, receivedFiles, onLogout }: { refreshTick: number; receivedFiles: FileItem[]; onLogout: () => void }) {
+export default function UserPage({ refreshTick, receivedFiles, requestedFiles, respondedEvents, deletedFileIds, onLogout }: {
+  refreshTick: number
+  receivedFiles: FileItem[]
+  requestedFiles: FileItem[]
+  respondedEvents: { fileId: string; action: 'accepted' | 'rejected' }[]
+  deletedFileIds: string[]
+  onLogout: () => void
+}) {
   const uid = getUserId() ?? ''
   const screens = Grid.useBreakpoint()
   const isMobile = screens.md === false
@@ -1082,7 +1089,7 @@ export default function UserPage({ refreshTick, receivedFiles, onLogout }: { ref
       )}
 
       {/* ==================== 2.5 【文件互传】板块 (即时传输面板) ==================== */}
-      {activeTab === 'files' && <FileTransferPanel devices={devices} receivedFiles={receivedFiles} />}
+      {activeTab === 'files' && <FileTransferPanel devices={devices} receivedFiles={receivedFiles} requestedFiles={requestedFiles} respondedEvents={respondedEvents} deletedFileIds={deletedFileIds} />}
 
       {/* ==================== 3. 【设置与设备】板块 (Settings & Devices) ==================== */}
       {activeTab === 'settings' && (

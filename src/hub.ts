@@ -10,6 +10,10 @@ export interface HubEvents {
   onFileTransferred: (file: unknown) => void
   /** 文件互传:某文件被删除(参数为 fileId) */
   onFileDeleted: (fileId: string) => void
+  /** 确认制传输:有设备请求发送文件给本端(file: FileItem) */
+  onFileTransferRequested: (file: unknown) => void
+  /** 确认制传输:目标设备已响应本端发起的请求({ fileId, action: 'accepted' | 'rejected' }) */
+  onFileTransferResponded: (resp: { fileId: string; action: 'accepted' | 'rejected' }) => void
 }
 
 let connection: signalR.HubConnection | null = null
@@ -49,6 +53,15 @@ export function connectHub(events: HubEvents): void {
 
   connection.on('FileDeleted', (fileId) => {
     events.onFileDeleted(fileId)
+  })
+
+  connection.on('FileTransferRequested', (file) => {
+    events.onFileTransferRequested(file)
+  })
+
+  connection.on('FileTransferResponded', (resp) => {
+    const r = Array.isArray(resp) ? resp[0] : resp
+    events.onFileTransferResponded((r ?? {}) as { fileId: string; action: 'accepted' | 'rejected' })
   })
 
   connection.onreconnecting(() => events.onStatusChange('reconnecting'))
