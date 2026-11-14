@@ -127,7 +127,7 @@ export default function LoginPage({ mode, onLogin }: { mode: 'user' | 'admin'; o
                     6 位配对验证码
                   </Text>
                   <Tag color="blue" style={{ margin: 0, borderRadius: 6, fontSize: 11 }}>
-                    单向即入 · 5 分钟有效
+                    单向即入 · 10 分钟有效
                   </Tag>
                 </div>
 

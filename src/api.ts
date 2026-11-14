@@ -136,7 +136,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (token) headers['Authorization'] = 'Bearer ' + token;
   const res = await fetch(path, { ...init, headers });
   const parsed = await readResponseSafely<Record<string, unknown>>(res);
-  if (res.status === 401) {
+  // 401 = 会话失效;410 = 会话关联的设备已被移除/重配对(服务端已吊销该会话)。
+  // 两者都要清掉本地凭证,避免先报一轮错再被下一次 401 自愈。
+  if (res.status === 401 || res.status === 410) {
     setToken(null);
     window.dispatchEvent(new Event('clipsync:unauthorized'));
   }

@@ -443,10 +443,10 @@ export default function App() {
               c={c}
             />
           } />
-          {/* 用户端:/index(已登录=用户页;未登录跳 /index/login) */}
+          {/* 用户端:/index(已登录=用户页;未登录跳 /index/login,保留查询串让扫码自动配对生效) */}
           <Route path="/index" element={
             !authed ? (
-              <Navigate to="/index/login" replace />
+              <Navigate to={'/index/login' + window.location.search} replace />
             ) : role === 'user' ? (
               <div style={{ minHeight: '100vh', background: isDark ? '#0D1117' : '#F3F4F6', padding: appScreens.md === false ? 12 : 24 }}>
                 <UserPage refreshTick={refreshTick} receivedFiles={receivedFiles} onLogout={logout} />
