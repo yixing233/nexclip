@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import {
   Card, Typography, Space, Button, Input, Table, Tag, Badge, message, Popconfirm,
-  Empty, Row, Col, Skeleton, Tabs, Image as AntImage, Upload, Tooltip, Dropdown, Modal, QRCode, Segmented, Drawer,
+  Empty, Row, Col, Skeleton, Tabs, Image as AntImage, Upload, Tooltip, Dropdown, Modal, QRCode, Segmented, Drawer, Select,
 } from 'antd'
 import {
   Home, Clock, Settings, KeyRound, RefreshCw, Check, X, LogOut, Pencil, Copy,
@@ -16,7 +16,7 @@ import FilesPage from './FilesPage'
 import {
   getUserId, createPairingCode, revokePairingCode,
   getDevices, removeDevice, getUser, renameUser, getActivities, deviceId,
-  getHistory, deleteEntry, clearHistory, pushText, pushImage, getCurrentClipboard,
+  getHistory, deleteEntry, clearHistory, pushText, pushImage, sendToDevices, getCurrentClipboard,
   imageUrl, type DeviceInfo, type ActivityLog, type ClipboardEntry,
 } from '../api'
 
@@ -49,6 +49,9 @@ export default function UserPage({ refreshTick, fileTick, onLogout }: { refreshT
   const [sendingText, setSendingText] = useState(false)
   // 移动端快速推送:悬浮按钮 + 底部抽屉
   const [pushOpen, setPushOpen] = useState(false)
+  // 推送组合器:目标设备(空=全员) + 待发送图片附件
+  const [pushTargets, setPushTargets] = useState<string[]>([])
+  const [pushImages, setPushImages] = useState<File[]>([])
 
   // 历史记录列表
   const [historyItems, setHistoryItems] = useState<ClipboardEntry[]>([])
@@ -191,37 +194,36 @@ export default function UserPage({ refreshTick, fileTick, onLogout }: { refreshT
     }
   }
 
-  // 发送新文本剪贴板
-  const handlePushText = async () => {
+  // 推送组合器:文本按所选设备定向(空=全员广播),图片暂仅全员广播(服务端限制)
+  const handlePushComposer = async () => {
     const text = inputText.trim()
-    if (!text) {
-      message.warning('请输入要发送的文本')
-      return
-    }
+    if (!text && pushImages.length === 0) return
     setSendingText(true)
     try {
-      await pushText(text, deviceId(), 'Web 控制台')
-      message.success('已推送至所有在线设备！')
-      setPushOpen(false)
+      if (text) {
+        if (pushTargets.length > 0) {
+          await sendToDevices(text, pushTargets)
+        } else {
+          await pushText(text, deviceId(), 'Web 控制台')
+        }
+      }
+      if (pushImages.length > 0) {
+        if (pushTargets.length > 0) {
+          message.info('图片暂不支持定向,已同步至所有设备')
+        }
+        for (const f of pushImages) {
+          await pushImage(f, deviceId(), 'Web 控制台')
+        }
+      }
+      message.success(pushTargets.length > 0 ? '已发送至所选设备！' : '已推送至所有在线设备！')
       setInputText('')
+      setPushImages([])
+      setPushOpen(false)
       loadAll()
     } catch (e) {
-      message.error('推送失败:' + (e as Error).message)
+      message.error('发送失败:' + (e as Error).message)
     } finally {
       setSendingText(false)
-    }
-  }
-
-  // 发送图片
-  const handlePushImage = async (file: File) => {
-    try {
-      message.loading({ content: '正在上传并广播图片...', key: 'upload' })
-      await pushImage(file, deviceId(), 'Web 控制台')
-      message.success({ content: '图片已同步至所有在线设备！', key: 'upload' })
-      setPushOpen(false)
-      loadAll()
-    } catch (e) {
-      message.error({ content: '图片上传失败:' + (e as Error).message, key: 'upload' })
     }
   }
 
@@ -368,24 +370,28 @@ export default function UserPage({ refreshTick, fileTick, onLogout }: { refreshT
   // 快速推送面板:桌面常驻卡片,移动端由悬浮按钮 + 底部抽屉呼出
   const pushPanel = (
     <>
+      {/* 目标设备多选:不选即全员广播 */}
+      <Select
+        mode="multiple"
+        allowClear
+        placeholder="目标设备:全部设备(默认)"
+        value={pushTargets}
+        onChange={setPushTargets}
+        options={devices.map(d => ({ value: d.id, label: d.online ? d.name : d.name + '（离线）' }))}
+        maxTagCount="responsive"
+        style={{ width: '100%', marginBottom: 10 }}
+      />
       <div
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
           e.preventDefault()
-          const files = e.dataTransfer.files
-          if (files && files.length > 0) {
-            for (let i = 0; i < files.length; i++) {
-              if (files[i].type.startsWith('image/')) {
-                handlePushImage(files[i])
-                return
-              }
-            }
-          }
+          const files = [...e.dataTransfer.files].filter(f => f.type.startsWith('image/'))
+          if (files.length > 0) setPushImages(arr => [...arr, ...files])
         }}
       >
         <TextArea
           rows={4}
-          placeholder="在此输入文本发送，或直接按 Ctrl+V 粘贴截图/拖拽图片直接同步..."
+          placeholder="输入要发送的文本,支持 Ctrl+V 粘贴截图或拖拽图片添加附件..."
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           onPaste={(e) => {
@@ -396,39 +402,59 @@ export default function UserPage({ refreshTick, fileTick, onLogout }: { refreshT
                   const file = items[i].getAsFile()
                   if (file) {
                     e.preventDefault()
-                    handlePushImage(file)
+                    setPushImages(arr => [...arr, file])
                     return
                   }
                 }
               }
             }
           }}
-          style={{ borderRadius: 10, marginBottom: 12, resize: 'none' }}
+          style={{ borderRadius: 10, resize: 'none' }}
         />
+        {/* 图片附件胶囊,可单个移除 */}
+        {pushImages.length > 0 && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+            {pushImages.map((f, i) => (
+              <Tag
+                key={i}
+                closable
+                onClose={() => setPushImages(arr => arr.filter((_, j) => j !== i))}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, margin: 0, maxWidth: 220 }}
+              >
+                <ImageIcon size={12} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name || '图片'}</span>
+              </Tag>
+            ))}
+          </div>
+        )}
       </div>
-      <div style={{ display: 'flex', gap: 10 }}>
-        <Button
-          type="primary"
-          block
-          icon={<Send size={15} />}
-          loading={sendingText}
-          onClick={handlePushText}
-          style={{ borderRadius: 8 }}
-        >
-          发送文本
-        </Button>
+      <div style={{ display: 'flex', gap: 10, marginTop: 12, alignItems: 'center' }}>
         <Upload
           showUploadList={false}
           accept="image/*"
+          multiple
           beforeUpload={(file) => {
-            handlePushImage(file)
+            setPushImages(arr => [...arr, file])
             return false
           }}
         >
           <Button icon={<ImageIcon size={15} />} style={{ borderRadius: 8 }}>
-            发送图片
+            添加图片
           </Button>
         </Upload>
+        <div style={{ flex: 1 }} />
+        <Tooltip title={inputText.trim() || pushImages.length > 0 ? '' : '先输入文本或添加图片'}>
+          <Button
+            type="primary"
+            icon={<Send size={15} />}
+            loading={sendingText}
+            disabled={!inputText.trim() && pushImages.length === 0}
+            onClick={handlePushComposer}
+            style={{ borderRadius: 8, minWidth: 96 }}
+          >
+            发送
+          </Button>
+        </Tooltip>
       </div>
     </>
   )
@@ -1472,7 +1498,7 @@ export default function UserPage({ refreshTick, fileTick, onLogout }: { refreshT
             placement="bottom"
             open={pushOpen}
             onClose={() => setPushOpen(false)}
-            height={262}
+            height={322}
             styles={{ header: { padding: '14px 16px' }, body: { paddingBottom: 20 } }}
           >
             {pushPanel}
