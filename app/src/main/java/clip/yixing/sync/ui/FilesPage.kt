@@ -11,11 +11,9 @@ import android.provider.MediaStore
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,21 +23,17 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -50,7 +44,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -76,23 +69,42 @@ import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.utils.overScrollVertical
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
 
 /**
- * 文件互传页(全屏覆盖页,聊天式布局 —— 仿 ManualPushPage):
- * 底部玻璃输入条(选择文件) + 气泡流(自己上传的靠右、收到的靠左)。
+ * 文件互传页 —— **即时传输任务视图**。
  *
- * 数据流:
- *  - 列表:ClipboardMonitorService.fileTransfers StateFlow(推送/上传回显/首拉共同维护)
- *  - 上传:SAF 多选 → content:// 复制到 cacheDir 临时文件 → api.uploadFile
- *  - 下载:api.downloadFile → MediaStore Downloads/NexClip(同名覆盖写,防 (1) 副本)
- *  - 点击:文本类内存预览;其它类型下载后交给系统应用打开(有 snack 反馈)
+ * 产品语义(2026-11-14 用户确认):文件互传是「即时传递」,不是网盘。
+ * 服务器虽然留存文件(可下载),但本页只关心**当次会话的收发过程与结果**:
+ *
+ *   ┌────────────────────────────┐
+ *   │ ▶ 发送:本次选了哪些文件、每个文件 上传中/完成/失败      │
+ *   │ ◆ 接收:对端发来了什么、保存到哪、能否打开              │
+ *   └────────────────────────────┘
+ *
+ * 不再有"聊天气泡流 / 历史文件列表"两种视图 —— 历史浏览是网页控制台的事。
+ * 页面只有一个纵向滚动的时间线:新任务插在最上面,老任务往下沉,
+ * 关闭页面即结束本次会话展示(下次进来重新开始)。
  *
  * 隐私/语义约束:文件不进剪贴板历史;收到推送只展示,不触发任何粘贴行为。
  */
+/** 单个传输任务的状态 */
+private enum class TransferStatus { UPLOADING, DONE, FAILED, RECEIVED }
+
+/** 一条传输任务(发送或接收) */
+private data class TransferTask(
+    val key: String,                 // 唯一键(fileId 或 本地临时 id)
+    val fileName: String,
+    val size: Long,
+    val status: TransferStatus,
+    val direction: Direction,
+    val peerName: String,            // 对端设备名(接收方)或 "本机"(发送方展示用)
+    val errorMessage: String? = null,
+    val savedUri: Uri? = null,       // 接收文件已保存的位置
+) { enum class Direction { SEND, RECEIVE } }
+
 @Composable
 fun FilesPage(
     snackbarHostState: top.yukonga.miuix.kmp.basic.SnackbarHostState?,
@@ -102,37 +114,15 @@ fun FilesPage(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val files = ClipboardMonitorService.fileTransfers.collectAsState().value
-    val selfDeviceId = remember { SyncSettings.ensureDeviceId(context) }
+    // 对端推送仍走 fileTransfers StateFlow(服务层维护),但这里只把它当
+    // "新到达事件源",转换为任务卡片后即消费,不做历史列表展示。
+    val pushedFiles = ClipboardMonitorService.fileTransfers.collectAsState().value
+    val seenFileIds = remember { mutableStateListOf<String>() }
 
-    var downloadingFileId by remember { mutableStateOf<String?>(null) }
-    var deleteTarget by remember { mutableStateOf<FileTransferInfo?>(null) }
-    val uploadingNames = remember { mutableStateListOf<String>() }
-    var previewTarget by remember { mutableStateOf<Pair<FileTransferInfo, String>?>(null) }
-    // 设备在线卡片(与即时互传页同款):进入页面拉取,连接恢复时刷新
-    var deviceList by remember { mutableStateOf<List<clip.yixing.sync.data.DeviceInfo>>(emptyList()) }
-    // 管理视图切换(false=聊天流,true=列表流)
-    var showListView by remember { mutableStateOf(false) }
+    // 当次会话的任务时间线(新在上)
+    val tasks = remember { mutableStateListOf<TransferTask>() }
 
-    val refreshDevices: suspend () -> Unit = {
-        val serverUrl = SyncSettings.serverUrl(context)
-        if (serverUrl.isNotBlank() && SyncSettings.isPaired(context) && SyncSettings.deviceToken(context).isNotBlank()) {
-            try {
-                val api = SyncApi(serverUrl, selfDeviceId, SyncSettings.deviceToken(context))
-                val remoteDevices = withContext(Dispatchers.IO) { api.getDevices() }
-                // 文件互传是全组广播,设备卡片只做"谁能收到"的展示,过滤本机
-                deviceList = remoteDevices.filter { it.id != selfDeviceId }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                android.util.Log.w("NexClipFiles", "refreshDevices: ${e.message}")
-            }
-        } else {
-            deviceList = emptyList()
-        }
-    }
-
-    LaunchedEffect(Unit) { refreshDevices() }
+    var deleteConfirmFor by remember { mutableStateOf<TransferTask?>(null) }
 
     val barSurface = MiuixTheme.colorScheme.surface
     val pageBackdrop = rememberLayerBackdrop(
@@ -160,6 +150,11 @@ fun FilesPage(
         }
     }
 
+    fun upsertTask(task: TransferTask) {
+        val idx = tasks.indexOfFirst { it.key == task.key }
+        if (idx >= 0) tasks[idx] = task else tasks.add(0, task)
+    }
+
     fun copyUriToTemp(uri: Uri): File? = runCatching {
         val resolver = context.contentResolver
         val name = queryDisplayName(context, uri) ?: "file_${System.currentTimeMillis()}"
@@ -172,11 +167,11 @@ fun FilesPage(
         target
     }.getOrNull()
 
-    /** 批量上传:气泡流顶部插入"上传中"条目,完成转为正式气泡 */
+    /** 批量上传:每个文件独立任务卡(排队→上传中→完成/失败) */
     fun uploadFiles(uris: List<Uri>) {
         if (uris.isEmpty()) return
         val api = buildApi() ?: run {
-            scope.launch { snackbarHostState?.showAppSnack("未配对或服务器未配置,无法上传", SnackType.Error) }
+            scope.launch { snackbarHostState?.showAppSnack("未配对或服务器未配置,无法发送", SnackType.Error) }
             return
         }
         scope.launch {
@@ -184,27 +179,35 @@ fun FilesPage(
             var failed = 0
             for (uri in uris) {
                 val displayName = withContext(Dispatchers.IO) { queryDisplayName(context, uri) } ?: "文件"
-                uploadingNames.add(displayName)
+                val key = "send_${System.currentTimeMillis()}_$displayName"
+                val size = withContext(Dispatchers.IO) {
+                    runCatching { File(copyUriToTemp(uri)?.absolutePath ?: "").length() }.getOrDefault(0L)
+                }
+                upsertTask(TransferTask(key, displayName, size, TransferStatus.UPLOADING, TransferTask.Direction.SEND, "本机"))
+
                 val temp = withContext(Dispatchers.IO) { copyUriToTemp(uri) }
                 if (temp == null) {
+                    upsertTask(TransferTask(key, displayName, size, TransferStatus.FAILED, TransferTask.Direction.SEND, "本机", "无法读取文件"))
                     failed++
-                    uploadingNames.remove(displayName)
                     continue
                 }
                 try {
                     val info = withContext(Dispatchers.IO) {
                         api.uploadFile(temp, SyncSettings.ensureDeviceId(context), SyncSettings.deviceName(context))
                     }
-                    ClipboardMonitorService.fileTransfers.value =
-                        listOf(info) + ClipboardMonitorService.fileTransfers.value.filter { it.fileId != info.fileId }
+                    upsertTask(
+                        TransferTask(key, info.fileName, info.size, TransferStatus.DONE, TransferTask.Direction.SEND, "本机")
+                    )
+                    // 标记该 fileId 已展示,避免推送回显再生成一张重复卡
+                    seenFileIds.add(info.fileId)
                     ok++
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     handleError(e, "上传失败")
+                    upsertTask(TransferTask(key, displayName, size, TransferStatus.FAILED, TransferTask.Direction.SEND, "本机", e.message ?: "上传失败"))
                     failed++
                 } finally {
-                    uploadingNames.remove(displayName)
                     temp.delete()
                 }
             }
@@ -212,11 +215,29 @@ fun FilesPage(
             if (ok > 0) parts.add("成功 $ok 个")
             if (failed > 0) parts.add("失败 $failed 个")
             if (parts.isNotEmpty()) {
-                snackbarHostState?.showAppSnack(
-                    "上传完成:" + parts.joinToString(", "),
-                    if (failed > 0) SnackType.Error else SnackType.Success,
-                )
+                snackbarHostState?.showAppSnack("发送完成:" + parts.joinToString(", "), if (failed > 0) SnackType.Error else SnackType.Success)
             }
+        }
+    }
+
+    // 对端推送 → 接收任务卡(按 fileId 去重;本机回显跳过)
+    LaunchedEffect(pushedFiles) {
+        for (i in pushedFiles.indices) {
+            val info = pushedFiles[i]
+            if (info.fileId in seenFileIds) continue
+            seenFileIds.add(info.fileId)
+            if (info.deviceId == SyncSettings.ensureDeviceId(context)) continue
+            upsertTask(
+                TransferTask(
+                    key = info.fileId,
+                    fileName = info.fileName,
+                    size = info.size,
+                    status = TransferStatus.RECEIVED,
+                    direction = TransferTask.Direction.RECEIVE,
+                    peerName = info.deviceName ?: "其他设备",
+                    savedUri = null,
+                )
+            )
         }
     }
 
@@ -233,94 +254,35 @@ fun FilesPage(
         uploadFiles(uris)
     }
 
-    /** 下载并用系统应用打开(非文本点击路径) */
-    fun downloadAndOpen(info: FileTransferInfo) {
+    /** 保存接收的文件到 Downloads/NexClip,返回 Uri */
+    fun saveReceived(task: TransferTask, onSaved: (Uri?) -> Unit) {
         val api = buildApi() ?: run {
             scope.launch { snackbarHostState?.showAppSnack("未配对或服务器未配置", SnackType.Error) }
             return
         }
         scope.launch {
-            downloadingFileId = info.fileId
-            snackbarHostState?.showAppSnack("正在下载 ${info.fileName}…", SnackType.Info)
             try {
-                val bytes = withContext(Dispatchers.IO) { api.downloadFile(info.fileId) }
+                snackbarHostState?.showAppSnack("正在下载 ${task.fileName}…", SnackType.Info)
+                val bytes = withContext(Dispatchers.IO) { api.downloadFile(task.key) }
                 if (bytes == null) {
                     snackbarHostState?.showAppSnack("文件已丢失(可能被服务器清理)", SnackType.Error)
+                    onSaved(null)
                     return@launch
                 }
-                val uri = withContext(Dispatchers.IO) { saveToDownloads(context, info.fileName, bytes) }
+                val uri = withContext(Dispatchers.IO) { saveToDownloads(context, task.fileName, bytes) }
                 if (uri != null) {
                     snackbarHostState?.showAppSnack("已保存到 Downloads/NexClip", SnackType.Success)
-                    runCatching {
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW).apply {
-                                setDataAndType(uri, clip.yixing.sync.data.mimeTypeOf(info.fileName))
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                        )
-                    }
+                    upsertTask(task.copy(status = TransferStatus.RECEIVED, savedUri = uri))
                 } else {
                     snackbarHostState?.showAppSnack("保存失败", SnackType.Error)
                 }
+                onSaved(uri)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 handleError(e, "下载失败")
-            } finally {
-                downloadingFileId = null
+                onSaved(null)
             }
-        }
-    }
-
-    fun deleteFile(info: FileTransferInfo) {
-        val api = buildApi() ?: run {
-            scope.launch { snackbarHostState?.showAppSnack("未配对或服务器未配置", SnackType.Error) }
-            return
-        }
-        scope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) { api.deleteFile(info.fileId) }
-                if (ok) {
-                    ClipboardMonitorService.fileTransfers.value =
-                        ClipboardMonitorService.fileTransfers.value.filter { it.fileId != info.fileId }
-                    snackbarHostState?.showAppSnack("已删除: ${info.fileName}", SnackType.Success)
-                } else {
-                    snackbarHostState?.showAppSnack("删除失败或无权删除", SnackType.Error)
-                }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                handleError(e, "删除失败")
-            }
-        }
-    }
-
-    /** 点击气泡:文本类内存预览,其它类型下载+打开(均有提示,不再静默) */
-    fun onItemClicked(info: FileTransferInfo) {
-        val ext = info.fileName.substringAfterLast('.', "").lowercase()
-        if (ext in TEXT_PREVIEW_EXTS) {
-            val api = buildApi() ?: return
-            scope.launch {
-                downloadingFileId = info.fileId
-                snackbarHostState?.showAppSnack("正在读取 ${info.fileName}…", SnackType.Info)
-                try {
-                    val bytes = withContext(Dispatchers.IO) { api.downloadFile(info.fileId) }
-                    if (bytes == null) {
-                        snackbarHostState?.showAppSnack("文件已丢失(可能被服务器清理)", SnackType.Error)
-                        return@launch
-                    }
-                    val text = withContext(Dispatchers.IO) { String(bytes, Charsets.UTF_8).take(20_000) }
-                    previewTarget = info to text
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    handleError(e, "读取失败")
-                } finally {
-                    downloadingFileId = null
-                }
-            }
-        } else {
-            downloadAndOpen(info)
         }
     }
 
@@ -329,14 +291,13 @@ fun FilesPage(
             .fillMaxSize()
             .background(MiuixTheme.colorScheme.background)
     ) {
-        // 1. 聊天气泡流(底层,reverseLayout: 新消息在底部)
+        // 1. 任务时间线
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .layerBackdrop(pageBackdrop)
         ) {
-            val isUploadingNow = uploadingNames.isNotEmpty()
-            if (files.isEmpty() && !isUploadingNow) {
+            if (tasks.isEmpty()) {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -345,85 +306,64 @@ fun FilesPage(
                     verticalArrangement = Arrangement.Center
                 ) {
                     Icon(
-                        imageVector = LucideIcons.FolderOpen,
-                        contentDescription = "暂无文件",
+                        imageVector = LucideIcons.UploadCloud,
+                        contentDescription = "暂无传输",
                         modifier = Modifier.size(44.dp),
                         tint = MiuixTheme.colorScheme.primary.copy(alpha = 0.5f)
                     )
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        text = "文件互传",
+                        text = "即时文件互传",
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         color = MiuixTheme.colorScheme.onSurface
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "点击下方按钮选择文件,同一账号下的网页与其它设备都会收到;对方发来的文件也会出现在这里。",
+                        text = "选择文件即可发送,同账号下的网页与其它设备立即收到;对方发来的文件也会出现在这里,保存后即可打开。",
                         fontSize = 13.sp,
                         color = MiuixTheme.colorScheme.onBackgroundVariant,
                         textAlign = TextAlign.Center,
                         lineHeight = 18.sp
                     )
                 }
-            } else if (showListView) {
-                // 列表视图(右上角图标切换):紧凑卡片,新→旧
-                LazyColumn(
+            } else {
+                Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .overScrollVertical(),
-                    contentPadding = PaddingValues(
-                        start = 16.dp,
-                        end = 16.dp,
-                        top = 124.dp,
-                        bottom = 100.dp,
-                    ),
+                        .verticalScroll(rememberScrollState())
+                        .padding(
+                            start = 16.dp,
+                            end = 16.dp,
+                            top = 124.dp,
+                            bottom = 100.dp,
+                        ),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    items(files, key = { it.fileId }) { info ->
-                        FileListCard(
-                            info = info,
-                            isBusy = downloadingFileId == info.fileId,
-                            onDownload = { downloadAndOpen(info) },
-                            onDeleteRequest = { deleteTarget = info },
-                            onClick = { onItemClicked(info) },
-                        )
-                    }
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .overScrollVertical(),
-                    reverseLayout = true,
-                    contentPadding = PaddingValues(
-                        start = 16.dp,
-                        end = 16.dp,
-                        // 顶栏毛玻璃高度(statusBar+56dp)+设备卡片行(~34dp)再留呼吸空间
-                        top = 132.dp,
-                        bottom = 96.dp,
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    // 上传中条目(最新,所以在 reverseLayout 的首位)
-                    items(uploadingNames, key = { "uploading_$it" }) { name ->
-                        UploadingBubble(name = name)
-                    }
-                    items(files, key = { it.fileId }) { info ->
-                        FileBubble(
-                            info = info,
-                            isSelf = info.deviceId == selfDeviceId,
-                            isBusy = downloadingFileId == info.fileId,
-                            onDownload = { downloadAndOpen(info) },
-                            onDeleteRequest = { deleteTarget = info },
-                            onClick = { onItemClicked(info) },
+                    tasks.forEach { task ->
+                        TransferTaskCard(
+                            task = task,
+                            onDownloadClick = {
+                                saveReceived(task) { uri ->
+                                    if (uri != null) {
+                                        runCatching {
+                                            context.startActivity(
+                                                Intent(Intent.ACTION_VIEW).apply {
+                                                    setDataAndType(uri, clip.yixing.sync.data.mimeTypeOf(task.fileName))
+                                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            },
                         )
                     }
                 }
             }
         }
 
-        // 2. 顶部毛玻璃栏:返回 + 标题 + 视图切换 + 设备在线卡片行
+        // 2. 顶部毛玻璃栏:返回 + 标题 + 设备在线摘要
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -457,88 +397,42 @@ fun FilesPage(
                             color = MiuixTheme.colorScheme.onSurface,
                             modifier = Modifier.weight(1f)
                         )
-                        // 视图切换:聊天流 ↔ 紧凑列表
-                        IconButton(onClick = { showListView = !showListView }) {
-                            Icon(
-                                imageVector = if (showListView) LucideIcons.MessageSquare else LucideIcons.Layers,
-                                contentDescription = if (showListView) "聊天视图" else "列表视图",
-                                tint = MiuixTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                    // 设备在线卡片行(与即时互传页同款语言:谁能收到一眼可见)。
-                    // 横向滚动 —— 设备多时不挤压换行(首轮真机 6 台溢出翻车的教训)。
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 12.dp)
-                            .padding(bottom = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                            val onlineNow = deviceList.filter { it.online }
-                            // 收起为计数摘要:全部设备/在线数
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(
-                                        if (onlineNow.isNotEmpty()) MiuixTheme.colorScheme.primary.copy(alpha = 0.12f)
-                                        else MiuixTheme.colorScheme.surfaceContainer
-                                    )
-                                    .padding(horizontal = 10.dp, vertical = 5.dp)
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = LucideIcons.Monitor,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(13.dp),
-                                        tint = if (onlineNow.isNotEmpty()) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackgroundVariant
-                                    )
-                                    Spacer(Modifier.width(5.dp))
-                                    Text(
-                                        text = if (onlineNow.isNotEmpty()) "${onlineNow.size}/${deviceList.size} 台设备在线" else "无设备在线",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = if (onlineNow.isNotEmpty()) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackgroundVariant
-                                    )
-                                }
-                            }
-                            // 逐设备小芯片(在线高亮,离线灰);横向滚动不截断设备数
-                            deviceList.forEach { dev ->
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(
+                                    if (ClipboardMonitorService.isServerConnected.collectAsState().value)
+                                        MiuixTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                    else MiuixTheme.colorScheme.surfaceContainer
+                                )
+                                .padding(horizontal = 10.dp, vertical = 5.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(
                                     modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
+                                        .size(7.dp)
+                                        .clip(RoundedCornerShape(3.5.dp))
                                         .background(
-                                            if (dev.online) MiuixTheme.colorScheme.primary.copy(alpha = 0.12f)
-                                            else MiuixTheme.colorScheme.surfaceContainer
+                                            if (ClipboardMonitorService.isServerConnected.collectAsState().value) Color(0xFF34C759)
+                                            else MiuixTheme.colorScheme.onBackgroundVariant
                                         )
-                                        .padding(horizontal = 9.dp, vertical = 5.dp)
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            imageVector = resolveDeviceIcon(dev.name, dev.platform),
-                                            contentDescription = dev.name,
-                                            modifier = Modifier.size(12.dp),
-                                            tint = if (dev.online) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackgroundVariant
-                                        )
-                                        Spacer(Modifier.width(4.dp))
-                                        Text(
-                                            text = dev.name,
-                                            fontSize = 11.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            color = if (dev.online) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackgroundVariant
-                                        )
-                                    }
-                                }
+                                )
+                                Spacer(Modifier.width(5.dp))
+                                Text(
+                                    text = if (ClipboardMonitorService.isServerConnected.collectAsState().value) "已连接" else "未连接",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = if (ClipboardMonitorService.isServerConnected.collectAsState().value) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.onBackgroundVariant
+                                )
                             }
                         }
+                        Spacer(Modifier.width(8.dp))
+                    }
                 }
             }
         }
 
-        // 3. 底部玻璃输入条:选择文件(主入口,与即时互传页同一布局语言)
+        // 3. 底部玻璃输入条:选择文件发送(多选)
         Box(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -552,9 +446,8 @@ fun FilesPage(
                         .padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 选择文件主按钮(primary 实底,显眼;Miuix Button 自带圆角与按压反馈)
                     top.yukonga.miuix.kmp.basic.Button(
-                        onClick = { if (uploadingNames.isEmpty()) pickFilesLauncher.launch(arrayOf("*/*")) },
+                        onClick = { pickFilesLauncher.launch(arrayOf("*/*")) },
                         colors = top.yukonga.miuix.kmp.basic.ButtonDefaults.buttonColorsPrimary(),
                         modifier = Modifier
                             .weight(1f)
@@ -564,18 +457,13 @@ fun FilesPage(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            if (uploadingNames.isNotEmpty()) {
-                                LoadingSpinner(modifier = Modifier.size(16.dp), color = Color.White)
-                                Text("正在上传 ${uploadingNames.size} 个…", color = Color.White, fontSize = 14.sp)
-                            } else {
-                                Icon(
-                                    imageVector = LucideIcons.UploadCloud,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
-                                    tint = Color.White
-                                )
-                                Text("选择文件发送", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                            }
+                            Icon(
+                                imageVector = LucideIcons.UploadCloud,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = Color.White
+                            )
+                            Text("选择文件发送(可多选)", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                         }
                     }
                 }
@@ -583,59 +471,14 @@ fun FilesPage(
         }
     }
 
-    // 文本预览弹窗
-    val preview = previewTarget
-    if (preview != null) {
-        val (info, text) = preview
-        top.yukonga.miuix.kmp.window.WindowDialog(
-            show = true,
-            title = info.fileName,
-            summary = "内容预览(仅前 2 万字符)",
-            onDismissRequest = { previewTarget = null }
-        ) {
-            Column {
-                Text(
-                    text = text,
-                    fontSize = 12.sp,
-                    lineHeight = 17.sp,
-                    color = MiuixTheme.colorScheme.onSurface,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 320.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MiuixTheme.colorScheme.surfaceContainer)
-                        .padding(10.dp)
-                        .verticalScroll(rememberScrollState())
-                )
-                Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    top.yukonga.miuix.kmp.basic.TextButton(
-                        text = "关闭",
-                        onClick = { previewTarget = null },
-                        modifier = Modifier.weight(1f)
-                    )
-                    top.yukonga.miuix.kmp.basic.Button(
-                        onClick = {
-                            previewTarget = null
-                            downloadAndOpen(info)
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("下载保存")
-                    }
-                }
-            }
-        }
-    }
-
-    // 删除确认弹窗
-    val target = deleteTarget
+    // 删除确认(发送端删除文件即撤回全组可见性)
+    val target = deleteConfirmFor
     if (target != null) {
         top.yukonga.miuix.kmp.window.WindowDialog(
             show = true,
             title = "删除文件",
-            summary = "确定删除「${target.fileName}」吗?同账号下所有设备都将不再可见。",
-            onDismissRequest = { deleteTarget = null }
+            summary = "确定在服务器上删除「${target.fileName}」吗?所有设备将不再能下载它。",
+            onDismissRequest = { deleteConfirmFor = null }
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -643,13 +486,19 @@ fun FilesPage(
             ) {
                 top.yukonga.miuix.kmp.basic.TextButton(
                     text = "取消",
-                    onClick = { deleteTarget = null },
+                    onClick = { deleteConfirmFor = null },
                     modifier = Modifier.weight(1f)
                 )
                 top.yukonga.miuix.kmp.basic.Button(
                     onClick = {
-                        deleteTarget = null
-                        deleteFile(target)
+                        deleteConfirmFor = null
+                        scope.launch {
+                            try {
+                                val api = buildApi()
+                                if (api != null) withContext(Dispatchers.IO) { api.deleteFile(target.key) }
+                            } catch (_: Exception) {
+                            }
+                        }
                     },
                     modifier = Modifier.weight(1f)
                 ) {
@@ -660,233 +509,11 @@ fun FilesPage(
     }
 }
 
-/** 可文本预览的扩展名集合 */
-private val TEXT_PREVIEW_EXTS = setOf("txt", "md", "log", "json", "csv", "xml", "html", "kt", "java", "py", "sh", "ts")
-
-/** 判断是否图片文件(缩略图气泡用) */
-private fun isImageFile(fileName: String): Boolean =
-    fileName.substringAfterLast('.', "").lowercase() in setOf("png", "jpg", "jpeg", "gif", "webp", "bmp")
-
-/**
- * 图片文件气泡缩略图:下载字节 → 解码(服务端 Files 与剪贴板 ImageRef 机制不同,
- * 不能复用 ImageLoader.loadImageBitmap,这里直接 downloadFile 字节解码 + 内存缓存)。
- */
-private val thumbCache = android.util.LruCache<String, androidx.compose.ui.graphics.ImageBitmap>(24)
-
+/** 传输任务卡:图标 + 文件名 + 状态行 + (接收文件的)保存/打开动作 */
 @Composable
-private fun FileImageThumbnail(imageRef: String) {
-    val context = LocalContext.current
-    var bitmap by remember(imageRef) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(thumbCache.get(imageRef)) }
-    LaunchedEffect(imageRef) {
-        if (bitmap != null) return@LaunchedEffect
-        bitmap = thumbCache.get(imageRef)
-        if (bitmap != null) return@LaunchedEffect
-        val loaded = runCatching {
-            val serverUrl = SyncSettings.serverUrl(context)
-            if (serverUrl.isBlank() || !SyncSettings.isPaired(context)) return@runCatching null
-            val api = SyncApi(serverUrl, SyncSettings.ensureDeviceId(context), SyncSettings.deviceToken(context))
-            api.downloadFile(imageRef)?.let { bytes ->
-                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    ?.asImageBitmap()
-            }
-        }.getOrNull()
-        if (loaded != null) {
-            thumbCache.put(imageRef, loaded)
-            bitmap = loaded
-        }
-    }
-    val shown = bitmap
-    if (shown != null) {
-        Image(
-            bitmap = shown,
-            contentDescription = "文件缩略图",
-            modifier = Modifier
-                .size(width = 140.dp, height = 96.dp)
-                .clip(RoundedCornerShape(10.dp)),
-            contentScale = androidx.compose.ui.layout.ContentScale.Crop
-        )
-    } else {
-        // 加载中/失败:类型图标占位(不破坏气泡布局)
-        Icon(
-            imageVector = LucideIcons.Image,
-            contentDescription = null,
-            modifier = Modifier.size(38.dp),
-            tint = Color.White.copy(alpha = 0.85f)
-        )
-    }
-}
-
-/** 上传中气泡(靠右,带转圈) */
-@Composable
-private fun UploadingBubble(name: String) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.End
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-        ) {
-            Text(text = "本机", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = MiuixTheme.colorScheme.primary)
-            Spacer(Modifier.width(6.dp))
-            Text(text = "上传中", fontSize = 10.sp, color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.6f))
-        }
-        Row(
-            modifier = Modifier
-                .widthIn(max = 280.dp)
-                .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 4.dp, bottomStart = 16.dp, bottomEnd = 16.dp))
-                .background(MiuixTheme.colorScheme.primary.copy(alpha = 0.85f))
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            LoadingSpinner(modifier = Modifier.size(14.dp), color = Color.White)
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = name,
-                fontSize = 13.sp,
-                color = Color.White,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
-}
-
-/** 文件气泡:自己上传的靠右(primary 底白字),收到的靠左(卡片底),含类型图标/大小/时间/操作 */
-@Composable
-private fun FileBubble(
-    info: FileTransferInfo,
-    isSelf: Boolean,
-    isBusy: Boolean,
-    onDownload: () -> Unit,
-    onDeleteRequest: () -> Unit,
-    onClick: () -> Unit,
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = if (isSelf) Alignment.End else Alignment.Start
-    ) {
-        // 头部:设备名 + 时间(收到的在左,自己的在右)
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-        ) {
-            if (!isSelf) {
-                Text(
-                    text = info.deviceName ?: "其他设备",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant
-                )
-                Spacer(Modifier.width(6.dp))
-            }
-            Text(
-                text = formatFileTime(info.createdAt),
-                fontSize = 10.sp,
-                color = MiuixTheme.colorScheme.onBackgroundVariant.copy(alpha = 0.6f)
-            )
-            if (isSelf) {
-                Spacer(Modifier.width(6.dp))
-                Text(text = "本机", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = MiuixTheme.colorScheme.primary)
-            }
-        }
-        Spacer(Modifier.height(2.dp))
-
-        // 气泡本体:不对称圆角(与即时互传页同一套语言)。
-        // 单击 = 预览/打开;长按 = 下载/删除菜单(操作不再裸露成文字行)。
-        val bubbleShape = if (isSelf) {
-            RoundedCornerShape(topStart = 16.dp, topEnd = 4.dp, bottomStart = 16.dp, bottomEnd = 16.dp)
-        } else {
-            RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp)
-        }
-
-        var showActions by remember(info.fileId) { mutableStateOf(false) }
-
-        Row(
-            modifier = Modifier
-                .widthIn(max = 300.dp)
-                .clip(bubbleShape)
-                .background(if (isSelf) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.surfaceContainer)
-                .combinedClickable(
-                    onClick = onClick,
-                    onLongClick = { showActions = !showActions },
-                )
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // 图片文件:直接显示缩略图(加载失败退回类型图标)
-            if (isImageFile(info.fileName)) {
-                FileImageThumbnail(imageRef = info.fileId)
-                Spacer(Modifier.width(10.dp))
-            } else {
-                val icon = resolveFileTypeIcon(info.fileName)
-                if (isSelf) {
-                    Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(24.dp), tint = Color.White.copy(alpha = 0.9f))
-                } else {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        modifier = Modifier.size(24.dp),
-                        tint = resolveFileTypeIconTint(info.fileName, MiuixTheme.colorScheme.primary, MiuixTheme.colorScheme.onBackgroundVariant)
-                    )
-                }
-                Spacer(Modifier.width(10.dp))
-            }
-            Column {
-                Text(
-                    text = info.fileName,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = if (isSelf) Color.White else MiuixTheme.colorScheme.onSurface,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = formatFileSize(info.size) + if (isBusy) " · 处理中…" else "",
-                    fontSize = 11.sp,
-                    color = if (isSelf) Color.White.copy(alpha = 0.75f) else MiuixTheme.colorScheme.onBackgroundVariant
-                )
-            }
-        }
-
-        // 长按展开的操作行(仅该气泡):半透明浮层贴在气泡下方,点击操作后收起
-        if (showActions) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(18.dp),
-                modifier = Modifier
-                    .padding(top = 4.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MiuixTheme.colorScheme.surfaceContainerHigh)
-                    .padding(horizontal = 14.dp, vertical = 8.dp)
-            ) {
-                Text(
-                    text = "下载",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MiuixTheme.colorScheme.primary,
-                    modifier = Modifier.clickable { showActions = false; onDownload() }
-                )
-                Text(
-                    text = "删除",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = MiuixTheme.colorScheme.error,
-                    modifier = Modifier.clickable { showActions = false; onDeleteRequest() }
-                )
-            }
-        }
-    }
-}
-
-/** 列表视图条目(紧凑卡片,操作直接可见 —— 与聊天视图互补,批量管理场景用) */
-@Composable
-private fun FileListCard(
-    info: FileTransferInfo,
-    isBusy: Boolean,
-    onDownload: () -> Unit,
-    onDeleteRequest: () -> Unit,
-    onClick: () -> Unit,
+private fun TransferTaskCard(
+    task: TransferTask,
+    onDownloadClick: () -> Unit,
 ) {
     top.yukonga.miuix.kmp.basic.Card(
         modifier = Modifier.fillMaxWidth(),
@@ -894,49 +521,67 @@ private fun FileListCard(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
-                imageVector = resolveFileTypeIcon(info.fileName),
+                imageVector = resolveFileTypeIcon(task.fileName),
                 contentDescription = null,
                 modifier = Modifier.size(26.dp),
-                tint = resolveFileTypeIconTint(
-                    info.fileName,
-                    MiuixTheme.colorScheme.primary,
-                    MiuixTheme.colorScheme.onBackgroundVariant,
-                )
+                tint = resolveFileTypeIconTint(task.fileName, MiuixTheme.colorScheme.primary, MiuixTheme.colorScheme.onBackgroundVariant)
             )
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = info.fileName,
+                    text = task.fileName,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
                     color = MiuixTheme.colorScheme.onSurface,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(3.dp))
+                val statusText = when (task.status) {
+                    TransferStatus.UPLOADING -> "上传中…"
+                    TransferStatus.DONE -> "已送达 · ${task.peerName}"
+                    TransferStatus.FAILED -> "失败: ${task.errorMessage ?: "未知错误"}"
+                    TransferStatus.RECEIVED -> "来自 ${task.peerName} · ${formatFileSize(task.size)}"
+                }
                 Text(
-                    text = "${formatFileSize(info.size)} · ${info.deviceName ?: info.deviceId} · ${formatFileTime(info.createdAt)}",
+                    text = statusText,
                     fontSize = 11.sp,
-                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    color = when (task.status) {
+                        TransferStatus.FAILED -> MiuixTheme.colorScheme.error
+                        TransferStatus.UPLOADING -> MiuixTheme.colorScheme.primary
+                        else -> MiuixTheme.colorScheme.onBackgroundVariant
+                    },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            if (isBusy) {
-                LoadingSpinner(modifier = Modifier.size(18.dp), color = MiuixTheme.colorScheme.primary)
-            } else {
-                IconButton(onClick = onDownload) {
-                    Icon(imageVector = LucideIcons.Download, contentDescription = "下载", tint = MiuixTheme.colorScheme.primary)
-                }
-                IconButton(onClick = onDeleteRequest) {
-                    Icon(imageVector = LucideIcons.Trash2, contentDescription = "删除", tint = MiuixTheme.colorScheme.onBackgroundVariant)
-                }
+            when (task.status) {
+                TransferStatus.UPLOADING -> LoadingSpinner(modifier = Modifier.size(18.dp), color = MiuixTheme.colorScheme.primary)
+                TransferStatus.DONE -> Icon(
+                    imageVector = LucideIcons.Check,
+                    contentDescription = "已送达",
+                    modifier = Modifier.size(20.dp),
+                    tint = Color(0xFF34C759)
+                )
+                TransferStatus.RECEIVED -> Text(
+                    text = "保存并打开",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MiuixTheme.colorScheme.primary,
+                    modifier = Modifier.clickable(onClick = onDownloadClick)
+                )
+                TransferStatus.FAILED -> Icon(
+                    imageVector = LucideIcons.X,
+                    contentDescription = "失败",
+                    modifier = Modifier.size(20.dp),
+                    tint = MiuixTheme.colorScheme.error
+                )
             }
         }
     }
 }
 
-/** 按扩展名选择条目图标(图片/视频/音频/压缩包/代码文本/通用文档) */
+/** 按扩展名选择条目图标 */
 internal fun resolveFileTypeIcon(fileName: String): ImageVector {
     val ext = fileName.substringAfterLast('.', "").lowercase()
     return when (ext) {
@@ -962,7 +607,7 @@ internal fun resolveFileTypeIconTint(fileName: String, primary: Color, onBackgro
     }
 }
 
-/** content:// 或 file:// 的显示名(OpenableColumns.DISPLAY_NAME) */
+/** content:// 或 file:// 的显示名 */
 private fun queryDisplayName(context: Context, uri: Uri): String? = runCatching {
     if (uri.scheme == "content") {
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
@@ -978,7 +623,6 @@ private fun queryDisplayName(context: Context, uri: Uri): String? = runCatching 
 
 /**
  * 保存到系统 Downloads/NexClip。同名条目覆盖写,防 (1) 副本累积。
- * 返回保存位置 Uri;失败返回 null。
  */
 private fun saveToDownloads(context: Context, fileName: String, bytes: ByteArray): Uri? = runCatching {
     val safeName = fileName.replace(Regex("[\\\\/:*?\"<>|\\x00-\\x1f]"), "_").ifBlank { "file" }
@@ -1026,21 +670,4 @@ internal fun formatFileSize(bytes: Long): String = when {
     bytes < 1024 * 1024 -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
     bytes < 1024L * 1024 * 1024 -> String.format(Locale.US, "%.1f MB", bytes / 1024.0 / 1024.0)
     else -> String.format(Locale.US, "%.2f GB", bytes / 1024.0 / 1024.0 / 1024.0)
-}
-
-/** 绝对时间("今天 14:32 / 11-08 22:40") */
-internal fun formatFileTime(createdAt: String): String {
-    val time = runCatching {
-        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).apply {
-            timeZone = java.util.TimeZone.getTimeZone("UTC")
-        }.parse(createdAt.take(19))
-    }.getOrNull() ?: return createdAt
-    val now = java.util.Calendar.getInstance()
-    val cal = java.util.Calendar.getInstance().apply { this.time = time }
-    return when {
-        now.get(java.util.Calendar.YEAR) == cal.get(java.util.Calendar.YEAR) &&
-            now.get(java.util.Calendar.DAY_OF_YEAR) == cal.get(java.util.Calendar.DAY_OF_YEAR) ->
-            "今天 " + SimpleDateFormat("HH:mm", Locale.getDefault()).format(time)
-        else -> SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(time)
-    }
 }
