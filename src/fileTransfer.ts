@@ -31,6 +31,8 @@ export interface FileRow {
   DeviceName: string | null;
   UserId: string | null;
   CreatedAt: string;
+  TargetIds?: string | null;
+  TransferStatus?: string | null;
 }
 
 export interface FileDto {
@@ -43,6 +45,8 @@ export interface FileDto {
   deviceName: string | null;
   createdAt: string;
   downloadUrl: string;
+  /** 确认制传输状态:pending=等待目标设备确认;accepted/rejected;null=旧式广播 */
+  transferStatus?: string | null;
 }
 
 export class FileTransferService {
@@ -75,6 +79,10 @@ CREATE TABLE IF NOT EXISTS "Files" (
 );
 CREATE INDEX IF NOT EXISTS "IX_Files_CreatedAt" ON "Files" ("CreatedAt");
 `);
+    // 确认制传输增量加列(老库兼容)
+    const fileCols = new Set((this.db.prepare('PRAGMA table_info("Files")').all() as { name: string }[]).map(c => c.name));
+    if (!fileCols.has('TargetIds')) this.db.exec('ALTER TABLE "Files" ADD COLUMN "TargetIds" TEXT NULL');
+    if (!fileCols.has('TransferStatus')) this.db.exec('ALTER TABLE "Files" ADD COLUMN "TransferStatus" TEXT NULL');
   }
 
   /**
@@ -102,12 +110,61 @@ CREATE INDEX IF NOT EXISTS "IX_Files_CreatedAt" ON "Files" ("CreatedAt");
 
     const dto = this.toDto(this.getByFileId(fileId)!);
     if (targets && targets.size > 0) {
-      this.hub.broadcastFileTransferredTo(dto, targets);
+      // 确认制:标记待确认,只向目标设备广播 FileTransferRequested(发送方不收自己的回声)
+      this.db.prepare('UPDATE "Files" SET "TargetIds" = ?, "TransferStatus" = ? WHERE "FileId" = ?')
+        .run([...targets].join(','), 'pending', fileId);
+      dto.transferStatus = 'pending';
+      this.hub.broadcastFileTransferRequested(dto, targets);
     } else {
       // 与 broadcastUpdated 的用户组隔离语义一致:userId 为 null 时全量广播
       this.hub.broadcastFileTransferred(dto, userId);
     }
     return dto;
+  }
+
+  /**
+   * 目标设备响应确认制传输。
+   *
+   * @param accept true=接受(标记 accepted);false=拒绝(文件立即删除,即时互传不留垃圾)
+   * @returns false = fileId 不存在/非 pending/设备不在目标列表/用户组越权
+   */
+  respond(fileId: string, deviceId: string, accept: boolean, userId: string | null): boolean {
+    const row = this.getByFileId(fileId);
+    if (!row || row.TransferStatus !== 'pending') return false;
+    if (userId && row.UserId && row.UserId !== userId) return false;
+    const targetIds = (row.TargetIds ?? '').split(',').filter(Boolean);
+    if (!targetIds.some(id => id.toLowerCase() === deviceId.toLowerCase())) return false;
+
+    if (accept) {
+      this.db.prepare('UPDATE "Files" SET "TransferStatus" = ? WHERE "FileId" = ?').run('accepted', fileId);
+      this.hub.broadcastFileResponded(fileId, 'accepted', row.DeviceId);
+      return true;
+    }
+    // 拒绝:立即删除文件行与磁盘内容,只给发送方一条"已拒绝"
+    this.db.prepare('DELETE FROM "Files" WHERE "FileId" = ?').run(fileId);
+    this.withSafePath(row.StoragePath, (full) => {
+      if (existsSync(full)) runCatching(() => unlinkSync(full));
+      return null;
+    });
+    this.hub.broadcastFileResponded(fileId, 'rejected', row.DeviceId);
+    return true;
+  }
+
+  /** 清扫超时未确认的 pending 文件(即时互传不悬挂垃圾),逐个广播 FileDeleted 让发送方显示"已过期" */
+  sweepExpiredPending(ttlSeconds: number): void {
+    const cutoff = Date.now() - Math.max(5, ttlSeconds) * 1000;
+    const rows = this.db.prepare(
+      `SELECT "FileId","StoragePath","UserId","CreatedAt" FROM "Files" WHERE "TransferStatus" = 'pending'`
+    ).all() as unknown as FileRow[];
+    for (const row of rows) {
+      if (Date.parse(toIso(row.CreatedAt)) >= cutoff) continue;
+      this.db.prepare('DELETE FROM "Files" WHERE "FileId" = ?').run(row.FileId);
+      this.withSafePath(row.StoragePath, (full) => {
+        if (existsSync(full)) runCatching(() => unlinkSync(full));
+        return null;
+      });
+      this.hub.broadcastFileDeleted(row.FileId, row.UserId);
+    }
   }
 
   /** 按用户组列出文件(新→旧)。limit 上限 200,防止一次拉爆。 */
@@ -184,6 +241,7 @@ CREATE INDEX IF NOT EXISTS "IX_Files_CreatedAt" ON "Files" ("CreatedAt");
       deviceName: r.DeviceName,
       createdAt: toIso(r.CreatedAt),
       downloadUrl: '/api/files/' + r.FileId + '/download',
+      transferStatus: r.TransferStatus ?? null,
     };
   }
 }

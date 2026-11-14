@@ -11,6 +11,8 @@ export interface AppConfig {
   onlineThresholdSeconds: number;
   webDist: string | null;
   pairingCodeTtlSeconds: number;
+  /** 确认制文件互传:目标设备响应超时(秒),超时自动过期并删除文件 */
+  fileConsentTtlSeconds: number;
   adminUsername: string;
   adminPassword: string;
   sessionTtlHours: number;
@@ -72,6 +74,7 @@ export function loadConfig(): AppConfig {
         ? (existsSync(join(rootDir, 'web/dist')) ? './web/dist' : '../web/dist')
         : String(file.webDist)),
     pairingCodeTtlSeconds: num(env('SC_PAIRING_TTL_SECONDS', String(file.pairingCodeTtlSeconds ?? 600)), 600),
+    fileConsentTtlSeconds: num(env('SC_FILE_CONSENT_TTL', String(file.fileConsentTtlSeconds ?? 60)), 60),
     adminUsername: env('ADMIN_USERNAME', dotEnv.ADMIN_USERNAME ?? 'syncadmin'),
     adminPassword: env('ADMIN_PASSWORD', dotEnv.ADMIN_PASSWORD ?? ''),
     sessionTtlHours: num(env('SESSION_TTL_HOURS', dotEnv.SESSION_TTL_HOURS ?? '24'), 24),

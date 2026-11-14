@@ -324,6 +324,23 @@ export async function handleApi(ctx: Ctx): Promise<boolean> {
     return true;
   }
 
+  // 确认制传输:目标设备接受/拒绝。reject 时服务端立即删除文件。
+  const mFileRespond = /^\/api\/files\/([0-9a-f]+)\/(accept|reject)$/.exec(p);
+  if (mFileRespond && method === 'POST') {
+    if (!requireDeviceOrSession()) return true;
+    const responderDeviceId = deviceActor?.Id ?? ctx.actor?.deviceId ?? '';
+    if (!responderDeviceId) { sendJson(res, 401, { error: 'unauthorized' }); return true; }
+    const ok = ctx.files.respond(
+      mFileRespond[1],
+      responderDeviceId,
+      mFileRespond[2] === 'accept',
+      deviceActor?.UserId ?? ctx.actor?.userId ?? null,
+    );
+    if (!ok) { sendJson(res, 404, { error: '无待确认的文件传输,或设备不在目标列表' }); return true; }
+    sendJson(res, 200, { ok: true, action: mFileRespond[2] });
+    return true;
+  }
+
   if (p === '/api/clipboard/history' && method === 'GET') {
     if (!requireDeviceOrSession()) return true;
     const offset = Number(url.searchParams.get('offset') ?? 0);

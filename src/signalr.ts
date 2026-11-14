@@ -237,6 +237,24 @@ export class SignalRHub {
     }
   }
 
+  /** 确认制传输:向目标设备广播文件传输请求(等其接受/拒绝) */
+  broadcastFileTransferRequested(file: unknown, deviceIds: ReadonlySet<string>): void {
+    const msg = { type: 1, target: 'FileTransferRequested', arguments: [file] };
+    const lowerTargets = new Set([...deviceIds].map(id => id.toLowerCase()));
+    for (const conn of this.conns.values()) {
+      if (conn.deviceId && lowerTargets.has(conn.deviceId.toLowerCase())) this.sendJson(conn.ws, msg);
+    }
+  }
+
+  /** 确认制传输:把目标设备的接受/拒绝结果定向通知发送方设备 */
+  broadcastFileResponded(fileId: string, action: 'accepted' | 'rejected', toDeviceId: string): void {
+    const msg = { type: 1, target: 'FileTransferResponded', arguments: [{ fileId, action }] };
+    const lower = toDeviceId.toLowerCase();
+    for (const conn of this.conns.values()) {
+      if (conn.deviceId && conn.deviceId.toLowerCase() === lower) this.sendJson(conn.ws, msg);
+    }
+  }
+
   /** 广播文件删除事件(接收端据此移除列表项) */
   broadcastFileDeleted(fileId: string, userId?: string | null): void {
     const msg = { type: 1, target: 'FileDeleted', arguments: [fileId] };

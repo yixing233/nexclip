@@ -24,6 +24,12 @@ const latency = new LatencyTracker();
 hub.onConnected = (deviceId, deviceName, platform, version, ip) => svc.registerHubDevice(deviceId, deviceName, platform, version, ip);
 
 // 心跳:45s 刷新在线设备 LastSeenAt(与 .NET HubHeartbeatService 一致)
+// 确认制文件互传:周期清扫超时未确认的 pending 文件(广播 FileDeleted,发送方显示已过期)
+const consentSweepTimer = setInterval(() => {
+  try { files.sweepExpiredPending(cfg.fileConsentTtlSeconds); } catch (e) { console.warn('[consent-sweep]', e); }
+}, 30_000);
+consentSweepTimer.unref();
+
 const heartbeatTimer = setInterval(() => {
   try { svc.heartbeat(); } catch (e) { console.warn('[heartbeat]', e); }
 }, 45_000);
