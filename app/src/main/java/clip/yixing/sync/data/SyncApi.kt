@@ -487,6 +487,26 @@ class SyncApi(
         resp.use { return it.isSuccessful }
     }
 
+    /** 确认制传输:本端接受发送请求(仅目标设备可调) */
+    fun acceptFile(fileId: String): Boolean {
+        val req = builder("POST", "/api/files/$fileId/accept")
+            .header("Content-Type", "application/json")
+            .post("{}".toRequestBody("application/json".toMediaType()))
+            .build()
+        val resp = execute(req)
+        resp.use { return it.isSuccessful }
+    }
+
+    /** 确认制传输:本端拒绝发送请求(服务端立即删除文件) */
+    fun rejectFile(fileId: String): Boolean {
+        val req = builder("POST", "/api/files/$fileId/reject")
+            .header("Content-Type", "application/json")
+            .post("{}".toRequestBody("application/json".toMediaType()))
+            .build()
+        val resp = execute(req)
+        resp.use { return it.isSuccessful }
+    }
+
     /** 服务连通性与网络延迟测试 (GET /api/health) */
     fun testConnection(): Pair<Boolean, String> {
         val start = System.currentTimeMillis()

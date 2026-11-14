@@ -43,6 +43,7 @@ object SyncNotificationManager {
     const val NOTIFICATION_ID_UPLOAD_FAILED = 3001
     /** 收到文件互传(独立 ID;同 ID 覆盖是刻意的——连续收到多个文件只留最新一条提醒)。 */
     const val NOTIFICATION_ID_FILE = 2002
+    const val NOTIFICATION_ID_FILE_CONSENT = 2003
 
     /** MainActivity 读取该 extra 后直接打开文件互传页(通知点按/分享入口共用)。 */
     const val EXTRA_OPEN_FILES_PAGE = "clip.yixing.sync.extra.OPEN_FILES_PAGE"
@@ -505,6 +506,61 @@ object SyncNotificationManager {
             nm.notify(NOTIFICATION_ID_FILE, notification)
         } catch (e: Exception) {
             android.util.Log.w("SyncNotification", "notifyFileReceived 失败: ${e.message}")
+        }
+    }
+
+    /** 确认制文件传输:目标设备的接受/拒绝通知(按钮走 NotificationActionReceiver) */
+    fun notifyFileConsentRequest(context: Context, fileName: String, deviceName: String, fileId: String) {
+        try {
+            if (Build.VERSION.SDK_INT >= 33 &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val openFilesPi = PendingIntent.getActivity(
+                context,
+                2003,
+                Intent(context, MainActivity::class.java).apply {
+                    putExtra(EXTRA_OPEN_FILES_PAGE, true)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                },
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            val acceptPi = PendingIntent.getBroadcast(
+                context,
+                (fileId.hashCode() and 0x7fffffff),
+                Intent(context, NotificationActionReceiver::class.java).apply {
+                    action = NotificationActionReceiver.ACTION_FILE_ACCEPT
+                    putExtra(NotificationActionReceiver.EXTRA_FILE_ID, fileId)
+                },
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            val rejectPi = PendingIntent.getBroadcast(
+                context,
+                (fileId.hashCode() and 0x7fffffff) + 1,
+                Intent(context, NotificationActionReceiver::class.java).apply {
+                    action = NotificationActionReceiver.ACTION_FILE_REJECT
+                    putExtra(NotificationActionReceiver.EXTRA_FILE_ID, fileId)
+                },
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            val title = "收到文件传输请求"
+            val text = "$deviceName 想发送 $fileName,是否接受?"
+            val notification = NotificationCompat.Builder(context, CHANNEL_PUSH)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                .setContentIntent(openFilesPi)
+                .addAction(0, "接受", acceptPi)
+                .addAction(0, "拒绝", rejectPi)
+                .setAutoCancel(false)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .build()
+            nm.notify(NOTIFICATION_ID_FILE_CONSENT, notification)
+        } catch (e: Exception) {
+            android.util.Log.w("SyncNotification", "notifyFileConsentRequest 失败: ${e.message}")
         }
     }
 

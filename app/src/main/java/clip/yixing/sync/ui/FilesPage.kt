@@ -333,6 +333,93 @@ fun FilesPage(
                 },
             )
 
+            // 待确认的传输请求(确认制:目标设备需接受)
+            val pendingRequests = ClipboardMonitorService.pendingFileRequests.collectAsState().value
+            val requestBusy = remember { mutableStateMapOf<String, Boolean>() }
+            fun handleConsent(info: clip.yixing.sync.data.FileTransferInfo, accept: Boolean) {
+                if (requestBusy[info.fileId] == true) return
+                requestBusy[info.fileId] = true
+                scope.launch {
+                    try {
+                        val api = buildApi() ?: run {
+                            snackbarHostState?.showAppSnack("未配对或服务器未配置", SnackType.Error)
+                            return@launch
+                        }
+                        if (accept) {
+                            api.acceptFile(info.fileId)
+                            val bytes = withContext(Dispatchers.IO) { api.downloadFile(info.fileId) }
+                            if (bytes != null) {
+                                saveToDownloads(context, info.fileName, bytes)
+                                snackbarHostState?.showAppSnack("已接受,文件保存到 Downloads", SnackType.Success)
+                            } else {
+                                snackbarHostState?.showAppSnack("已接受,但文件已不可下载", SnackType.Error)
+                            }
+                        } else {
+                            api.rejectFile(info.fileId)
+                            snackbarHostState?.showAppSnack("已拒绝该文件", SnackType.Success)
+                        }
+                        ClipboardMonitorService.pendingFileRequests.value =
+                            ClipboardMonitorService.pendingFileRequests.value.filter { it.fileId != info.fileId }
+                    } catch (e: Exception) {
+                        snackbarHostState?.showAppSnack(e.message ?: "操作失败", SnackType.Error)
+                    } finally {
+                        requestBusy[info.fileId] = false
+                    }
+                }
+            }
+            if (pendingRequests.isNotEmpty()) {
+                Text(
+                    text = "待确认 (${pendingRequests.size})",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MiuixTheme.colorScheme.onBackgroundVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                pendingRequests.forEach { req ->
+                    val busy = requestBusy[req.fileId] == true
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = req.fileName,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MiuixTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = "${req.deviceName ?: "其他设备"} 请求发送 · ${req.size / 1024} KB",
+                                fontSize = 11.sp,
+                                color = MiuixTheme.colorScheme.onBackgroundVariant
+                            )
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            top.yukonga.miuix.kmp.basic.Button(
+                                onClick = { handleConsent(req, true) },
+                                enabled = !busy,
+                                colors = top.yukonga.miuix.kmp.basic.ButtonDefaults.buttonColorsPrimary(),
+                                modifier = Modifier.height(34.dp)
+                            ) {
+                                Text(text = "接受", fontSize = 12.sp)
+                            }
+                            top.yukonga.miuix.kmp.basic.Button(
+                                onClick = { handleConsent(req, false) },
+                                enabled = !busy,
+                                modifier = Modifier.height(34.dp)
+                            ) {
+                                Text(text = "拒绝", fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
             // 待发送队列
             if (pendingFiles.isNotEmpty()) {
                 Text(
@@ -779,8 +866,8 @@ private fun formatDuration(ms: Long): String = when {
     else -> "${ms / 60_000} 分 ${ms % 60_000 / 1000} 秒"
 }
 
-/** 保存到 Downloads/NexClip(同名覆盖) */
-private fun saveToDownloads(context: Context, fileName: String, bytes: ByteArray): Uri? = runCatching {
+/** 保存到 Downloads/NexClip(同名覆盖;通知栏接受动作也会调用) */
+fun saveToDownloads(context: Context, fileName: String, bytes: ByteArray): Uri? = runCatching {
     val safeName = fileName.replace(Regex("[\\\\/:*?\"<>|\\x00-\\x1f]"), "_").ifBlank { "file" }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         val resolver = context.contentResolver

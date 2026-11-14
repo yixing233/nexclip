@@ -38,6 +38,10 @@ class PushClient(
     var onFileTransferred: ((FileTransferInfo) -> Unit)? = null
     /** 某文件被删除(参数为 fileId) */
     var onFileDeleted: ((String) -> Unit)? = null
+    /** 确认制传输:目标设备收到发送请求(需接受/拒绝) */
+    var onFileTransferRequested: ((FileTransferInfo) -> Unit)? = null
+    /** 确认制传输:发送方收到目标设备的响应(action = accepted/rejected) */
+    var onFileTransferResponded: ((fileId: String, action: String, deviceId: String) -> Unit)? = null
 
     val isConnected: Boolean get() = connection?.connectionState == HubConnectionState.CONNECTED
 
@@ -66,6 +70,21 @@ class PushClient(
         conn.on("FileDeleted", { raw ->
             val fileId = (raw as? String) ?: ((raw as? List<*>)?.firstOrNull() as? String) ?: return@on
             onFileDeleted?.invoke(fileId)
+        }, Any::class.java)
+        conn.on("FileTransferRequested", { raw ->
+            // 确认制:目标设备收到发送请求;老服务端没有该事件,注册无害
+            val json = runCatching { org.json.JSONObject(raw as? Map<*, *> ?: return@on) }.getOrNull() ?: return@on
+            val info = parseFileJson(json) ?: return@on
+            onFileTransferRequested?.invoke(info)
+        }, Any::class.java)
+        conn.on("FileTransferResponded", { raw ->
+            // 确认制:发送方收到目标设备的接受/拒绝结果
+            val json = runCatching { org.json.JSONObject(raw as? Map<*, *> ?: return@on) }.getOrNull() ?: return@on
+            onFileTransferResponded?.invoke(
+                json.optString("fileId"),
+                json.optString("action"),
+                json.optString("deviceId"),
+            )
         }, Any::class.java)
         conn.onClosed { error ->
             onStateChanged?.invoke("disconnected")

@@ -260,8 +260,19 @@ class ClipboardMonitorService : Service() {
                 fileTransfers.value = listOf(info) + fileTransfers.value.filter { it.fileId != info.fileId }
             }
         }
+        client.onFileTransferRequested = { info ->
+            // 确认制:目标设备收到发送请求 → 通知栏按钮 接受/拒绝(网络操作在 NotificationActionReceiver)
+            if (info.deviceId != SyncSettings.ensureDeviceId(ctx)) {
+                pendingFileRequests.value = listOf(info) + pendingFileRequests.value.filter { it.fileId != info.fileId }
+                SyncNotificationManager.notifyFileConsentRequest(ctx, info.fileName, info.deviceName ?: "其他设备", info.fileId)
+            }
+        }
+        client.onFileTransferResponded = { fileId, action, _ ->
+            // 响应事件只发给发送方设备;安卓当前仅作为接收方消费确认制,发送任务状态在发送端 UI
+        }
         client.onFileDeleted = { fileId ->
             fileTransfers.value = fileTransfers.value.filter { it.fileId != fileId }
+            pendingFileRequests.value = pendingFileRequests.value.filter { it.fileId != fileId }
         }
         push = client
         client.connect()
@@ -556,6 +567,12 @@ class ClipboardMonitorService : Service() {
          * 不同,重连后首拉即可恢复,持久化反而会造成与服务端状态漂移。
          */
         val fileTransfers = MutableStateFlow<List<clip.yixing.sync.data.FileTransferInfo>>(emptyList())
+
+        /**
+         * 确认制传输:待本端确认的发送请求(最新在前)。
+         * 仅内存缓存,权威来源是服务端 /api/files 的 pending 记录。
+         */
+        val pendingFileRequests = MutableStateFlow<List<clip.yixing.sync.data.FileTransferInfo>>(emptyList())
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(context, Intent(context, ClipboardMonitorService::class.java))
