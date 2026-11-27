@@ -62,6 +62,8 @@ pub struct HistoryItem {
     pub origin: i32,
     pub starred: bool,
     pub remark: Option<String>,
+    /// 图片原始编码超过同步上限(10MB);本地仅保留降采样预览,不参与同步。
+    pub oversized: bool,
 }
 
 impl HistoryItem {
@@ -234,7 +236,7 @@ impl HistoryStore {
             let mut sql = String::from(
                 "SELECT id, server_id, type, text, image_path, image_ref, device_id, device_name, \
                  created_at, origin, starred, content_hash, source_app_name, source_app_path, \
-                 source_app_icon, remark, html, file_paths FROM entries",
+                 source_app_icon, remark, html, file_paths, oversized FROM entries",
             );
             let mut conds: Vec<String> = Vec::new();
             // 绑定参数统一收集后按索引绑定,占位符索引动态分配,避免错位
@@ -319,9 +321,9 @@ impl HistoryStore {
             let content_hash = resolve_content_hash(item);
             tx.execute(
                 "INSERT OR IGNORE INTO entries
-                    (server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon, remark, html, file_paths, pinyin_blob, initials_blob)
+                    (server_id, type, text, image_path, image_ref, device_id, device_name, created_at, origin, starred, content_hash, source_app_name, source_app_path, source_app_icon, remark, html, file_paths, pinyin_blob, initials_blob, oversized)
                  VALUES
-                    (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                    (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
                 params![
                     item.server_id,
                     item.entry_type,
@@ -342,6 +344,7 @@ impl HistoryStore {
                     file_paths,
                     pinyin_blob,
                     initials_blob,
+                    item.oversized as i64,
                 ],
             )?;
             let id = if tx.changes() > 0 { tx.last_insert_rowid() } else { 0 };
@@ -374,9 +377,9 @@ impl HistoryStore {
             let conn = &mut inner.conn;
             let tx = conn.transaction()?;
 
-            let row: Option<(i64, Option<String>, Option<String>, Option<String>, Option<String>)> = tx
+            let row: Option<(i64, i64, Option<String>, Option<String>, Option<String>, Option<String>)> = tx
                 .query_row(
-                    "SELECT id, device_name, source_app_name, source_app_path, source_app_icon
+                    "SELECT id, origin, device_name, source_app_name, source_app_path, source_app_icon
                      FROM entries WHERE content_hash = ?1 ORDER BY created_at DESC LIMIT 1",
                     params![content_hash],
                     |r| {
@@ -386,30 +389,39 @@ impl HistoryStore {
                             r.get(2)?,
                             r.get(3)?,
                             r.get(4)?,
+                            r.get(5)?,
                         ))
                     },
                 )
                 .optional()?;
-            let (id, old_device, old_app, old_path, old_icon) = match row {
+            let (id, origin, old_device, old_app, old_path, old_icon) = match row {
                 Some(v) => v,
                 None => return Ok(false),
             };
 
+            // 来源/设备只在「本地捕获条目」上改写。
+            // 远端(origin=1,含即时互传/手动推送)条目的发送方是另一台设备,
+            // 本机之后再复制到相同内容不能把发送方改成自己 —— 否则互传页
+            // 会把「小米 14 发来的图」显示成「GIGA-XXCCBB(本机)发来的」。
+            let is_local_origin = origin == ORIGIN_LOCAL as i64;
+
             // 与 UPDATE 中的 COALESCE 语义保持一致:传入 None 表示"保留原值",
             // 因此只有传入非空且与旧值不同时,才算真的改动了检索串来源。
-            let blobs_need_refresh = changed(device_name, old_device.as_deref())
-                || changed(source_app_name, old_app.as_deref())
-                || changed(source_app_path, old_path.as_deref())
-                || changed(source_app_icon, old_icon.as_deref());
+            let blobs_need_refresh = is_local_origin
+                && (changed(device_name, old_device.as_deref())
+                    || changed(source_app_name, old_app.as_deref())
+                    || changed(source_app_path, old_path.as_deref())
+                    || changed(source_app_icon, old_icon.as_deref()));
 
             tx.execute(
                 "UPDATE entries SET
-                    created_at = ?1,
-                    device_id = ?2,
-                    device_name = ?3,
-                    source_app_name = COALESCE(?4, source_app_name),
-                    source_app_path = COALESCE(?5, source_app_path),
-                    source_app_icon = COALESCE(?6, source_app_icon)
+                    created_at = CASE WHEN origin = 2 OR source_app_name IN ('即时互传', '手动推送')
+                        THEN created_at ELSE ?1 END,
+                    device_id = CASE WHEN origin = 0 THEN ?2 ELSE device_id END,
+                    device_name = CASE WHEN origin = 0 THEN ?3 ELSE device_name END,
+                    source_app_name = CASE WHEN origin = 0 THEN COALESCE(?4, source_app_name) ELSE source_app_name END,
+                    source_app_path = CASE WHEN origin = 0 THEN COALESCE(?5, source_app_path) ELSE source_app_path END,
+                    source_app_icon = CASE WHEN origin = 0 THEN COALESCE(?6, source_app_icon) ELSE source_app_icon END
                  WHERE id = ?7",
                 params![
                     created_at_ticks,
@@ -449,10 +461,94 @@ impl HistoryStore {
             let mut stmt = inner.conn.prepare(
                 "SELECT id, server_id, type, text, image_path, image_ref, device_id, device_name, \
                  created_at, origin, starred, content_hash, source_app_name, source_app_path, \
-                 source_app_icon, remark, html, file_paths FROM entries \
+                 source_app_icon, remark, html, file_paths, oversized FROM entries \
                  WHERE content_hash = ?1 ORDER BY created_at DESC LIMIT 1",
             )?;
             stmt.query_row(params![content_hash], read_item).optional()
+        })
+    }
+
+    /// 按服务端 ID 查询本地条目(远端推送/补齐去重)。
+    pub fn find_by_id(&self, id: i64) -> Result<Option<HistoryItem>, rusqlite::Error> {
+        self.with_inner(|inner| {
+            inner.conn.query_row(
+                "SELECT id, server_id, type, text, image_path, image_ref, device_id, device_name,
+                 created_at, origin, starred, content_hash, source_app_name, source_app_path,
+                 source_app_icon, remark, html, file_paths, oversized FROM entries WHERE id = ?1",
+                params![id], read_item,
+            ).optional()
+        })
+    }
+
+    /// 按服务端 ID 查询本地条目(远端推送/补齐去重)。
+    pub fn find_by_server_id(&self, server_id: i64) -> Result<Option<HistoryItem>, rusqlite::Error> {
+        self.with_inner(|inner| {
+            let mut stmt = inner.conn.prepare(
+                "SELECT id, server_id, type, text, image_path, image_ref, device_id, device_name, \
+                 created_at, origin, starred, content_hash, source_app_name, source_app_path, \
+                 source_app_icon, remark, html, file_paths, oversized FROM entries \
+                 WHERE server_id = ?1 LIMIT 1",
+            )?;
+            stmt.query_row(params![server_id], read_item).optional()
+        })
+    }
+
+    /// 用服务端记录恢复消息的真实发送方(仅限互传/手动推送条目)。
+    ///
+    /// 历史遗留:本机复制到与远端互传相同的内容时,旧的 `touch_by_hash`
+    /// 会把 device_id/device_name 改成本机,导致互传页把对方消息标成本机名字。
+    /// 连接服务器后按 server_id 对账,以服务端为准修正。
+    pub fn set_device_by_server_id(
+        &self,
+        server_id: i64,
+        device_id: &str,
+        device_name: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        if device_id.trim().is_empty() {
+            return Ok(());
+        }
+        self.with_inner(|inner| {
+            let conn = &mut inner.conn;
+            let tx = conn.transaction()?;
+            let id: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM entries WHERE server_id = ?1
+                       AND (origin = 2 OR source_app_name IN ('即时互传', '手动推送'))
+                       AND device_id <> ?2 LIMIT 1",
+                    params![server_id, device_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let Some(id) = id else { return Ok(()) };
+            tx.execute(
+                "UPDATE entries SET device_id = ?1, device_name = ?2 WHERE id = ?3",
+                params![device_id, device_name, id],
+            )?;
+            refresh_search_blobs(&tx, id)?;
+            tx.commit()?;
+            Ok(())
+        })
+    }
+
+    /// 互传聊天消息(文本/图片,本端主动发送或远端推送),新→旧。
+    ///
+    /// 直接在 SQL 层筛选,避免先取最近 N 条全部历史再内存过滤时,
+    /// 聊天消息被大量普通剪贴板记录挤出窗口。
+    pub fn query_chat(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<HistoryItem>, rusqlite::Error> {
+        self.with_inner(|inner| {
+            let mut stmt = inner.conn.prepare(
+                "SELECT id, server_id, type, text, image_path, image_ref, device_id, device_name, \
+                 created_at, origin, starred, content_hash, source_app_name, source_app_path, \
+                 source_app_icon, remark, html, file_paths, oversized FROM entries \
+                 WHERE type IN ('Text', 'Image') \
+                   AND (origin = 2 OR source_app_name IN ('即时互传', '手动推送')) \
+                 ORDER BY created_at DESC LIMIT ?1",
+            )?;
+            let rows = stmt.query_map(params![limit], read_item)?;
+            rows.collect()
         })
     }
 
@@ -499,38 +595,165 @@ impl HistoryStore {
         })
     }
 
-    /// 为缺图标的存量条目回填来源应用图标(extractor 由调用方提供,失败留空)。
-    /// 返回回填条数。启动时执行一次即可。
-    pub fn backfill_source_icons(
-        &self,
-        extract: impl Fn(&str) -> Option<String>,
-    ) -> Result<usize, rusqlite::Error> {
+    /// 缺来源图标的存量条目(短锁读取,图标提取由调用方在锁外完成)。
+    pub fn entries_missing_source_icon(&self) -> Result<Vec<(i64, String)>, rusqlite::Error> {
         self.with_inner(|inner| {
-            let rows: Vec<(i64, String)> = {
-                let mut stmt = inner.conn.prepare(
-                    "SELECT id, source_app_path FROM entries                      WHERE source_app_icon IS NULL AND source_app_path IS NOT NULL",
-                )?;
-                let mapped = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
-                mapped.collect::<Result<Vec<_>, _>>()?
-            };
-            let mut count = 0usize;
-            for (id, exe_path) in rows {
-                if let Some(icon) = extract(&exe_path) {
-                    inner.conn.execute(
-                        "UPDATE entries SET source_app_icon = ?1 WHERE id = ?2",
-                        params![icon, id],
-                    )?;
-                    count += 1;
-                }
-            }
-            Ok(count)
+            let mut stmt = inner.conn.prepare(
+                "SELECT id, source_app_path FROM entries
+                 WHERE source_app_icon IS NULL AND source_app_path IS NOT NULL",
+            )?;
+            let mapped = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            mapped.collect::<Result<Vec<_>, _>>()
         })
+    }
+
+    /// 回填单条来源图标(短锁写入)。
+    pub fn set_source_icon(&self, id: i64, icon: &str) -> Result<usize, rusqlite::Error> {
+        self.with_inner(|inner| {
+            inner.conn.execute(
+                "UPDATE entries SET source_app_icon = ?1 WHERE id = ?2",
+                params![icon, id],
+            )
+        })
+    }
+
+    /// 本地已同步条目的最大 server_id(增量补齐远端历史的起点)。
+    pub fn max_server_id(&self) -> i64 {
+        self.with_inner(|inner| {
+            inner.conn.query_row(
+                "SELECT COALESCE(MAX(server_id), 0) FROM entries",
+                [],
+                |r| r.get(0),
+            )
+        })
+        .unwrap_or(0)
     }
 
     pub fn delete(&self, id: i64) -> Result<(), rusqlite::Error> {
         self.with_inner(|inner| {
-            inner.conn.execute("DELETE FROM entries WHERE id = ?1", params![id])?;
+            let tx = inner.conn.transaction()?;
+            tx.execute("INSERT OR IGNORE INTO chat_deleted_entries (server_id)
+                SELECT server_id FROM entries WHERE id = ?1 AND server_id IS NOT NULL
+                AND type IN ('Text', 'Image') AND (origin = 2 OR source_app_name IN ('即时互传', '手动推送'))", params![id])?;
+            tx.execute("DELETE FROM entries WHERE id = ?1", params![id])?;
+            tx.commit()
+        })
+    }
+
+    pub fn repair_image_cache(&self, content_hash: &str, path: &str, oversized: bool) -> Result<(), rusqlite::Error> {
+        self.with_inner(|inner| {
+            inner.conn.execute("UPDATE entries SET image_path = ?1, oversized = ?2
+                WHERE content_hash = ?3 AND type = 'Image'", params![path, oversized, content_hash])?;
             Ok(())
+        })
+    }
+
+    pub fn restore_remote_image_cache(&self, server_id: i64, content_hash: &str, path: &str) -> Result<(), rusqlite::Error> {
+        self.with_inner(|inner| {
+            inner.conn.execute("UPDATE entries SET image_path = ?1, content_hash = ?2
+                WHERE server_id = ?3 AND type = 'Image'", params![path, content_hash, server_id])?;
+            Ok(())
+        })
+    }
+
+    pub fn is_chat_deleted(&self, server_id: i64) -> Result<bool, rusqlite::Error> {
+        self.with_inner(|inner| inner.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM chat_deleted_entries WHERE server_id = ?1)",
+            params![server_id], |row| row.get(0),
+        ))
+    }
+
+    /// File transfers have their own cache and never become clipboard entries.
+    pub fn cache_transfer_file(&self, id: &str, payload: &serde_json::Value) -> Result<(), rusqlite::Error> {
+        if id.is_empty() { return Ok(()); }
+        self.with_inner(|inner| {
+            let tx = inner.conn.transaction()?;
+            tx.execute(
+                "INSERT INTO transfer_files (file_id, payload, received_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(file_id) DO UPDATE SET payload = excluded.payload",
+                params![id, payload.to_string(), now_ticks()],
+            )?;
+            tx.execute("DELETE FROM transfer_files WHERE file_id IN
+                (SELECT file_id FROM transfer_files ORDER BY received_at DESC LIMIT -1 OFFSET 200)", [])?;
+            tx.commit()
+        })
+    }
+
+    pub fn query_transfer_files(&self) -> Result<Vec<serde_json::Value>, rusqlite::Error> {
+        self.with_inner(|inner| {
+            let mut stmt = inner.conn.prepare("SELECT payload, received_at FROM transfer_files ORDER BY received_at")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+            let mut files = Vec::new();
+            for row in rows {
+                let (payload, received_at) = row?;
+                if let Ok(mut file) = serde_json::from_str::<serde_json::Value>(&payload) {
+                    file["receivedAt"] = ticks_to_millis(received_at).into();
+                    files.push(file);
+                }
+            }
+            Ok(files)
+        })
+    }
+
+    pub fn delete_transfer_file(&self, id: &str) -> Result<(), rusqlite::Error> {
+        self.with_inner(|inner| { inner.conn.execute("DELETE FROM transfer_files WHERE file_id = ?1", params![id])?; Ok(()) })
+    }
+
+    pub fn clear_transfer_files(&self) -> Result<usize, rusqlite::Error> {
+        self.with_inner(|inner| inner.conn.execute("DELETE FROM transfer_files", []))
+    }
+
+    /// 清空互传会话记录(仅本机):删除「即时互传/手动推送」的文本与图片条目。
+    /// 返回删除条数。仍被其它条目引用的图片文件会被保留。
+    pub fn clear_chat(&self) -> Result<usize, rusqlite::Error> {
+        self.with_inner(|inner| {
+            let conn = &mut inner.conn;
+            let tx = conn.transaction()?;
+            const CHAT_WHERE: &str =
+                "type IN ('Text', 'Image') AND (origin = 2 OR source_app_name IN ('即时互传', '手动推送'))";
+            tx.execute(&format!("INSERT OR IGNORE INTO chat_deleted_entries (server_id)
+                SELECT server_id FROM entries WHERE server_id IS NOT NULL AND {CHAT_WHERE}"), [])?;
+
+            let doomed_paths: Vec<String> = {
+                let mut stmt = tx.prepare(&format!(
+                    "SELECT image_path FROM entries WHERE image_path IS NOT NULL AND {CHAT_WHERE}"
+                ))?;
+                let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+
+            let removed = tx.execute(&format!("DELETE FROM entries WHERE {CHAT_WHERE}"), [])?;
+
+            // 共享同一图片文件的其它条目仍存在时不要误删文件。
+            let remaining: std::collections::HashSet<String> = {
+                let mut stmt =
+                    tx.prepare("SELECT image_path FROM entries WHERE image_path IS NOT NULL")?;
+                let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()?.into_iter().collect()
+            };
+            for p in doomed_paths {
+                if !remaining.contains(&p) {
+                    let _ = std::fs::remove_file(p);
+                }
+            }
+
+            tx.commit()?;
+            Ok(removed)
+        })
+    }
+
+    /// 互传会话里已同步条目的最大 server_id(清空时记录水位,避免再次补齐)。
+    pub fn max_chat_server_id(&self) -> Result<Option<i64>, rusqlite::Error> {
+        self.with_inner(|inner| {
+            let v = inner.conn.query_row(
+                "SELECT MAX(server_id) FROM entries
+                 WHERE server_id IS NOT NULL
+                   AND type IN ('Text', 'Image')
+                   AND (origin = 2 OR source_app_name IN ('即时互传', '手动推送'))",
+                [],
+                |r| r.get::<_, Option<i64>>(0),
+            )?;
+            Ok(v)
         })
     }
 
@@ -636,6 +859,10 @@ fn open_connection(db_path: &Path) -> Result<Connection, rusqlite::Error> {
 
 /// 建表 + 兼容迁移。
 fn ensure_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS transfer_files (
+        file_id TEXT PRIMARY KEY, payload TEXT NOT NULL, received_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS chat_deleted_entries (server_id INTEGER PRIMARY KEY);")?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS entries (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -664,6 +891,7 @@ fn ensure_schema(conn: &Connection) -> Result<(), rusqlite::Error> {
     ensure_column(conn, "file_paths", "TEXT")?;
     ensure_column(conn, "pinyin_blob", "TEXT")?;
     ensure_column(conn, "initials_blob", "TEXT")?;
+    ensure_column(conn, "oversized", "INTEGER NOT NULL DEFAULT 0")?;
     backfill_content_hashes(conn)?;
     backfill_search_blobs(conn)?;
     Ok(())
@@ -852,6 +1080,7 @@ fn backfill_search_blobs(conn: &Connection) -> Result<(), rusqlite::Error> {
             origin: 0,
             starred: false,
             remark,
+            oversized: false,
         });
         let (py, ini) = build_search_blobs(&source);
         conn.execute(
@@ -899,6 +1128,7 @@ fn refresh_search_blobs(conn: &Connection, id: i64) -> Result<(), rusqlite::Erro
         origin: 0,
         starred: false,
         remark,
+        oversized: false,
     });
     let (py, ini) = build_search_blobs(&source);
     conn.execute(
@@ -1063,6 +1293,7 @@ fn read_item(r: &rusqlite::Row<'_>) -> Result<HistoryItem, rusqlite::Error> {
         remark: r.get(15)?,
         html: r.get(16)?,
         file_paths_json: r.get(17)?,
+        oversized: r.get::<_, i64>(18)? != 0,
     })
 }
 
@@ -1100,6 +1331,7 @@ mod tests {
             origin: ORIGIN_LOCAL,
             starred: false,
             remark: None,
+            oversized: false,
         }
     }
 
@@ -1121,6 +1353,13 @@ mod tests {
         let mut c = item(TYPE_TEXT, Some("dup"), "PC-B");
         c.server_id = Some(42);
         assert_eq!(store.insert(&c).unwrap(), 0);
+        // 按 server_id 精确查找:补齐远端历史时用来跳过已存在条目
+        assert_eq!(
+            store.find_by_server_id(42).unwrap().and_then(|r| r.server_id),
+            Some(42)
+        );
+        assert_eq!(store.max_server_id(), 42);
+        assert!(store.find_by_server_id(999).unwrap().is_none());
 
         let rows = store.query(None, None, false, false, 500, 0).unwrap();
         assert_eq!(rows.len(), 2);
@@ -1135,6 +1374,81 @@ mod tests {
             .unwrap()
             .as_millis() as i64;
         assert!((rows[0].created_at_millis() - now_ms).abs() < 5_000);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn transfer_files_survive_reopen_without_becoming_clipboard_history() {
+        let dir = temp_dir("transfer-cache");
+        let file = serde_json::json!({"fileId":"file-a", "fileName":"report.bin"});
+        {
+            let store = HistoryStore::open(&dir).unwrap();
+            store.cache_transfer_file("file-a", &file).unwrap();
+            store.cache_transfer_file("file-a", &file).unwrap();
+            assert_eq!(store.count(), 0);
+            assert_eq!(store.query_transfer_files().unwrap().len(), 1);
+        }
+        let store = HistoryStore::open(&dir).unwrap();
+        let files = store.query_transfer_files().unwrap();
+        assert_eq!(files[0]["fileId"], file["fileId"]);
+        assert!(files[0]["receivedAt"].as_i64().unwrap() > 0);
+        store.delete_transfer_file("file-a").unwrap();
+        assert!(store.query_transfer_files().unwrap().is_empty());
+        store.cache_transfer_file("file-b", &serde_json::json!({"fileId":"file-b"})).unwrap();
+        assert_eq!(store.clear_transfer_files().unwrap(), 1);
+    }
+
+    #[test]
+    fn id_lookup_works_beyond_the_query_page_and_preserves_oversized() {
+        let dir = temp_dir("id-lookup");
+        let store = HistoryStore::open(&dir).unwrap();
+        store.set_max_entries(1000);
+        let mut first = item(TYPE_IMAGE, None, "PC");
+        first.oversized = true;
+        let id = store.insert(&first).unwrap();
+        for n in 0..505 {
+            let row = item(TYPE_TEXT, Some(&format!("row-{n}")), "PC");
+            store.insert(&row).unwrap();
+        }
+        assert!(store.find_by_id(id).unwrap().unwrap().oversized);
+    }
+
+    #[test]
+    fn query_chat_includes_remote_text_and_excludes_local_capture() {
+        let dir = temp_dir("chat-query");
+        let store = HistoryStore::open(&dir).unwrap();
+
+        // 本机普通剪贴板捕获:不应进入互传页
+        store
+            .insert(&item(TYPE_TEXT, Some("local clipboard"), "PC-A"))
+            .unwrap();
+
+        // 普通剪贴板同步的远端文本:不是互传消息,不应进入互传页
+        let mut remote = item(TYPE_TEXT, Some("remote message"), "PC-B");
+        remote.origin = ORIGIN_REMOTE;
+        remote.server_id = Some(9001);
+        store.insert(&remote).unwrap();
+
+        // 本机主动互传:应进入互传页
+        let mut manual = item(TYPE_TEXT, Some("manual message"), "PC-A");
+        manual.origin = ORIGIN_MANUAL;
+        store.insert(&manual).unwrap();
+
+        let rows = store.query_chat(50).unwrap();
+        let texts: Vec<_> = rows.iter().filter_map(|r| r.text.as_deref()).collect();
+        assert!(texts.contains(&"manual message"));
+        assert!(!texts.contains(&"remote message"));
+        assert!(!texts.contains(&"local clipboard"));
+
+        // 互传图片(isManual=true → source_app_name=即时互传)也必须出现在会话里
+        let mut image = item(TYPE_IMAGE, Some("clipboard.png"), "PC-B");
+        image.origin = ORIGIN_REMOTE;
+        image.server_id = Some(9002);
+        image.source_app_name = Some("即时互传".into());
+        image.image_path = Some("C:\\cache\\peer.png".into());
+        store.insert(&image).unwrap();
+        let rows = store.query_chat(50).unwrap();
+        assert!(rows.iter().any(|r| r.entry_type == TYPE_IMAGE));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1164,6 +1478,114 @@ mod tests {
         assert_eq!(found.id, id);
         assert_eq!(found.server_id, Some(7));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn touch_by_hash_preserves_remote_sender() {
+        let dir = temp_dir("touch-remote");
+        let store = HistoryStore::open(&dir).unwrap();
+
+        // 远端互传图片:发送方是手机
+        let mut remote = item(TYPE_IMAGE, Some("clipboard.png"), "手机");
+        remote.device_id = "phone-id".into();
+        remote.origin = ORIGIN_REMOTE;
+        remote.source_app_name = Some("即时互传".into());
+        remote.image_path = Some("C:\\cache\\peer.png".into());
+        remote.content_hash = Some("h-remote".into());
+        remote.server_id = Some(12355);
+        store.insert(&remote).unwrap();
+
+        // 本机随后复制到同内容:去重置顶不能把发送方改成本机
+        let touched = store
+            .touch_by_hash("h-remote", None, "self-id", Some("GIGA-XXCCBB"), now_ticks(), Some("ChatGPT"), None, None)
+            .unwrap();
+        assert!(touched);
+
+        let rows = store.query(None, None, false, false, 500, 0).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].device_id, "phone-id", "发送设备不能被本机覆盖");
+        assert_eq!(rows[0].device_name.as_deref(), Some("手机"));
+        assert_eq!(rows[0].source_app_name.as_deref(), Some("即时互传"));
+        assert_eq!(rows[0].created_at_ticks, remote.created_at_ticks, "复制互传消息不改写发送时间");
+        store.repair_image_cache("h-remote", "C:\\cache\\restored.png", true).unwrap();
+        let repaired = store.find_by_server_id(12355).unwrap().unwrap();
+        assert_eq!(repaired.image_path.as_deref(), Some("C:\\cache\\restored.png"));
+        assert!(repaired.oversized);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn set_device_by_server_id_repairs_manual_sender() {
+        let dir = temp_dir("repair-sender");
+        let store = HistoryStore::open(&dir).unwrap();
+        let mut remote = item(TYPE_IMAGE, Some("clipboard.png"), "GIGA-XXCCBB");
+        remote.device_id = "self-id".into();
+        remote.origin = ORIGIN_REMOTE;
+        remote.source_app_name = Some("即时互传".into());
+        remote.server_id = Some(12507);
+        store.insert(&remote).unwrap();
+
+        store
+            .set_device_by_server_id(12507, "phone-id", Some("小米 14"))
+            .unwrap();
+        let fixed = store.find_by_server_id(12507).unwrap().unwrap();
+        assert_eq!(fixed.device_id, "phone-id");
+        assert_eq!(fixed.device_name.as_deref(), Some("小米 14"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn clear_chat_keeps_normal_clipboard() {
+        let dir = temp_dir("clear-chat");
+        let store = HistoryStore::open(&dir).unwrap();
+
+        // 普通剪贴板记录:清空互传不受影响
+        store
+            .insert(&item(TYPE_TEXT, Some("local clipboard"), "PC-A"))
+            .unwrap();
+
+        // 互传文本
+        let mut manual = item(TYPE_TEXT, Some("manual message"), "PC-A");
+        manual.origin = ORIGIN_MANUAL;
+        store.insert(&manual).unwrap();
+
+        // 互传图片
+        let mut image = item(TYPE_IMAGE, Some("clipboard.png"), "手机");
+        image.origin = ORIGIN_REMOTE;
+        image.source_app_name = Some("即时互传".into());
+        image.server_id = Some(12355);
+        store.insert(&image).unwrap();
+
+        let removed = store.clear_chat().unwrap();
+        assert_eq!(removed, 2);
+        assert!(store.is_chat_deleted(12355).unwrap());
+        let rows = store.query(None, None, false, false, 500, 0).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].text.as_deref(), Some("local clipboard"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn deleted_chat_server_ids_survive_reopen_without_hiding_clipboard_entries() {
+        let dir = temp_dir("deleted-chat");
+        {
+            let store = HistoryStore::open(&dir).unwrap();
+            let mut manual = item(TYPE_TEXT, Some("chat"), "phone");
+            manual.origin = ORIGIN_REMOTE;
+            manual.source_app_name = Some("即时互传".into());
+            manual.server_id = Some(42);
+            let id = store.insert(&manual).unwrap();
+            store.delete(id).unwrap();
+            assert!(store.find_by_server_id(42).unwrap().is_none());
+            let mut clipboard = item(TYPE_TEXT, Some("clipboard"), "phone");
+            clipboard.origin = ORIGIN_REMOTE;
+            clipboard.server_id = Some(43);
+            let id = store.insert(&clipboard).unwrap();
+            store.delete(id).unwrap();
+        }
+        let store = HistoryStore::open(&dir).unwrap();
+        assert!(store.is_chat_deleted(42).unwrap());
+        assert!(!store.is_chat_deleted(43).unwrap());
     }
 
     #[test]

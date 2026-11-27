@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { ExternalLink, Copy, X } from "lucide-react";
+import { Icon } from "../icons";
 import { smartExec, hideToast, type SmartAction } from "../ipc/chat";
+import { subscribeEvent } from "../ipc/events";
 
 /// 智能直达 toast:右下角非激活卡片,6s 倒计时后自动隐藏(后端兜底)
 export default function LinkToast() {
@@ -8,19 +9,10 @@ export default function LinkToast() {
   const [countdown, setCountdown] = useState(6);
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void (async () => {
-      try {
-        const { listen } = await import("@tauri-apps/api/event");
-        unlisten = await listen<SmartAction>("smart-action", (e) => {
-          setAction(e.payload);
-          setCountdown(6);
-        });
-      } catch {
-        /* 浏览器环境 */
-      }
-    })();
-    return () => unlisten?.();
+    return subscribeEvent<SmartAction>("smart-action", (e) => {
+      setAction(e.payload);
+      setCountdown(6);
+    });
   }, []);
 
   // 倒计时 → 隐藏
@@ -107,7 +99,7 @@ export default function LinkToast() {
           }}
           style={{ border: "none", background: "transparent", cursor: "pointer", color: "var(--ant-color-text-tertiary, #999)", padding: 2, display: "flex" }}
         >
-          <X size={14} />
+          <Icon name="x" size={14} />
         </button>
       </div>
 
@@ -185,10 +177,10 @@ export default function LinkToast() {
             cursor: "pointer",
           }}
         >
-          <ExternalLink size={13} />
+          <Icon name="externalLink" size={13} />
           {action.primary.kind === "copy_text" ? (
             <>
-              <Copy size={12} /> {action.primary.arg.slice(0, 18)}
+              <Icon name="copy" size={12} /> {action.primary.arg.slice(0, 18)}
             </>
           ) : (
             action.primary.kind === "open_url"
@@ -218,7 +210,7 @@ export default function LinkToast() {
               cursor: "pointer",
             }}
           >
-            {action.secondary.kind === "copy_text" ? <Copy size={12} /> : <ExternalLink size={12} />}
+            {action.secondary.kind === "copy_text" ? <Icon name="copy" size={12} /> : <Icon name="externalLink" size={12} />}
             {action.secondary.kind === "copy_text" ? "复制" : "终端"}
           </button>
         )}

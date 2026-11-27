@@ -9,13 +9,14 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use windows::core::{PCWSTR, PWSTR};
 use windows::Win32::Foundation::{HANDLE, HMODULE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::DataExchange::{
     AddClipboardFormatListener, CloseClipboard, GetClipboardData, GetClipboardOwner,
-    GetClipboardSequenceNumber, IsClipboardFormatAvailable, OpenClipboard,
+    GetClipboardSequenceNumber, GetOpenClipboardWindow, IsClipboardFormatAvailable, OpenClipboard,
     RegisterClipboardFormatW,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -38,11 +39,67 @@ const POLL_MS: u64 = 2000;
 /// OpenClipboard 连续失败上限,超过后进入熔断退避。
 const OPEN_FAIL_CIRCUIT: usize = 6;
 
+/// 在途捕获数上限:GetClipboardData 是跨进程调用,剪贴板 owner(如远控软件)
+/// 延迟渲染挂起时会永久阻塞执行线程。卡死的线程无法安全强杀(会带着已打开的
+/// 剪贴板句柄泄漏),只能限制在途数量防堆积。
+const MAX_CONCURRENT_CAPTURES: usize = 3;
+/// 剪贴板被持续持锁多久后判定为"被独占"并提示用户(毫秒)。
+const HELD_BLOCK_THRESHOLD_MS: u128 = 10_000;
+/// 看门狗检查间隔。
+const WATCHDOG_INTERVAL_MS: u64 = 5_000;
+/// 单次捕获超过该时长视为卡死(秒)。
+const CAPTURE_STUCK_SECS: u64 = 15;
+
 static MONITOR_TX: OnceLock<Sender<u32>> = OnceLock::new();
 static LAST_CAPTURED_SEQ: AtomicU32 = AtomicU32::new(0);
+/// Only timed-out work may overlap with a newer clipboard sequence.
+static CAPTURES: Mutex<Vec<CaptureTask>> = Mutex::new(Vec::new());
+
+struct CaptureTask {
+    seq: u32,
+    started: Instant,
+    stage: &'static str,
+    warned: bool,
+}
+
+fn reserve_capture(tasks: &mut Vec<CaptureTask>, seq: u32, now: Instant) -> bool {
+    if tasks.len() >= MAX_CONCURRENT_CAPTURES
+        || tasks.iter().any(|t| t.seq == seq || now.duration_since(t.started).as_secs() < CAPTURE_STUCK_SECS)
+    {
+        return false;
+    }
+    tasks.push(CaptureTask { seq, started: now, stage: "starting", warned: false });
+    true
+}
+
+pub fn capture_stage(seq: u32, stage: &'static str) {
+    if let Some(task) = CAPTURES.lock().unwrap_or_else(|p| p.into_inner()).iter_mut().find(|t| t.seq == seq) {
+        task.stage = stage;
+    }
+}
 /// 熔断标志:连续失败后暂停捕获,直到下一次序列号变化
 static CIRCUIT_OPEN: AtomicBool = AtomicBool::new(false);
+/// 熔断解除时刻:到期后允许探测一次。不能只靠序列号变化解除——
+/// 熔断时 capture() 直接返回,读剪贴板成功路径永远走不到。
+static CIRCUIT_RETRY_AT: Mutex<Option<Instant>> = Mutex::new(None);
 static OPEN_FAILS: AtomicU32 = AtomicU32::new(0);
+/// 当前是否有人长期持有剪贴板锁。
+static HELD_SINCE: Mutex<Option<Instant>> = Mutex::new(None);
+/// 本次"被独占"是否已经提示过(仅在状态翻转时通知一次)。
+static HELD_ANNOUNCED: AtomicBool = AtomicBool::new(false);
+
+/// 剪贴板健康告警(由平台层推给 UI/托盘)。
+pub enum ClipboardAlert {
+    /// 被某个进程持续独占。
+    Blocked { holder: Option<String> },
+    /// 从独占状态恢复。
+    Recovered,
+    /// 单次捕获卡死超过阈值(无法强杀线程,只能告警)。
+    CaptureStuck { secs: u64 },
+}
+
+type AlertHook = Arc<dyn Fn(ClipboardAlert) + Send + Sync + 'static>;
+static ALERT_HOOK: OnceLock<AlertHook> = OnceLock::new();
 
 const CLASS_NAME: &[u16] = &[
     b'N' as u16, b'e' as u16, b'x' as u16, b'C' as u16, b'l' as u16, b'i' as u16, b'p' as u16,
@@ -51,10 +108,12 @@ const CLASS_NAME: &[u16] = &[
 
 /// 启动监听线程 + 捕获工作线程。`capture(seq)` 在序列号稳定后被调用
 /// (工作线程内;打开剪贴板、读取内容都在该线程,绝不占用 GUI 线程)。
-pub fn start<F>(capture: F) -> Result<(), String>
+pub fn start<F, A>(capture: F, alert: A) -> Result<(), String>
 where
     F: Fn(u32) + Send + Sync + 'static,
+    A: Fn(ClipboardAlert) + Send + Sync + 'static,
 {
+    let _ = ALERT_HOOK.set(Arc::new(alert));
     LAST_CAPTURED_SEQ
         .store(unsafe { GetClipboardSequenceNumber() }, Ordering::SeqCst);
     let (tx, rx) = std::sync::mpsc::channel::<u32>();
@@ -86,7 +145,96 @@ where
             }
         })
         .map_err(|e| e.to_string())?;
+
+    // 看门狗:独立后台线程。即使捕获线程/UI 线程被剪贴板调用挂住,
+    // 这里仍能检测到并提示"谁在占用剪贴板"。
+    std::thread::Builder::new()
+        .name("clipboard-watchdog".into())
+        .spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(WATCHDOG_INTERVAL_MS));
+            run_watchdog_tick();
+        })
+        .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn notify_alert(alert: ClipboardAlert) {
+    if let Some(hook) = ALERT_HOOK.get() {
+        let hook = hook.clone();
+        // Notification delivery may wait on application state; keep the watchdog independent.
+        let _ = std::thread::Builder::new().name("clipboard-alert".into()).spawn(move || hook(alert));
+    }
+}
+
+/// 看门狗单次检查:
+/// Probe lock availability and report each overdue capture with its current stage.
+fn run_watchdog_tick() {
+    // ---- 剪贴板持锁检测 ----
+    // 用"试开一次"判断是否被独占(与旧版 TryProbeClipboard 一致)。
+    // 注意不能只看 GetOpenClipboardWindow:无窗口进程(控制台/服务)持锁时它返回 NULL。
+    let held = unsafe {
+        if OpenClipboard(None).is_ok() {
+            let _ = CloseClipboard();
+            false
+        } else {
+            true
+        }
+    };
+    if held {
+        let mut since = HELD_SINCE.lock().unwrap_or_else(|p| p.into_inner());
+        if since.is_none() {
+            log::info!("剪贴板暂时不可打开(可能被其他程序占用),开始计时");
+        }
+        let started = *since.get_or_insert_with(Instant::now);
+        let held_ms = started.elapsed().as_millis();
+        drop(since);
+        if held_ms >= HELD_BLOCK_THRESHOLD_MS && !HELD_ANNOUNCED.swap(true, Ordering::SeqCst) {
+            // 打开熔断,让 capture() 暂时跳过跨进程读取;3 秒后自动探测恢复。
+            CIRCUIT_OPEN.store(true, Ordering::SeqCst);
+            *CIRCUIT_RETRY_AT
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) = Some(Instant::now() + Duration::from_secs(3));
+            let holder = unsafe { clipboard_owner_name() };
+            log::warn!(
+                "剪贴板被持续独占 {held_ms}ms,暂停捕获;持锁者={}",
+                holder.as_deref().unwrap_or("未知进程")
+            );
+            notify_alert(ClipboardAlert::Blocked { holder });
+        }
+    } else {
+        let was_held = HELD_SINCE
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+            .is_some();
+        if HELD_ANNOUNCED.swap(false, Ordering::SeqCst) {
+            log::info!("剪贴板已恢复可用,重新开始监听");
+            notify_alert(ClipboardAlert::Recovered);
+        } else if was_held {
+            log::debug!("剪贴板短暂争用已解除");
+        }
+    }
+
+    // ---- 捕获卡死检测 ----
+    let alerts: Vec<_> = {
+        let mut tasks = CAPTURES.lock().unwrap_or_else(|p| p.into_inner());
+        tasks.iter_mut().filter_map(|task| {
+            let secs = task.started.elapsed().as_secs();
+            if secs < CAPTURE_STUCK_SECS || task.warned { return None; }
+            task.warned = true;
+            Some((secs, task.stage))
+        }).collect()
+    };
+    for (secs, stage) in alerts {
+            let holder = unsafe { clipboard_owner_name() };
+            log::warn!(
+                "剪贴板看门狗触发: 阶段={stage}, 持续={secs}s, 持锁者={}",
+                holder.as_deref().unwrap_or("无")
+            );
+            notify_alert(ClipboardAlert::CaptureStuck {
+                secs,
+            });
+    }
 }
 
 unsafe fn run_listener_thread() {
@@ -145,24 +293,58 @@ unsafe extern "system" fn wnd_proc(
     DefWindowProcW(hwnd, msg, wparam, lparam)
 }
 
-fn run_capture_worker(rx: std::sync::mpsc::Receiver<u32>, capture: std::sync::Arc<impl Fn(u32)>) {
-    let mut last_scheduled = 0u32;
+fn run_capture_worker(
+    rx: std::sync::mpsc::Receiver<u32>,
+    capture: std::sync::Arc<impl Fn(u32) + Send + Sync + 'static>,
+) {
     loop {
         let seq = match rx.recv() {
             Ok(s) => s,
             Err(_) => return,
         };
-        if seq == last_scheduled || seq == LAST_CAPTURED_SEQ.load(Ordering::SeqCst) {
+        if seq == LAST_CAPTURED_SEQ.load(Ordering::SeqCst) {
             continue;
         }
-        last_scheduled = seq;
         // 去抖:等待 150ms 后序列号未变才捕获(连续复制时只取最后一次)
         std::thread::sleep(std::time::Duration::from_millis(DEBOUNCE_MS));
         if unsafe { GetClipboardSequenceNumber() } != seq {
             continue;
         }
+        // 捕获放短命线程执行:GetClipboardData 可能被挂起的延迟渲染 owner
+        // (远控软件)永久卡死,主循环绝不能被拖死。卡死线程留在内核等 owner
+        // 唤醒(强杀会泄漏已打开的剪贴板句柄),并发超限时跳过本次序列号。
+        if !reserve_capture(&mut CAPTURES.lock().unwrap_or_else(|p| p.into_inner()), seq, Instant::now()) {
+            continue;
+        }
+        let shot = capture.clone();
+        let spawn_result = std::thread::Builder::new()
+            .name("clipboard-capture-shot".into())
+            .spawn(move || {
+                // RAII:即便 capture() panic 也保证计数归还。否则计数只增不减,
+                // 累积到上限后所有捕获都被跳过 —— 表现为「复制再也不进剪贴板」。
+                struct ActiveGuard(u32);
+                impl Drop for ActiveGuard {
+                    fn drop(&mut self) {
+                        CAPTURES.lock().unwrap_or_else(|p| p.into_inner()).retain(|t| t.seq != self.0);
+                    }
+                }
+                let _guard = ActiveGuard(seq);
+                // 捕获线程内单独 catch:panic 不得让监听静默停摆
+                if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| shot(seq))).is_err() {
+                    log::error!("剪贴板捕获线程 panic(序列号 {seq}),已忽略本次内容");
+                }
+            });
+        if spawn_result.is_err() {
+            CAPTURES.lock().unwrap_or_else(|p| p.into_inner()).retain(|t| t.seq != seq);
+            log::error!("剪贴板捕获线程创建失败,跳过序列号 {seq}");
+        }
+    }
+}
+
+/// 标记序列号已成功处理(含按规则主动忽略的内容)。
+pub fn mark_captured(seq: u32) {
+    if seq != 0 && unsafe { GetClipboardSequenceNumber() } == seq {
         LAST_CAPTURED_SEQ.store(seq, Ordering::SeqCst);
-        capture(seq);
     }
 }
 
@@ -172,6 +354,16 @@ fn run_capture_worker(rx: std::sync::mpsc::Receiver<u32>, capture: std::sync::Ar
 ///
 /// 返回:(文本, HTML 片段, 文件路径列表, PNG 字节)
 pub unsafe fn read_clipboard() -> Result<(Option<String>, Option<String>, Vec<String>, Option<Vec<u8>>), ()> {
+    read_clipboard_with_status().0
+}
+
+/// 读取剪贴板,同时区分「打开失败」和「打开成功但没有可用格式」。
+/// 只有前者应计入熔断;空内容/未知格式是正常状态,不能连续六次就暂停监听。
+pub unsafe fn read_clipboard_with_status(
+) -> (
+    Result<(Option<String>, Option<String>, Vec<String>, Option<Vec<u8>>), ()>,
+    bool,
+) {
     let mut opened = false;
     for _ in 0..OPEN_FAIL_CIRCUIT {
         if OpenClipboard(None).is_ok() {
@@ -181,20 +373,58 @@ pub unsafe fn read_clipboard() -> Result<(Option<String>, Option<String>, Vec<St
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     if !opened {
-        return Err(());
+        return (Err(()), false);
     }
     let result = read_locked();
     let _ = CloseClipboard();
-    result
+    (result.decode(), true)
 }
 
-unsafe fn read_locked() -> Result<(Option<String>, Option<String>, Vec<String>, Option<Vec<u8>>), ()> {
+#[derive(Default)]
+struct ClipboardSnapshot {
+    files: Vec<String>,
+    png: Option<Vec<u8>>,
+    dib: Option<Vec<u8>>,
+    text: Option<Vec<u8>>,
+    html: Option<Vec<u8>>,
+}
+
+impl ClipboardSnapshot {
+    fn decode(self) -> Result<(Option<String>, Option<String>, Vec<String>, Option<Vec<u8>>), ()> {
+        if !self.files.is_empty() { return Ok((None, None, self.files, None)); }
+        if let Some(png) = self.png {
+            if image::load_from_memory(&png).is_ok() {
+                return Ok((None, None, Vec::new(), Some(png)));
+            }
+            log::warn!("剪贴板 PNG 数据损坏,尝试 DIB 格式");
+        }
+        if let Some(dib) = self.dib {
+            if let Ok(png) = super::writer::dib_to_png(&dib) {
+                return Ok((None, None, Vec::new(), Some(png)));
+            }
+        }
+        if let Some(bytes) = self.text {
+            let utf16: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            let text = String::from_utf16_lossy(&utf16).trim_end_matches('\0').to_string();
+            if !text.is_empty() {
+                let html = self.html.and_then(|bytes| String::from_utf8(bytes).ok())
+                    .and_then(|raw| crate::clipboard::html_format::get_static_fragment(raw.trim_end_matches('\0')));
+                return Ok((Some(text), html, Vec::new(), None));
+            }
+        }
+        Err(())
+    }
+}
+
+unsafe fn read_locked() -> ClipboardSnapshot {
+    let mut snapshot = ClipboardSnapshot::default();
     // 1. 文件(CF_HDROP):仅元数据
     if IsClipboardFormatAvailable(CF_HDROP.0 as u32).is_ok() {
         if let Ok(handle) = GetClipboardData(CF_HDROP.0 as u32) {
             let files = read_hdrop(HANDLE(handle.0));
             if !files.is_empty() {
-                return Ok((None, None, files, None));
+                snapshot.files = files;
+                return snapshot;
             }
         }
     }
@@ -202,63 +432,24 @@ unsafe fn read_locked() -> Result<(Option<String>, Option<String>, Vec<String>, 
     let png_fmt = register_png_format();
     if IsClipboardFormatAvailable(png_fmt).is_ok() {
         if let Ok(handle) = GetClipboardData(png_fmt) {
-            if let Some(png) = handle_bytes(handle) {
-                return Ok((None, None, Vec::new(), Some(png)));
-            }
+            snapshot.png = handle_bytes(handle);
         }
     }
     if IsClipboardFormatAvailable(CF_DIB.0 as u32).is_ok() {
         if let Ok(handle) = GetClipboardData(CF_DIB.0 as u32) {
-            if let Some(dib) = handle_bytes(handle) {
-                if let Ok(png) = super::writer::dib_to_png(&dib) {
-                    return Ok((None, None, Vec::new(), Some(png)));
-                }
-            }
+            snapshot.dib = handle_bytes(handle);
         }
     }
     // 3. 文本 + HTML
     if IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32).is_ok() {
         if let Ok(handle) = GetClipboardData(CF_UNICODETEXT.0 as u32) {
-            if let Some(bytes) = handle_bytes(handle) {
-                let utf16: Vec<u16> = bytes
-                    .chunks_exact(2)
-                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                    .collect();
-                let text = String::from_utf16_lossy(&utf16);
-                let text = text.trim_end_matches('\0').to_string();
-                if !text.is_empty() {
-                    let html = if IsClipboardFormatAvailable(html_format_id()).is_ok() {
-                        GetClipboardData(html_format_id())
-                            .ok()
-                            .and_then(|h| handle_bytes(h))
-                            .and_then(|bytes| {
-                                String::from_utf16_lossy(
-                                    &bytes
-                                        .chunks_exact(2)
-                                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                                        .collect::<Vec<u16>>(),
-                                )
-                                .strip_suffix('\0')
-                                .map(String::from)
-                                .or_else(|| {
-                                    Some(String::from_utf16_lossy(
-                                        &bytes
-                                            .chunks_exact(2)
-                                            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                                            .collect::<Vec<u16>>(),
-                                    ))
-                                })
-                            })
-                            .and_then(|raw| crate::clipboard::html_format::get_static_fragment(&raw))
-                    } else {
-                        None
-                    };
-                    return Ok((Some(text), html, Vec::new(), None));
-                }
+            snapshot.text = handle_bytes(handle);
+            if IsClipboardFormatAvailable(html_format_id()).is_ok() {
+                snapshot.html = GetClipboardData(html_format_id()).ok().and_then(|h| handle_bytes(h));
             }
         }
     }
-    Err(())
+    snapshot
 }
 
 unsafe fn handle_bytes(handle: HANDLE) -> Option<Vec<u8>> {
@@ -292,11 +483,16 @@ fn read_hdrop(handle: HANDLE) -> Vec<String> {
                 log::info!("剪贴板文件数超过上限,仅记录前 {} 项", crate::clipboard::files_meta::MAX_FILES);
                 break;
             }
+            // len 是不含结尾 '\0' 的字符数。
+            // 注意:windows crate 把 slice.len() 直接当作 Win32 的 cch 参数传入,
+            // 而 cch 指的是「缓冲区能容纳的字符数(含结尾 '\0')」。若按 len 分配,
+            // 缓冲区比需要少一个 u16,Win32 只能写入 len-1 个字符 ——
+            // 表现为路径最后一个字符被吃掉(tsconfig.json → tsconfig.jso)。
             let len = DragQueryFileW(hdrop, i, None) as usize;
             if len == 0 {
                 continue;
             }
-            let mut buf = vec![0u16; len];
+            let mut buf = vec![0u16; len + 1];
             let n = DragQueryFileW(hdrop, i, Some(&mut buf)) as usize;
             if n > 0 {
                 out.push(String::from_utf16_lossy(&buf[..n]));
@@ -361,28 +557,84 @@ pub fn should_filter_process(process_path: Option<&str>, custom: &[String]) -> b
     })
 }
 
+/// 熔断判定:冷却期结束后放行一次探测;成功归零,失败重新进入冷却。
+pub fn circuit_open() -> bool {
+    if !CIRCUIT_OPEN.load(Ordering::SeqCst) {
+        return false;
+    }
+    let retry_at = *CIRCUIT_RETRY_AT
+        .lock()
+        .unwrap_or_else(|p| p.into_inner());
+    if retry_at.is_some_and(|t| Instant::now() >= t) {
+        CIRCUIT_OPEN.store(false, Ordering::SeqCst);
+        return false;
+    }
+    true
+}
+
 /// 熔断记账:OpenClipboard 失败 → 累加,连续超限暂停捕获;成功 → 归零。
 pub fn note_open_result(ok: bool) {
     if ok {
         OPEN_FAILS.store(0, Ordering::SeqCst);
         CIRCUIT_OPEN.store(false, Ordering::SeqCst);
+        *CIRCUIT_RETRY_AT
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = None;
     } else {
         let n = OPEN_FAILS.fetch_add(1, Ordering::SeqCst) + 1;
         if n >= OPEN_FAIL_CIRCUIT as u32 {
             CIRCUIT_OPEN.store(true, Ordering::SeqCst);
-            log::warn!("剪贴板连续打开失败 {n} 次,暂停捕获直到内容变化(可能被远程工具独占)");
+            *CIRCUIT_RETRY_AT
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) =
+                Some(Instant::now() + Duration::from_secs(3));
+            let owner = unsafe { clipboard_owner_name() }
+                .unwrap_or_else(|| "未知进程".into());
+            log::warn!("剪贴板连续读取失败 {n} 次,暂停捕获 3 秒后自动重试;占用者: {owner}");
         }
     }
 }
 
-/// 熔断状态下是否跳过本次捕获。
-pub fn circuit_open() -> bool {
-    CIRCUIT_OPEN.load(Ordering::SeqCst)
+/// 查询当前持有剪贴板(OpenClipboard 后未 Close)的窗口所属进程路径。
+/// 仅诊断用:OpenClipboard 失败时定位是哪个程序独占。
+pub unsafe fn clipboard_owner_name() -> Option<String> {
+    let hwnd = GetOpenClipboardWindow().ok()?;
+    let mut pid = 0u32;
+    GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    if pid == 0 {
+        return Some("PID 未知".into());
+    }
+    let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+    let mut buf = [0u16; 1024];
+    let mut len = buf.len() as u32;
+    let ok = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len).is_ok();
+    let _ = windows::Win32::Foundation::CloseHandle(process);
+    if ok && len > 0 {
+        Some(String::from_utf16_lossy(&buf[..len as usize]))
+    } else {
+        Some(format!("PID {pid}"))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overdue_capture_does_not_block_a_new_sequence() {
+        let now = Instant::now();
+        let mut tasks = Vec::new();
+        assert!(reserve_capture(&mut tasks, 1, now));
+        assert!(!reserve_capture(&mut tasks, 2, now + Duration::from_secs(1)));
+        assert!(!reserve_capture(&mut tasks, 1, now + Duration::from_secs(16)));
+        assert!(reserve_capture(&mut tasks, 2, now + Duration::from_secs(16)));
+        tasks.retain(|task| task.seq != 1);
+        assert_eq!(tasks[0].seq, 2);
+        assert!(!reserve_capture(&mut tasks, 3, now + Duration::from_secs(17)));
+        assert!(reserve_capture(&mut tasks, 3, now + Duration::from_secs(32)));
+        assert!(reserve_capture(&mut tasks, 4, now + Duration::from_secs(48)));
+        assert!(!reserve_capture(&mut tasks, 5, now + Duration::from_secs(64)));
+    }
 
     #[test]
     fn filter_builtin() {
@@ -409,5 +661,21 @@ mod tests {
     #[test]
     fn filter_matches_substring_in_path() {
         assert!(should_filter_process(Some(r"C:\x\Parcecp\parsec.exe"), &[]));
+    }
+
+    #[test]
+    fn circuit_reopens_after_cooldown() {
+        // 冷却结束后必须放行探测,否则 capture() 永远走不到 note_open_result(true)。
+        for _ in 0..OPEN_FAIL_CIRCUIT {
+            note_open_result(false);
+        }
+        assert!(circuit_open());
+        *CIRCUIT_RETRY_AT
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
+        assert!(!circuit_open());
+        note_open_result(true);
+        assert!(!circuit_open());
+        assert_eq!(OPEN_FAILS.load(Ordering::SeqCst), 0);
     }
 }

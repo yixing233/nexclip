@@ -31,6 +31,8 @@ pub struct Settings {
     pub hotkey_topmost: String,
     /// light | dark | system
     pub theme_mode: String,
+    /// 图标库:lucide | tabler | phosphor | remix
+    pub icon_library: String,
     /// 窗口背景材质:Mica | MicaAlt | Acrylic
     pub backdrop_mode: String,
     /// 亚克力背景不透明度(0~1)
@@ -77,6 +79,18 @@ pub struct Settings {
     /// 剪贴板窗口尺寸记忆(0=未记忆)
     pub window_width: f64,
     pub window_height: f64,
+    /// 截图功能开关
+    pub screenshot_enabled: bool,
+    /// 截图全局热键
+    pub hotkey_screenshot: String,
+    /// 活屏快捷截图热键(无选区,直接复制)
+    pub hotkey_screenshot_screen: String,
+    /// 活动窗口快捷截图热键(无选区,直接复制)
+    pub hotkey_screenshot_window: String,
+    /// 剪贴板图片贴图
+    pub hotkey_pin: String,
+    /// 截图另存为的最近目录(空=默认)
+    pub screenshot_save_dir: String,
 }
 
 impl Default for Settings {
@@ -92,6 +106,7 @@ impl Default for Settings {
             hotkey_open_url: "Ctrl+Alt+O".into(),
             hotkey_topmost: "Ctrl+Alt+T".into(),
             theme_mode: "system".into(),
+            icon_library: "lucide".into(),
             backdrop_mode: "Mica".into(),
             backdrop_tint_opacity: 0.85,
             boot_start_enabled: true,
@@ -119,6 +134,12 @@ impl Default for Settings {
             storage_dir: String::new(),
             window_width: 0.0,
             window_height: 0.0,
+            screenshot_enabled: true,
+            hotkey_screenshot: "F1".into(),
+            hotkey_screenshot_screen: "Ctrl+Shift+F".into(),
+            hotkey_screenshot_window: "Ctrl+Shift+W".into(),
+            hotkey_pin: "F3".into(),
+            screenshot_save_dir: String::new(),
         }
     }
 }
@@ -219,6 +240,8 @@ pub struct SettingsDto {
     hotkey_topmost: Option<String>,
     #[serde(rename = "ThemeMode")]
     theme_mode: Option<String>,
+    #[serde(rename = "IconLibrary")]
+    icon_library: Option<String>,
     #[serde(rename = "BackdropMode")]
     backdrop_mode: Option<String>,
     #[serde(rename = "BackdropTintOpacity")]
@@ -275,6 +298,18 @@ pub struct SettingsDto {
     window_width: Option<f64>,
     #[serde(rename = "WindowHeight")]
     window_height: Option<f64>,
+    #[serde(rename = "ScreenshotEnabled")]
+    screenshot_enabled: Option<bool>,
+    #[serde(rename = "HotkeyScreenshot")]
+    hotkey_screenshot: Option<String>,
+    #[serde(rename = "HotkeyScreenshotScreen")]
+    hotkey_screenshot_screen: Option<String>,
+    #[serde(rename = "HotkeyScreenshotWindow")]
+    hotkey_screenshot_window: Option<String>,
+    #[serde(rename = "HotkeyPin")]
+    hotkey_pin: Option<String>,
+    #[serde(rename = "ScreenshotSaveDir")]
+    screenshot_save_dir: Option<String>,
 }
 
 fn dto_to_settings(dto: SettingsDto, mut s: Settings) -> Settings {
@@ -296,6 +331,7 @@ fn dto_to_settings(dto: SettingsDto, mut s: Settings) -> Settings {
     s.hotkey_open_url = dto.hotkey_open_url.unwrap_or(s.hotkey_open_url);
     s.hotkey_topmost = dto.hotkey_topmost.unwrap_or(s.hotkey_topmost);
     s.theme_mode = dto.theme_mode.unwrap_or(s.theme_mode);
+    s.icon_library = dto.icon_library.unwrap_or(s.icon_library);
     s.backdrop_mode = dto.backdrop_mode.unwrap_or(s.backdrop_mode);
     s.backdrop_tint_opacity = dto.backdrop_tint_opacity.unwrap_or(s.backdrop_tint_opacity);
     s.boot_start_enabled = dto.boot_start_enabled.unwrap_or(s.boot_start_enabled);
@@ -347,6 +383,16 @@ fn dto_to_settings(dto: SettingsDto, mut s: Settings) -> Settings {
     s.storage_dir = dto.storage_dir.unwrap_or(s.storage_dir);
     s.window_width = dto.window_width.unwrap_or(s.window_width);
     s.window_height = dto.window_height.unwrap_or(s.window_height);
+    s.screenshot_enabled = dto.screenshot_enabled.unwrap_or(s.screenshot_enabled);
+    s.hotkey_screenshot = dto.hotkey_screenshot.unwrap_or(s.hotkey_screenshot);
+    s.hotkey_screenshot_screen = dto
+        .hotkey_screenshot_screen
+        .unwrap_or(s.hotkey_screenshot_screen);
+    s.hotkey_screenshot_window = dto
+        .hotkey_screenshot_window
+        .unwrap_or(s.hotkey_screenshot_window);
+    s.hotkey_pin = dto.hotkey_pin.unwrap_or(s.hotkey_pin);
+    s.screenshot_save_dir = dto.screenshot_save_dir.unwrap_or(s.screenshot_save_dir);
     s
 }
 
@@ -371,6 +417,7 @@ fn settings_to_dto(s: &Settings) -> SettingsDto {
         hotkey_open_url: Some(s.hotkey_open_url.clone()),
         hotkey_topmost: Some(s.hotkey_topmost.clone()),
         theme_mode: Some(s.theme_mode.clone()),
+        icon_library: Some(s.icon_library.clone()),
         backdrop_mode: Some(s.backdrop_mode.clone()),
         backdrop_tint_opacity: Some(s.backdrop_tint_opacity),
         boot_start_enabled: Some(s.boot_start_enabled),
@@ -399,6 +446,12 @@ fn settings_to_dto(s: &Settings) -> SettingsDto {
         storage_dir: Some(s.storage_dir.clone()),
         window_width: Some(s.window_width),
         window_height: Some(s.window_height),
+        screenshot_enabled: Some(s.screenshot_enabled),
+        hotkey_screenshot: Some(s.hotkey_screenshot.clone()),
+        hotkey_screenshot_screen: Some(s.hotkey_screenshot_screen.clone()),
+        hotkey_screenshot_window: Some(s.hotkey_screenshot_window.clone()),
+        hotkey_pin: Some(s.hotkey_pin.clone()),
+        screenshot_save_dir: Some(s.screenshot_save_dir.clone()),
     }
 }
 

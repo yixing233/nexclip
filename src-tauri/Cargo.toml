@@ -1,6 +1,6 @@
 [package]
 name = "nexclip-tauri"
-version = "2.0.0-dev"
+version = "2.0.0"
 description = "NexClip clipboard manager (Tauri)"
 edition = "2021"
 
@@ -44,8 +44,12 @@ windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
     "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dwm",
 ] }
+xcap = "0.9"
+base64 = "0.22"
 
 [profile.release]
 opt-level = "s"

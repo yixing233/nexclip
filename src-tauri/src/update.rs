@@ -1,9 +1,9 @@
 //! 更新检查。
 //!
 //! 移植自 C# `Services/UpdateService.cs`:双通道
-//! - github:遍历 releases 列表找"最新一个挂了 Windows 安装包的发布"
+//! - github:遍历 releases 列表找最新一个挂了 Tauri x64 安装包的正式发布
 //!   (直接用 /releases/latest 会被只发 Android 的版本顶走);
-//! - direct:读服务器 /releases/version.json,windows 段优先、缺字段回落顶层。
+//! - direct:读服务器 /releases/version.json 的 windowsTauri 段,缺失时回落 GitHub。
 //!
 //! 版本比较语义与 C# CompareVersions 一致(按 .-_ 分段,数字段比大小,否则比字符串)。
 
@@ -12,7 +12,7 @@ use serde_json::Value;
 
 const GITHUB_RELEASES_API: &str = "https://api.github.com/repos/yixing233/nexclip/releases";
 const GITHUB_RELEASES_PAGE: &str = "https://github.com/yixing233/nexclip/releases";
-const USER_AGENT: &str = "NexClip-Windows/1.0";
+const USER_AGENT: &str = "NexClip-Tauri/2.0";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +28,16 @@ pub struct UpdateCheckResult {
     pub sha256: Option<String>,
     pub file_size: Option<i64>,
     pub error_message: Option<String>,
+}
+
+static LAST_CHECK: std::sync::Mutex<Option<UpdateCheckResult>> = std::sync::Mutex::new(None);
+
+pub fn cache_result(result: &UpdateCheckResult) {
+    *LAST_CHECK.lock().unwrap_or_else(|p| p.into_inner()) = Some(result.clone());
+}
+
+pub fn cached_result() -> Option<UpdateCheckResult> {
+    LAST_CHECK.lock().unwrap_or_else(|p| p.into_inner()).clone()
 }
 
 fn failure(current: &str, err: String) -> UpdateCheckResult {
@@ -156,7 +166,7 @@ pub async fn download_installer(
             .user_agent(USER_AGENT)
             .build()
             .map_err(|e| format!("HTTP 客户端创建失败: {e}"))?;
-        let mut resp = http
+        let resp = http
             .get(&url)
             .timeout(std::time::Duration::from_secs(600))
             .send()
@@ -251,6 +261,12 @@ fn verify_sha256(path: &std::path::Path, expect: &str) -> bool {
 pub fn run_installer(path: &str) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let path = std::path::Path::new(path).canonicalize().map_err(|e| e.to_string())?;
+    let directory = updates_dir().canonicalize().map_err(|e| e.to_string())?;
+    if path.parent() != Some(directory.as_path()) || !path.is_file()
+        || !path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("exe")) {
+        return Err("安装包不在更新缓存目录".into());
+    }
     std::process::Command::new(path)
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
@@ -325,38 +341,46 @@ async fn check_direct(origin: &str, current: &str) -> UpdateCheckResult {
         Err(e) => return failure(current, format!("version.json 解析失败: {e}")),
     };
 
-    // windows 段优先,缺字段才回落顶层:顶层版本号是两端共用的,
-    // 只发布 Android 的版本不应该把桌面端也顶成"有新版本"。
-    let platform = root.get("windows").filter(|v| v.is_object());
-    let tag = read_str(platform, &["tag_name", "version"])
-        .or_else(|| read_str(Some(&root), &["tag_name", "version"]))
-        .unwrap_or_default();
+    direct_release_result(&root, origin, current)
+        .unwrap_or_else(|| failure(current, "直连服务器尚未提供 Tauri 更新通道".into()))
+}
+
+fn is_tauri_installer(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.starts_with("nexclip_tauri_") && name.ends_with("_x64-setup.exe")
+}
+
+fn valid_sha256(value: &str) -> Option<String> {
+    let value = value.strip_prefix("sha256:").unwrap_or(value);
+    (value.len() == 64 && value.bytes().all(|ch| ch.is_ascii_hexdigit())).then(|| value.to_ascii_lowercase())
+}
+
+fn direct_release_result(root: &Value, origin: &str, current: &str) -> Option<UpdateCheckResult> {
+    // Keep the WinUI calendar-version channel separate from Tauri's SemVer channel.
+    let platform = root.get("windowsTauri").filter(|v| v.is_object())?;
+    let tag = read_str(Some(platform), &["tag_name", "version"])?;
     let clean_latest = tag.trim_start_matches(['v', 'V']).trim().to_string();
     let clean_current = current.trim_start_matches(['v', 'V']).trim().to_string();
 
-    let title = read_str(platform, &["name"])
-        .or_else(|| read_str(Some(&root), &["name"]))
+    let title = read_str(Some(platform), &["name"])
         .unwrap_or_else(|| format!("NexClip v{clean_latest}"));
-    let body = read_str(platform, &["body"])
-        .or_else(|| read_str(Some(&root), &["body"]))
+    let body = read_str(Some(platform), &["body"])
         .unwrap_or_default();
-    let html_url = read_str(platform, &["html_url"])
-        .or_else(|| read_str(Some(&root), &["html_url"]))
+    let html_url = read_str(Some(platform), &["html_url"])
         .unwrap_or_else(|| GITHUB_RELEASES_PAGE.to_string());
 
-    // windows.url 优先,缺了用 filename 拼,再兜底约定文件名
     let base = format!("{origin}/releases");
-    let download_url = read_str(platform, &["url"])
+    let download_url = read_str(Some(platform), &["url"])
         .or_else(|| {
-            read_str(platform, &["filename"]).map(|f| format!("{base}/{f}"))
-        })
-        .unwrap_or_else(|| format!("{base}/NexClip_Setup_v{clean_latest}_x64.exe"));
-    let sha256 = read_str(platform, &["sha256"]);
+            read_str(Some(platform), &["filename"]).map(|f| format!("{base}/{f}"))
+        })?;
+    if !is_tauri_installer(&file_name_of(&download_url)) { return None; }
+    let sha256 = read_str(Some(platform), &["sha256"]).and_then(|value| valid_sha256(&value));
     let file_size = platform
-        .and_then(|p| p.get("size"))
+        .get("size")
         .and_then(Value::as_i64);
 
-    UpdateCheckResult {
+    Some(UpdateCheckResult {
         success: true,
         has_update: compare_versions(&clean_latest, &clean_current) > 0,
         current_version: current.to_string(),
@@ -368,10 +392,34 @@ async fn check_direct(origin: &str, current: &str) -> UpdateCheckResult {
         sha256,
         file_size,
         error_message: None,
-    }
+    })
 }
 
-/// GitHub 通道:在发布列表里找最新一个挂了 Windows 安装包(.exe)的非草稿发布。
+fn github_release_result(release: &Value, current: &str) -> Option<UpdateCheckResult> {
+    if release.get("draft").and_then(Value::as_bool) == Some(true)
+        || release.get("prerelease").and_then(Value::as_bool) == Some(true) { return None; }
+    let installer = release.get("assets")?.as_array()?.iter().find(|asset|
+        asset.get("name").and_then(Value::as_str).is_some_and(is_tauri_installer))?;
+    let tag = read_str(Some(release), &["tag_name"])?;
+    let latest = tag.trim_start_matches(['v', 'V']).trim();
+    let clean_current = current.trim_start_matches(['v', 'V']).trim();
+    let body = read_str(Some(release), &["body"]).unwrap_or_default();
+    Some(UpdateCheckResult {
+        success: true,
+        has_update: compare_versions(latest, clean_current) > 0,
+        current_version: current.to_string(),
+        latest_version: latest.to_string(),
+        release_title: read_str(Some(release), &["name"]).unwrap_or_else(|| format!("NexClip Tauri v{latest}")),
+        release_notes: read_platform_release_notes(&body),
+        release_url: read_str(Some(release), &["html_url"]).unwrap_or_else(|| GITHUB_RELEASES_PAGE.into()),
+        download_url: read_str(Some(installer), &["browser_download_url"])?,
+        sha256: read_str(Some(installer), &["digest"]).and_then(|value| valid_sha256(&value)),
+        file_size: installer.get("size").and_then(Value::as_i64),
+        error_message: None,
+    })
+}
+
+/// GitHub channel: stable Tauri x64 installers only, independent of WinUI releases.
 async fn check_github(current: &str) -> UpdateCheckResult {
     let client = match http_client() {
         Ok(c) => c,
@@ -390,45 +438,9 @@ async fn check_github(current: &str) -> UpdateCheckResult {
     .await;
     if let Some(Value::Array(releases)) = list {
         for release in &releases {
-            // 跳过草稿
-            if release.get("draft").and_then(Value::as_bool) == Some(true) {
-                continue;
-            }
-            // 找 Windows 安装包资产(.exe)
-            let assets = release.get("assets").and_then(Value::as_array);
-            let installer = assets.and_then(|list| {
-                list.iter().find(|a| {
-                    a.get("name")
-                        .and_then(Value::as_str)
-                        .is_some_and(|n| n.to_lowercase().ends_with(".exe"))
-                })
-            });
-            let Some(installer) = installer else { continue };
-
-            let tag = read_str(Some(release), &["tag_name"]).unwrap_or_default();
-            let clean_latest = tag.trim_start_matches(['v', 'V']).trim().to_string();
-            let clean_current = current.trim_start_matches(['v', 'V']).trim().to_string();
-            let body = read_str(Some(release), &["body"]).unwrap_or_default();
-
-            let has_update = compare_versions(&clean_latest, &clean_current) > 0;
-            return UpdateCheckResult {
-                success: true,
-                has_update,
-                current_version: current.to_string(),
-                latest_version: clean_latest.clone(),
-                release_title: read_str(Some(release), &["name"])
-                    .unwrap_or_else(|| format!("NexClip v{clean_latest}")),
-                release_notes: read_platform_release_notes(&body),
-                release_url: read_str(Some(release), &["html_url"])
-                    .unwrap_or_else(|| GITHUB_RELEASES_PAGE.to_string()),
-                download_url: read_str(Some(installer), &["browser_download_url"])
-                    .unwrap_or_default(),
-                sha256: None,
-                file_size: installer.get("size").and_then(Value::as_i64),
-                error_message: None,
-            };
+            if let Some(result) = github_release_result(release, current) { return result; }
         }
-        // 列表里没有挂 exe 的发布:回落到 /latest
+        return failure(current, "发布列表中尚无 Tauri 正式版".into());
     }
 
     let latest: Option<Value> = async {
@@ -444,39 +456,8 @@ async fn check_github(current: &str) -> UpdateCheckResult {
     .await;
     match latest {
         Some(release) => {
-            let tag = read_str(Some(&release), &["tag_name"]).unwrap_or_default();
-            let clean_latest = tag.trim_start_matches(['v', 'V']).trim().to_string();
-            let clean_current = current.trim_start_matches(['v', 'V']).trim().to_string();
-            let body = read_str(Some(&release), &["body"]).unwrap_or_default();
-            let download_url = release
-                .get("assets")
-                .and_then(Value::as_array)
-                .and_then(|list| {
-                    list.iter().find_map(|a| {
-                        a.get("name")
-                            .and_then(Value::as_str)
-                            .filter(|n| n.to_lowercase().ends_with(".exe"))
-                            .and_then(|_| a.get("browser_download_url").and_then(Value::as_str))
-                            .map(String::from)
-                    })
-                })
-                .unwrap_or_default();
-            let has_update = compare_versions(&clean_latest, &clean_current) > 0;
-            UpdateCheckResult {
-                success: true,
-                has_update,
-                current_version: current.to_string(),
-                latest_version: clean_latest.clone(),
-                release_title: read_str(Some(&release), &["name"])
-                    .unwrap_or_else(|| format!("NexClip v{clean_latest}")),
-                release_notes: read_platform_release_notes(&body),
-                release_url: read_str(Some(&release), &["html_url"])
-                    .unwrap_or_else(|| GITHUB_RELEASES_PAGE.to_string()),
-                download_url,
-                sha256: None,
-                file_size: None,
-                error_message: None,
-            }
+            github_release_result(&release, current)
+                .unwrap_or_else(|| failure(current, "最新发布未包含 Tauri 正式版安装包".into()))
         }
         None => failure(current, "GitHub 请求失败(限流或网络不可用)".into()),
     }
@@ -490,11 +471,12 @@ pub async fn check(update_source: &str, server_url: &str, current: &str) -> Upda
             let origin = if let Some(idx) = server_url.find("://") {
                 let rest = &server_url[idx + 3..];
                 let end = rest.find('/').unwrap_or(rest.len());
-                format!("{}//{}", &server_url[..idx + 3], &rest[..end])
+                format!("{}{}", &server_url[..idx + 3], &rest[..end])
             } else {
                 server_url.to_string()
             };
-            check_direct(&origin, current).await
+            let result = check_direct(&origin, current).await;
+            if result.success { result } else { check_github(current).await }
         }
         _ => check_github(current).await,
     }
@@ -532,5 +514,78 @@ mod tests {
     fn read_str_skips_blank() {
         let v: Value = serde_json::from_str(r#"{"a":"", "b":"ok"}"#).unwrap();
         assert_eq!(read_str(Some(&v), &["a", "b"]).unwrap(), "ok");
+    }
+
+    fn tauri_release() -> Value {
+        serde_json::json!({
+            "tag_name": "v2.1.0",
+            "name": "NexClip Tauri v2.1.0",
+            "draft": false,
+            "prerelease": false,
+            "body": "## Windows\nTauri changes\n\n## Android\nOther changes",
+            "assets": [{
+                "name": "NexClip_Tauri_2.1.0_x64-setup.exe",
+                "browser_download_url": "https://example.com/NexClip_Tauri_2.1.0_x64-setup.exe",
+                "digest": format!("sha256:{}", "AB".repeat(32)),
+                "size": 1234
+            }]
+        })
+    }
+
+    #[test]
+    fn github_tauri_release_preserves_download_integrity() {
+        let release = tauri_release();
+        let result = github_release_result(&release, "2.0.0").unwrap();
+        assert!(result.success && result.has_update);
+        assert_eq!(result.latest_version, "2.1.0");
+        assert_eq!(result.release_notes, "Tauri changes");
+        assert_eq!(result.sha256, Some("ab".repeat(32)));
+        assert_eq!(result.file_size, Some(1234));
+        assert!(!github_release_result(&release, "2.1.0").unwrap().has_update);
+        assert!(!github_release_result(&release, "2.2.0").unwrap().has_update);
+    }
+
+    #[test]
+    fn github_ignores_other_editions_and_unpublished_releases() {
+        for name in ["NexClip_20261112.01_x64-setup.exe", "NexClip_Tauri_2.1.0_arm64-setup.exe", "NexClip.apk"] {
+            let mut release = tauri_release();
+            release["assets"][0]["name"] = Value::String(name.into());
+            assert!(github_release_result(&release, "2.0.0").is_none());
+        }
+        for field in ["draft", "prerelease"] {
+            let mut release = tauri_release();
+            release[field] = Value::Bool(true);
+            assert!(github_release_result(&release, "2.0.0").is_none());
+        }
+    }
+
+    #[test]
+    fn direct_requires_tauri_manifest_and_installer() {
+        let legacy = serde_json::json!({
+            "version": "20261112.01", "filename": "NexClip-Setup.exe",
+            "windows": {"version": "20261112.01", "filename": "NexClip-Setup.exe"}
+        });
+        assert!(direct_release_result(&legacy, "https://example.com", "2.0.0").is_none());
+        let mut manifest = legacy;
+        manifest["windowsTauri"] = serde_json::json!({
+            "version": "v2.1.0", "filename": "NexClip_Tauri_2.1.0_x64-setup.exe",
+            "sha256": "CD".repeat(32), "size": 5678
+        });
+        let result = direct_release_result(&manifest, "https://example.com", "2.0.0").unwrap();
+        assert!(result.success && result.has_update);
+        assert_eq!(result.download_url, "https://example.com/releases/NexClip_Tauri_2.1.0_x64-setup.exe");
+        assert_eq!(result.sha256, Some("cd".repeat(32)));
+        assert_eq!(result.file_size, Some(5678));
+        manifest["windowsTauri"]["filename"] = Value::String("NexClip-Setup.exe".into());
+        assert!(direct_release_result(&manifest, "https://example.com", "2.0.0").is_none());
+    }
+
+    #[test]
+    fn sha256_accepts_only_complete_hex_digests() {
+        assert_eq!(valid_sha256(&"AB".repeat(32)), Some("ab".repeat(32)));
+        assert_eq!(valid_sha256(&format!("sha256:{}", "ab".repeat(32))), Some("ab".repeat(32)));
+        for value in ["", "sha256:", "not-a-hash", &"g".repeat(64), &"a".repeat(63)] {
+            assert_eq!(valid_sha256(value), None);
+        }
     }
 }

@@ -99,6 +99,7 @@ fn main() {
         origin: 0,
         starred: false,
         remark: None,
+        oversized: false,
     };
     let id = store.insert(&probe).expect("插入失败");
     assert!(id > 0, "插入未生效");

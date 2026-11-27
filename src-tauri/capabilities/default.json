@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "NexClip 主窗口能力:窗口拖动/置顶/设置窗口控制",
-  "windows": ["main", "settings", "toast"],
+  "windows": ["main", "settings", "toast", "overlay-*", "pin-*"],
   "permissions": [
     "core:default",
     "notification:default",
@@ -13,6 +13,16 @@
     "core:window:allow-hide",
     "core:window:allow-show",
     "core:window:allow-close",
-    "core:window:allow-set-focus"
+    "core:window:allow-set-focus",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "core:window:allow-scale-factor",
+    "core:window:allow-inner-size",
+    "core:window:allow-outer-size",
+    "core:window:allow-outer-position",
+    "core:window:allow-current-monitor",
+    "core:window:allow-available-monitors",
+    "core:event:allow-listen",
+    "core:event:allow-emit"
   ]
 }

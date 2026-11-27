@@ -8,6 +8,8 @@ src-tauri/target/
 
 # Tauri 构建中间产物
 src-tauri/gen/
+.zcode/
+release-out/
 
 # IDE 与用户配置
 .vs/

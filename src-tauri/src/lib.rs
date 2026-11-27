@@ -3,6 +3,7 @@ pub mod clipboard;
 pub mod commands;
 pub mod history;
 pub mod platform;
+pub mod screenshot;
 pub mod settings;
 pub mod smart;
 pub mod sync;
@@ -11,7 +12,7 @@ pub mod update;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, LogicalSize};
 
 /// 应用级共享状态:历史库 + 设置。命令层整锁访问(数据量小,锁竞争可忽略)。
 pub struct AppState {
@@ -52,6 +53,11 @@ fn position_main_at_cursor(app: &AppHandle) {
     unsafe {
         let mut pt = POINT { x: 0, y: 0 };
         let _ = windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
+        let mode = {
+            let state = app.state::<Arc<Mutex<AppState>>>();
+            let guard = state.lock().unwrap_or_else(|p| p.into_inner());
+            guard.settings.window_position_mode.clone()
+        };
         let hmon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
         let mut info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
@@ -61,9 +67,14 @@ fn position_main_at_cursor(app: &AppHandle) {
             if let Some(w) = app.get_webview_window("main") {
                 let size = w.outer_size().unwrap_or_default();
                 let wa = &info.rcWork;
-                // 光标处优先,边缘钳制在工作区内
-                let mut x = pt.x - (size.width as i32) / 2;
-                let mut y = pt.y - (size.height as i32) / 2;
+                // cursor:以光标为中心;center:以光标所在显示器工作区中心为中心。
+                let (cx, cy) = if mode == "center" {
+                    ((wa.left + wa.right) / 2, (wa.top + wa.bottom) / 2)
+                } else {
+                    (pt.x, pt.y)
+                };
+                let mut x = cx - (size.width as i32) / 2;
+                let mut y = cy - (size.height as i32) / 2;
                 x = x.clamp(wa.left, (wa.right - size.width as i32).max(wa.left));
                 y = y.clamp(wa.top, (wa.bottom - size.height as i32).max(wa.top));
                 let _ = w.set_position(PhysicalPosition::new(x, y));
@@ -78,11 +89,36 @@ fn show_main_at_cursor(app: &AppHandle) {
         let _ = w.show();
         let _ = w.set_focus();
     }
+    // 通知前端重新拉取列表:弹窗隐藏期间捕获的条目要靠这次刷新补齐
+    // (隐藏时收到的 clipboard-changed 虽会插入,但滚动/分页状态可能已过期)
+    let _ = app.emit("history-refresh", ());
 }
 
 pub fn hide_main(app: &AppHandle) {
+    save_main_size(app);
     if let Some(w) = app.get_webview_window("main") {
+        // 记住窗口尺寸(设置项 windowWidth/Height 真正生效的落点)。
+        // 只在隐藏时写一次,避免拖动缩放过程中每个像素都落盘。
         let _ = w.hide();
+    }
+}
+
+fn save_main_size(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        if let (Ok(size), Ok(scale)) = (w.outer_size(), w.scale_factor()) {
+            let size = size.to_logical::<f64>(scale);
+            let state = app.state::<Arc<Mutex<AppState>>>();
+            let mut guard = state.lock().unwrap_or_else(|p| p.into_inner());
+            let width = size.width;
+            let height = size.height;
+            if (guard.settings.window_width - width).abs() > 0.5
+                || (guard.settings.window_height - height).abs() > 0.5
+            {
+                guard.settings.window_width = width;
+                guard.settings.window_height = height;
+                settings::save_settings(&guard.settings);
+            }
+        }
     }
 }
 
@@ -239,6 +275,10 @@ pub(crate) fn build_hotkey_specs(s: &settings::Settings) -> Vec<platform::hotkey
         (HotkeyAction::Settings, s.hotkey_settings.clone(), "Alt+X"),
         (HotkeyAction::OpenUrl, s.hotkey_open_url.clone(), "Ctrl+Alt+O"),
         (HotkeyAction::Topmost, s.hotkey_topmost.clone(), "Ctrl+Alt+T"),
+        (HotkeyAction::Screenshot, s.hotkey_screenshot.clone(), "F1"),
+        (HotkeyAction::ScreenshotScreen, s.hotkey_screenshot_screen.clone(), "Ctrl+Shift+F"),
+        (HotkeyAction::ScreenshotWindow, s.hotkey_screenshot_window.clone(), "Ctrl+Shift+W"),
+        (HotkeyAction::PinFromClipboard, s.hotkey_pin.clone(), "F3"),
     ];
     defaults
         .into_iter()
@@ -272,9 +312,39 @@ fn start_platform(app: &AppHandle, state: Arc<Mutex<AppState>>) {
     // 剪贴板监听(防环/去抖/过滤)
     let cap_state = state.clone();
     let cap_app = app.clone();
-    if let Err(e) = platform::monitor::start(move |seq| {
-        capture::capture(&cap_app, &cap_state, seq);
-    }) {
+    let alert_app = app.clone();
+    let alert_state = state.clone();
+    if let Err(e) = platform::monitor::start(
+        move |seq| {
+            capture::capture(&cap_app, &cap_state, seq);
+        },
+        move |alert| {
+            use platform::monitor::ClipboardAlert;
+            match alert {
+                ClipboardAlert::Blocked { holder } => {
+                    let who = holder.unwrap_or_else(|| "未知进程".into());
+                    let msg = format!("剪贴板被 {who} 占用，已暂停监听");
+                    let _ = alert_app.emit("clipboard-blocked", msg.clone());
+                    notify(&alert_app, &alert_state, "剪贴板被占用", &msg);
+                    if let Some(tray) = alert_app.tray_by_id("nexclip-tray") {
+                        let _ = tray.set_tooltip(Some(msg));
+                    }
+                }
+                ClipboardAlert::Recovered => {
+                    let _ = alert_app.emit("clipboard-unblocked", ());
+                    if let Some(tray) = alert_app.tray_by_id("nexclip-tray") {
+                        let _ = tray.set_tooltip(Some("NexClip - 剪贴板同步".to_string()));
+                    }
+                }
+                ClipboardAlert::CaptureStuck { secs } => {
+                    let msg = format!("剪贴板读取已卡住 {secs}s，可能仍在等待占用剪贴板的程序");
+                    log::warn!("{msg}");
+                    let _ = alert_app.emit("clipboard-watchdog", msg.clone());
+                    notify(&alert_app, &alert_state, "剪贴板读取超时", &msg);
+                }
+            }
+        },
+    ) {
         log::error!("剪贴板监听启动失败: {e}");
     }
 
@@ -336,6 +406,30 @@ fn start_platform(app: &AppHandle, state: Arc<Mutex<AppState>>) {
             platform::hotkey::HotkeyAction::Topmost => {
                 set_pinned(!pinned(), &hot_app);
             }
+            platform::hotkey::HotkeyAction::Screenshot => {
+                if screenshot_enabled(&hot_app) {
+                    screenshot::begin_capture(&hot_app);
+                }
+            }
+            platform::hotkey::HotkeyAction::ScreenshotScreen => {
+                if screenshot_enabled(&hot_app) {
+                    screenshot::quick_capture_screen(&hot_app);
+                }
+            }
+            platform::hotkey::HotkeyAction::ScreenshotWindow => {
+                if screenshot_enabled(&hot_app) {
+                    screenshot::quick_capture_window(&hot_app);
+                }
+            }
+            platform::hotkey::HotkeyAction::PinFromClipboard => {
+                // 剪贴板贴图:异步命令,投递到 tokio 运行时(不阻塞热键线程)
+                let pin_app = hot_app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = crate::commands::pin_from_clipboard(pin_app).await {
+                        log::warn!("剪贴板贴图失败: {e}");
+                    }
+                });
+            }
         }
     }) {
         log::error!("全局热键启动失败: {e}");
@@ -345,19 +439,18 @@ fn start_platform(app: &AppHandle, state: Arc<Mutex<AppState>>) {
     setup_tray(app);
 }
 
+/// 截图功能开关(热键线程用)。
+fn screenshot_enabled(app: &AppHandle) -> bool {
+    let guard = app.state::<Arc<Mutex<AppState>>>();
+    let guard = guard.lock().unwrap_or_else(|p| p.into_inner());
+    guard.settings.screenshot_enabled
+}
+
 fn setup_tray(app: &AppHandle) {
-    use tauri::menu::{Menu, MenuItem};
     use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 
-    let show = MenuItem::with_id(app, "show", "显示剪贴板", true, None::<&str>);
-    let settings_item = MenuItem::with_id(app, "settings", "设置", true, None::<&str>);
-    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>);
-    let (Ok(show), Ok(settings_item), Ok(quit)) = (show, settings_item, quit) else {
+    let Ok(menu) = build_tray_menu(app) else {
         log::error!("托盘菜单创建失败");
-        return;
-    };
-    let Ok(menu) = Menu::with_items(app, &[&show, &settings_item, &quit]) else {
-        log::error!("托盘菜单构建失败");
         return;
     };
     let mut builder = TrayIconBuilder::with_id("nexclip-tray")
@@ -366,8 +459,37 @@ fn setup_tray(app: &AppHandle) {
         .tooltip("NexClip - 剪贴板同步")
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_target_before_main(app),
+            "screenshot" => screenshot::begin_capture(app),
+            "toggle_monitor" => {
+                // 剪贴板监听启停:切换设置并持久化(capture 入口按此开关过滤)
+                let (hotkey, enabled) = {
+                    let guard = app.state::<Arc<Mutex<AppState>>>();
+                    let mut guard = guard.lock().unwrap_or_else(|p| p.into_inner());
+                    guard.settings.monitor_enabled = !guard.settings.monitor_enabled;
+                    settings::save_settings(&guard.settings);
+                    (guard.settings.hotkey_screenshot.clone(), guard.settings.monitor_enabled)
+                };
+                let _ = app.emit("settings-changed", ());
+                update_tray_menu(app, &hotkey, enabled);
+            }
+            "restart" => { save_main_size(app); app.restart(); },
+            "check_update" => {
+                show_settings_window(app);
+                let _ = app.emit_to("settings", "settings-navigate", "about");
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let (source, server) = {
+                        let state = app.state::<Arc<Mutex<AppState>>>();
+                        let state = state.lock().unwrap_or_else(|p| p.into_inner());
+                        (state.settings.update_source.clone(), state.settings.server_url.clone())
+                    };
+                    let result = update::check(&source, &server, env!("CARGO_PKG_VERSION")).await;
+                    update::cache_result(&result);
+                    let _ = app.emit("update-available", result);
+                });
+            }
             "settings" => show_settings_window(app),
-            "quit" => app.exit(0),
+            "quit" => { save_main_size(app); app.exit(0); },
             _ => {}
         });
     if let Some(icon) = app.default_window_icon() {
@@ -386,6 +508,44 @@ fn setup_tray(app: &AppHandle) {
         .build(app)
         .map(|_| ())
         .unwrap_or_else(|e| log::error!("托盘创建失败: {e}"));
+}
+
+/// 构建托盘菜单(截图项显示当前设置的热键)。
+fn build_tray_menu(app: &AppHandle) -> Result<tauri::menu::Menu<tauri::Wry>, tauri::Error> {
+    use tauri::menu::{CheckMenuItem, Menu, MenuItem};
+    let (screenshot_hotkey, monitor_enabled) = {
+        let guard = app.state::<Arc<Mutex<AppState>>>();
+        let guard = guard.lock().unwrap_or_else(|p| p.into_inner());
+        (guard.settings.hotkey_screenshot.clone(), guard.settings.monitor_enabled)
+    };
+    let show = MenuItem::with_id(app, "show", "显示剪贴板", true, None::<&str>)?;
+    let shot = MenuItem::with_id(app, "screenshot", format!("截图 ({screenshot_hotkey})"), true, None::<&str>)?;
+    let monitor = CheckMenuItem::with_id(
+        app, "toggle_monitor", "剪贴板监听", true, monitor_enabled, None::<&str>,
+    )?;
+    let restart = MenuItem::with_id(app, "restart", "重启 NexClip", true, None::<&str>)?;
+    let settings_item = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+    let check_update = MenuItem::with_id(app, "check_update", "检查更新", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    Menu::with_items(app, &[&show, &shot, &monitor, &restart, &check_update, &settings_item, &quit])
+}
+
+/// 重建托盘菜单(截图热键/监听开关状态变化时同步文字与勾选)。
+pub(crate) fn update_tray_menu(app: &AppHandle, screenshot_hotkey: &str, monitor_enabled: bool) {
+    use tauri::menu::{CheckMenuItem, Menu, MenuItem};
+    let Ok(show) = MenuItem::with_id(app, "show", "显示剪贴板", true, None::<&str>) else { return };
+    let Ok(shot) = MenuItem::with_id(app, "screenshot", format!("截图 ({screenshot_hotkey})"), true, None::<&str>) else { return };
+    let Ok(monitor) = CheckMenuItem::with_id(
+        app, "toggle_monitor", "剪贴板监听", true, monitor_enabled, None::<&str>,
+    ) else { return };
+    let Ok(restart) = MenuItem::with_id(app, "restart", "重启 NexClip", true, None::<&str>) else { return };
+    let Ok(settings_item) = MenuItem::with_id(app, "settings", "设置", true, None::<&str>) else { return };
+    let Ok(check_update) = MenuItem::with_id(app, "check_update", "检查更新", true, None::<&str>) else { return };
+    let Ok(quit) = MenuItem::with_id(app, "quit", "退出", true, None::<&str>) else { return };
+    let Ok(menu) = Menu::with_items(app, &[&show, &shot, &monitor, &restart, &check_update, &settings_item, &quit]) else { return };
+    if let Some(tray) = app.tray_by_id("nexclip-tray") {
+        let _ = tray.set_menu(Some(menu));
+    }
 }
 
 
@@ -453,6 +613,10 @@ fn init_file_logger() {
 pub fn run() {
     init_file_logger();
     let settings = settings::load_settings();
+    // 每次启动按设置重写启动项:安装路径变化/注册表被清理时自动修复。
+    if let Err(e) = platform::autostart::apply(settings.boot_start_enabled) {
+        log::warn!("应用开机自启设置失败: {e}");
+    }
     let storage_dir = settings::resolve_storage_dir(&settings.storage_dir);
     let history = match history::HistoryStore::open(&storage_dir) {
         Ok(h) => h,
@@ -483,20 +647,178 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_notification::init())
         .manage(state)
+        // 贴图窗口移动/缩放时同步工具条位置;贴上销毁时连带关闭工具条
+        .on_window_event(|window, event| {
+            let label = window.label();
+            if label == "settings" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                return;
+            }
+            // 主剪贴板弹窗禁止最大化/全屏:无边框窗口被 Aero Snap 拖到屏幕边缘
+            // 或双击拖拽区时系统会自行最大化,这里检测到就立刻还原回原尺寸。
+            if label == "main" {
+                match event {
+                    tauri::WindowEvent::Resized(size) => {
+                        if let Some(monitor) = window.current_monitor().ok().flatten() {
+                            let max = monitor.size();
+                            // 占满整个显示器即视为最大化(留 8px 容差给 DPI 取整)
+                            if size.width + 8 >= max.width && size.height + 8 >= max.height {
+                                log::debug!("主窗口被最大化,还原到原尺寸");
+                                let _ = window.unmaximize();
+                            }
+                        }
+                    }
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        let close_to_tray = {
+                            let state = window
+                                .app_handle()
+                                .state::<Arc<Mutex<AppState>>>();
+                            let guard = state.lock().unwrap_or_else(|p| p.into_inner());
+                            guard.settings.close_to_tray
+                        };
+                        if close_to_tray {
+                            api.prevent_close();
+                            hide_main(window.app_handle());
+                        } else {
+                            // 关闭到托盘关闭时,关闭主窗等于退出应用(托盘不应留下无窗进程)
+                            api.prevent_close();
+                            save_main_size(window.app_handle());
+                            window.app_handle().exit(0);
+                        }
+                    }
+                    _ => {}
+                }
+                return;
+            }
+            let Some(rest) = label.strip_prefix("pin-") else { return };
+            if rest.starts_with("tools-") {
+                return;
+            }
+            let pin_id = rest.to_string();
+            let app = window.app_handle().clone();
+            match event {
+                tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_) => {
+                    commands::sync_pin_tools(&app, &pin_id);
+                }
+                tauri::WindowEvent::Destroyed => {
+                    if let Some(t) = app.get_webview_window(&format!("pin-tools-{pin_id}")) {
+                        let _ = t.close();
+                    }
+                }
+                _ => {}
+            }
+        })
+        // 冻结帧/贴图自定义协议:内存直出,免 asset scope 与磁盘 IO
+        .register_uri_scheme_protocol("nexclip-frame", |_ctx, request| {
+            let path = request.uri().path().to_string();
+            match screenshot::serve_frame_request(&path) {
+                Ok(data) => tauri::http::Response::builder()
+                    .header("Content-Type", "image/png")
+                    .header("Access-Control-Allow-Origin", "*")
+                    .header("Cache-Control", "no-store")
+                    .body(data)
+                    .unwrap_or_else(|_| tauri::http::Response::builder().status(500).body(Vec::new()).unwrap()),
+                Err(e) => {
+                    log::warn!("帧协议请求失败({path}): {e}");
+                    tauri::http::Response::builder()
+                        .status(404)
+                        .body(Vec::new())
+                        .unwrap()
+                }
+            }
+        })
         .setup(move |app| {
             let handle = app.handle().clone();
             start_platform(&handle, setup_state.clone());
+            // 恢复上次窗口尺寸
+            {
+                let (ww, hh) = {
+                    let guard = setup_state.lock().unwrap_or_else(|p| p.into_inner());
+                    (guard.settings.window_width, guard.settings.window_height)
+                };
+                if ww >= 320.0 && hh >= 420.0 {
+                    if let Some(w) = handle.get_webview_window("main") {
+                        let _ = w.set_size(LogicalSize::new(ww, hh));
+                    }
+                }
+            }
+            // 启动时是否直接显示主窗:startMinimized=false 且不是开机自启时显示一次。
+            let start_minimized = {
+                let guard = setup_state.lock().unwrap_or_else(|p| p.into_inner());
+                guard.settings.start_minimized
+            };
+            let launched_by_autostart = std::env::args().any(|a| a == "--autostart");
+            if !start_minimized && !launched_by_autostart {
+                show_main_at_cursor(&handle);
+            }
+            // 启动自动检查更新(3 秒后后台执行,不阻塞启动)
+            let (auto_check, update_source, server_url) = {
+                let guard = setup_state.lock().unwrap_or_else(|p| p.into_inner());
+                (
+                    guard.settings.auto_check_update,
+                    guard.settings.update_source.clone(),
+                    guard.settings.server_url.clone(),
+                )
+            };
+            if auto_check {
+                let update_app = handle.clone();
+                let update_state = setup_state.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    let result = update::check(
+                        &update_source,
+                        &server_url,
+                        env!("CARGO_PKG_VERSION"),
+                    )
+                    .await;
+                    update::cache_result(&result);
+                    if result.success && result.has_update {
+                        let _ = update_app.emit("update-available", &result);
+                        notify(
+                            &update_app,
+                            &update_state,
+                            "发现新版本",
+                            &format!("NexClip v{} 可用", result.latest_version),
+                        );
+                    }
+                });
+            }
+            // 预创建截图覆盖窗(消除首次触发冷启动)
+            screenshot::preload_overlays(&handle);
             // 后台回填:为缺图标的存量条目提取来源应用图标(完成后通知前端刷新)
             let back_app = handle.clone();
             let back_state = setup_state;
             tauri::async_runtime::spawn(async move {
-                let count = {
+                // 图标提取会访问磁盘/Shell,不能放在全局状态锁内:否则启动扫描期间
+                // 所有历史查询和远端入库都会排队,表现为弹窗卡死几十秒。
+                let rows = {
                     let guard = back_state.lock().unwrap_or_else(|p| p.into_inner());
-                    guard
-                        .history
-                        .backfill_source_icons(crate::platform::app_icon::get_or_create)
-                        .unwrap_or(0)
+                    guard.history.entries_missing_source_icon().unwrap_or_default()
                 };
+                // 同一应用只提取一次:历史可能有几千条,逐条 Shell 提取会拖慢启动。
+                let mut icons: std::collections::HashMap<String, Option<String>> =
+                    std::collections::HashMap::new();
+                let mut pending = Vec::new();
+                for (id, exe_path) in rows {
+                    let icon = icons
+                        .entry(exe_path.clone())
+                        .or_insert_with(|| crate::platform::app_icon::get_or_create(&exe_path))
+                        .clone();
+                    if let Some(icon) = icon {
+                        pending.push((id, icon));
+                    }
+                }
+                let mut count = 0usize;
+                for (id, icon) in pending {
+                    let updated = {
+                        let guard = back_state.lock().unwrap_or_else(|p| p.into_inner());
+                        guard.history.set_source_icon(id, &icon).unwrap_or(0)
+                    };
+                    count += updated;
+                }
                 if count > 0 {
                     log::info!("已为 {count} 条存量历史回填来源图标");
                     let _ = back_app.emit("history-refresh", ());
@@ -517,10 +839,13 @@ pub fn run() {
             commands::settings_set,
             commands::open_in_explorer,
             commands::pick_folder,
+            commands::pick_images,
+            commands::pick_files,
             commands::list_user_processes,
             commands::app_info,
             commands::devices_cached,
             commands::check_update,
+            commands::update_check_state,
             commands::download_update,
             commands::update_download_state,
             commands::cancel_update_download,
@@ -538,6 +863,7 @@ pub fn run() {
             commands::sync_test_connection,
             commands::sync_send_text,
             commands::sync_send_file,
+            commands::transfer_files_query,
             commands::download_transfer_file,
             commands::sync_remove_device,
             commands::sync_rename_device,
@@ -545,7 +871,33 @@ pub fn run() {
             commands::smart_detect,
             commands::smart_exec,
             commands::chat_query,
+        commands::chat_clear,
+        commands::save_image_as,
             commands::hide_toast,
+            commands::screenshot_overlay_ready,
+            commands::screenshot_cancel,
+            commands::screenshot_copy,
+            commands::screenshot_save,
+            commands::screenshot_pin,
+            commands::pin_from_clipboard,
+            commands::screenshot_pending_start,
+            commands::window_at_point,
+            commands::screenshot_quick_screen,
+            commands::screenshot_quick_window,
+            commands::scroll_capture_start,
+            commands::pin_close,
+            commands::pin_annotation_save,
+            commands::pin_annotation_get,
+            commands::pin_edit_state,
+            commands::pin_apply_adjustments,
+            commands::pin_tools_show,
+            commands::pin_set_scale,
+            commands::pin_set_scale_abs,
+            commands::pin_image_path,
+            commands::pin_copy,
+            commands::pin_save,
+            commands::screenshot_pending_start,
+            commands::window_at_point,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

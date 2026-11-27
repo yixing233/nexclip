@@ -19,6 +19,8 @@ export interface HistoryItem {
   files: ClipboardFileInfo[];
   deviceId: string;
   deviceName: string | null;
+  /** 设备平台(Android / Windows / Web …),来自 devices_cache;缺失为 null */
+  devicePlatform: string | null;
   sourceAppName: string | null;
   sourceAppPath: string | null;
   sourceAppIcon: string | null;
@@ -26,6 +28,8 @@ export interface HistoryItem {
   origin: number;
   starred: boolean;
   remark: string | null;
+  /** 图片原始体积超过 10MB:仅本地保存,不参与同步(可能只有降采样预览) */
+  oversized: boolean;
   isManual: boolean;
 }
 

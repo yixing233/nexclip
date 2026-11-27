@@ -8,6 +8,7 @@
 //!   并等待修饰键抬起,避免 Ctrl+V 被游戏/输入法吞键。
 
 pub mod app_icon;
+pub mod autostart;
 pub mod hotkey;
 pub mod monitor;
 pub mod paste;

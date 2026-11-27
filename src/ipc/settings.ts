@@ -10,7 +10,15 @@ export interface SettingsDto {
   hotkeySettings: string;
   hotkeyOpenUrl: string;
   hotkeyTopmost: string;
+  hotkeyScreenshot: string;
+  hotkeyScreenshotScreen: string;
+  hotkeyScreenshotWindow: string;
+  /** 剪贴板图片贴图 */
+  hotkeyPin: string;
+  screenshotEnabled: boolean;
+  screenshotSaveDir: string;
   themeMode: "light" | "dark" | "system";
+  iconLibrary: "lucide" | "tabler" | "phosphor" | "remix";
   monitorEnabled: boolean;
   appFilterEnabled: boolean;
   customFilteredProcesses: string[];
@@ -107,6 +115,10 @@ export interface UpdateResult {
 
 export async function checkUpdate(): Promise<UpdateResult> {
   return invoke<UpdateResult>("check_update");
+}
+
+export function updateCheckState(): Promise<UpdateResult | null> {
+  return invoke<UpdateResult | null>("update_check_state");
 }
 
 /// 更新下载进度(事件 update-download-progress 载荷)

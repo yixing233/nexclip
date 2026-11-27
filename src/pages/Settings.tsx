@@ -7,11 +7,7 @@ import {
 } from "antd";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import {
-  CloudUpload, SlidersHorizontal, ClipboardList, Keyboard, Info,
-  FolderOpen, QrCode, Copy as CopyIcon, ExternalLink, RefreshCw,
-  Pencil, Trash2,
-} from "lucide-react";
+import { Icon } from "../icons";
 import {
   settingsGet, settingsSet, historyStats, historyClear, openInExplorer,
   appInfo, formatBytes, devicesCached, lastSeenText,
@@ -19,12 +15,13 @@ import {
   syncRemoveDevice, syncRenameDevice, syncDevicesRefresh, syncPairRevoke,
   listUserProcesses, pickFolder,
   checkUpdate as checkUpdateApi, downloadUpdate, updateDownloadState,
-  cancelUpdateDownload, runUpdateInstaller,
+  cancelUpdateDownload, runUpdateInstaller, updateCheckState,
   type SettingsDto, type SettingsPatch, type HistoryStats,
   type DeviceInfo, type UpdateResult, type SyncState, type PairingCode,
   type DownloadProgress,
 } from "../ipc/settings";
 import { QRCodeSVG } from "qrcode.react";
+import { subscribeEvent } from "../ipc/events";
 
 const { Sider, Content } = Layout;
 const { Text } = Typography;
@@ -38,14 +35,14 @@ function GithubIcon({ size = 14 }: { size?: number }) {
   );
 }
 
-type SectionKey = "sync" | "general" | "clipboard" | "hotkeys" | "about";
+type SectionKey = "sync" | "general" | "clipboard" | "screenshot" | "about";
 
 const SECTIONS: { key: SectionKey; label: string; icon: ReactNode }[] = [
-  { key: "sync", label: "同步", icon: <CloudUpload size={15} /> },
-  { key: "general", label: "通用", icon: <SlidersHorizontal size={15} /> },
-  { key: "clipboard", label: "剪贴板", icon: <ClipboardList size={15} /> },
-  { key: "hotkeys", label: "快捷键", icon: <Keyboard size={15} /> },
-  { key: "about", label: "关于", icon: <Info size={15} /> },
+  { key: "general", label: "通用", icon: <Icon name="sliders" size={15} /> },
+  { key: "clipboard", label: "剪贴板", icon: <Icon name="clipboardList" size={15} /> },
+  { key: "sync", label: "同步", icon: <Icon name="cloudUpload" size={15} /> },
+  { key: "screenshot", label: "截图", icon: <Icon name="camera" size={15} /> },
+  { key: "about", label: "关于", icon: <Icon name="info" size={15} /> },
 ];
 
 export default function Settings() {
@@ -53,11 +50,15 @@ export default function Settings() {
   const [stats, setStats] = useState<HistoryStats | null>(null);
   const [info, setInfo] = useState<{ version: string; os: string } | null>(null);
   const [devices, setDevices] = useState<DeviceInfo[] | null>(null);
-  const [section, setSection] = useState<SectionKey>("sync");
+  const [section, setSection] = useState<SectionKey>("general");
+  const [availableUpdate, setAvailableUpdate] = useState(false);
   const { message } = AntApp.useApp();
 
   const refresh = useCallback(async () => {
     setS(await settingsGet());
+  }, []);
+  const refreshCachedDevices = useCallback(async () => {
+    setDevices(await devicesCached());
   }, []);
 
   useEffect(() => {
@@ -66,6 +67,18 @@ export default function Settings() {
     void appInfo().then(setInfo);
     void devicesCached().then(setDevices);
   }, [refresh]);
+
+  useEffect(() => {
+    let disposed = false;
+    void updateCheckState().then((r) => { if (!disposed) setAvailableUpdate(!!r?.hasUpdate); });
+    const stops = [
+      subscribeEvent<string>("settings-navigate", (e) => {
+        if (SECTIONS.some((section) => section.key === e.payload)) setSection(e.payload as SectionKey);
+      }),
+      subscribeEvent<UpdateResult>("update-available", (e) => setAvailableUpdate(e.payload.hasUpdate)),
+    ];
+    return () => { disposed = true; stops.forEach((stop) => stop()); };
+  }, []);
 
   /// 更新一项设置并保存;本地状态乐观更新,失败回读
   const patch = useCallback(
@@ -105,7 +118,7 @@ export default function Settings() {
           items={SECTIONS.map((sec) => ({
             key: sec.key,
             icon: sec.icon,
-            label: sec.label,
+            label: sec.key === "about" && availableUpdate ? "关于 · 有更新" : sec.label,
           }))}
         />
       </Sider>
@@ -116,7 +129,7 @@ export default function Settings() {
               s={s}
               patch={patch}
               devices={devices}
-              onDevicesChanged={async () => setDevices(await devicesCached())}
+              onDevicesChanged={refreshCachedDevices}
               onRefreshSettings={refresh}
             />
           )}
@@ -134,7 +147,7 @@ export default function Settings() {
               onRefreshStats={async () => setStats(await historyStats())}
             />
           )}
-          {section === "hotkeys" && <HotkeysSection s={s} patch={patch} />}
+          {section === "screenshot" && <ScreenshotSection s={s} patch={patch} />}
           {section === "about" && <AboutSection s={s} info={info} />}
         </div>
       </Content>
@@ -278,24 +291,29 @@ function SyncSection({
 
   // 实时连接状态(后端 sync-state 事件推送)
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    let statusVersion = 0;
+    const stop = subscribeEvent<string>("sync-state", (e) => {
+      statusVersion++;
+      setSyncState((prev) => ({
+        ...(prev ?? { isPaired: s.isPaired, serverUrl: s.serverUrl, deviceName: s.deviceName, deviceId: s.deviceId }),
+        status: e.payload,
+      }));
+    });
     void (async () => {
       try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        const st = await invoke<SyncState>("sync_get_state");
-        setSyncState(st);
-        const { listen } = await import("@tauri-apps/api/event");
-        unlisten = await listen<string>("sync-state", (e) => {
-          setSyncState((prev) => (prev ? { ...prev, status: e.payload } : prev));
-        });
+        const version = statusVersion;
+        const st = await syncGetState();
+        if (disposed) return;
+        setSyncState((prev) => statusVersion === version ? st : { ...st, status: prev?.status ?? st.status });
         // 打开设置页即从服务端拉设备真值(清掉本地缓存中的僵尸设备),再读缓存渲染
         await syncDevicesRefresh();
-        await onDevicesChanged();
+        if (!disposed) await onDevicesChanged();
       } catch {
         /* 浏览器环境 */
       }
     })();
-    return () => unlisten?.();
+    return () => { disposed = true; stop(); };
   }, [onDevicesChanged]);
 
   const doTest = async () => {
@@ -398,7 +416,7 @@ function SyncSection({
             <Button
               size="small"
               type="text"
-              icon={<CopyIcon size={13} />}
+              icon={<Icon name="copy" size={13} />}
               onClick={() => {
                 void navigator.clipboard.writeText(s.deviceId);
                 void message.success("已复制");
@@ -415,7 +433,7 @@ function SyncSection({
         title="生成配对码"
         desc="给其他设备用:在其上输入此码或扫 QR,即可加入同步(已配对设备也可邀请新设备)"
       >
-        <Button size="small" icon={<QrCode size={13} />} onClick={() => void startPair()}>
+        <Button size="small" icon={<Icon name="qrCode" size={13} />} onClick={() => void startPair()}>
           生成配对码
         </Button>
       </Row>
@@ -488,7 +506,7 @@ function SyncSection({
                   <Button
                     size="small"
                     type="text"
-                    icon={<CopyIcon size={14} />}
+                    icon={<Icon name="copy" size={14} />}
                     onClick={() => {
                       void navigator.clipboard.writeText(pairing.code);
                       void message.success("配对码已复制");
@@ -517,7 +535,7 @@ function SyncSection({
             size="small"
             type="text"
             loading={refreshingDevices}
-            icon={!refreshingDevices ? <RefreshCw size={12} style={{ opacity: 0.6 }} /> : undefined}
+            icon={!refreshingDevices ? <Icon name="refresh" size={12} style={{ opacity: 0.6 }} /> : undefined}
             onClick={() => void refreshDevices()}
             style={{ marginLeft: 4, width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
           />
@@ -565,7 +583,7 @@ function SyncSection({
                 <Button
                   size="small"
                   type="text"
-                  icon={<Pencil size={13} />}
+                  icon={<Icon name="pencil" size={13} />}
                   onClick={() => setRenaming({ id: d.id ?? "", name: d.name ?? "" })}
                 />
               </Tooltip>
@@ -587,7 +605,7 @@ function SyncSection({
                   }}
                 >
                   <Tooltip title="移除设备">
-                    <Button size="small" type="text" danger icon={<Trash2 size={13} />} />
+                    <Button size="small" type="text" danger icon={<Icon name="trash" size={13} />} />
                   </Tooltip>
                 </Popconfirm>
               )}
@@ -642,7 +660,7 @@ function GeneralSection({
     <>
       <SectionTitle>外观</SectionTitle>
       <div className="settings-group">
-      <Row title="主题" desc="深色 / 浅色 / 跟随系统">
+      <Row title="主题">
         <Select
           size="small"
           style={{ width: 120 }}
@@ -652,6 +670,20 @@ function GeneralSection({
             { value: "system", label: "跟随系统" },
             { value: "light", label: "浅色" },
             { value: "dark", label: "深色" },
+          ]}
+        />
+      </Row>
+      <Row title="图标库">
+        <Select
+          size="small"
+          style={{ width: 120 }}
+          value={s.iconLibrary}
+          onChange={(v) => void patch({ iconLibrary: v })}
+          options={[
+            { value: "lucide", label: "Lucide" },
+            { value: "tabler", label: "Tabler" },
+            { value: "phosphor", label: "Phosphor" },
+            { value: "remix", label: "Remix" },
           ]}
         />
       </Row>
@@ -850,7 +882,7 @@ function ClipboardSection({
         <Tooltip title={s.resolvedStorageDir}>
           <Button
             size="small"
-            icon={<FolderOpen size={13} />}
+            icon={<Icon name="folderOpen" size={13} />}
             onClick={() => void openInExplorer(s.resolvedStorageDir)}
           >
             打开
@@ -859,7 +891,7 @@ function ClipboardSection({
       </Row>
       <Row title="修改数据目录" desc="留空恢复默认(%LOCALAPPDATA%/NexClip);切换后立即生效">
         <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-          <Button size="small" icon={<FolderOpen size={13} />} onClick={() => void browseDataDir()}>
+          <Button size="small" icon={<Icon name="folderOpen" size={13} />} onClick={() => void browseDataDir()}>
             浏览
           </Button>
           <Input
@@ -943,13 +975,37 @@ function ClipboardSection({
         <Toggle checked={s.smartUrlEnabled} disabled={!s.copyDirectEnabled} onChange={(v) => void patch({ smartUrlEnabled: v })} />
       </Row>
       </div>
+      <SectionTitle>快捷键</SectionTitle>
+      <div className="settings-group">
+        <Row title="呼出剪贴板" desc="全局快捷键,默认 Alt+V">
+          <HotkeyInput value={s.hotkey} onCommit={(v) => void patch({ hotkey: v })} />
+        </Row>
+        <Row title="置顶开关" desc="全局快捷键,默认 Ctrl+Alt+T">
+          <HotkeyInput
+            value={s.hotkeyTopmost}
+            onCommit={(v) => void patch({ hotkeyTopmost: v })}
+          />
+        </Row>
+        <Row title="打开复制的链接" desc="直达卡片显示时执行卡片主操作;否则打开剪贴板最近的链接">
+          <HotkeyInput
+            value={s.hotkeyOpenUrl}
+            onCommit={(v) => void patch({ hotkeyOpenUrl: v })}
+          />
+        </Row>
+        <Row title="打开设置" desc="全局快捷键,默认 Alt+X">
+          <HotkeyInput
+            value={s.hotkeySettings}
+            onCommit={(v) => void patch({ hotkeySettings: v })}
+          />
+        </Row>
+      </div>
     </>
   );
 }
 
-// ---- 快捷键 ----
+// ---- 截图(独立分区) ----
 
-function HotkeysSection({
+function ScreenshotSection({
   s, patch,
 }: {
   s: SettingsDto;
@@ -957,33 +1013,63 @@ function HotkeysSection({
 }) {
   return (
     <>
-      <SectionTitle>快捷键</SectionTitle>
+      <SectionTitle>截图</SectionTitle>
       <div className="settings-group">
-      <Row title="呼出剪贴板" desc="全局快捷键,默认 Alt+V">
-        <HotkeyInput value={s.hotkey} onCommit={(v) => void patch({ hotkey: v })} />
-      </Row>
-      <Row title="打开设置" desc="全局快捷键,默认 Alt+X">
-        <HotkeyInput
-          value={s.hotkeySettings}
-          onCommit={(v) => void patch({ hotkeySettings: v })}
-        />
-      </Row>
-      <Row title="打开复制的链接" desc="直达卡片显示时执行卡片主操作;否则打开剪贴板最近的链接">
-        <HotkeyInput
-          value={s.hotkeyOpenUrl}
-          onCommit={(v) => void patch({ hotkeyOpenUrl: v })}
-        />
-      </Row>
-      <Row title="置顶开关" desc="全局快捷键,默认 Ctrl+Alt+T">
-        <HotkeyInput
-          value={s.hotkeyTopmost}
-          onCommit={(v) => void patch({ hotkeyTopmost: v })}
-        />
-      </Row>
+        <Row title="启用截图" desc="关闭后截图快捷键、托盘菜单与设置入口均不生效" emphasized>
+          <Toggle checked={s.screenshotEnabled} onChange={(v) => void patch({ screenshotEnabled: v })} />
+        </Row>
+      </div>
+      <SectionTitle>全局快捷键</SectionTitle>
+      <div className="settings-group">
+        <Row title="截图(选区)" desc="默认 F1;拖拽选区后可标注/复制/保存/贴图/长图">
+          <HotkeyInput
+            value={s.hotkeyScreenshot}
+            onCommit={(v) => void patch({ hotkeyScreenshot: v })}
+          />
+        </Row>
+        <Row title="截取光标所在屏幕" desc="默认 Ctrl+Shift+F;整屏直接复制,无选区">
+          <HotkeyInput
+            value={s.hotkeyScreenshotScreen}
+            onCommit={(v) => void patch({ hotkeyScreenshotScreen: v })}
+          />
+        </Row>
+        <Row title="截取活动窗口" desc="默认 Ctrl+Shift+W;前台窗口直接复制,无选区">
+          <HotkeyInput
+            value={s.hotkeyScreenshotWindow}
+            onCommit={(v) => void patch({ hotkeyScreenshotWindow: v })}
+          />
+        </Row>
+        <Row title="剪贴板贴图" desc="默认 F3;把剪贴板里的图片贴到屏幕(不截图,直接贴)">
+          <HotkeyInput
+            value={s.hotkeyPin}
+            onCommit={(v) => void patch({ hotkeyPin: v })}
+          />
+        </Row>
+      </div>
+      <SectionTitle>操作快捷键(选区确认后)</SectionTitle>
+      <div className="settings-group">
+        <Row title="复制选区" desc="Enter 或 Ctrl+C,结果自动入剪贴板历史">
+          <span style={hintStyle}>Enter / Ctrl+C</span>
+        </Row>
+        <Row title="另存为" desc="Ctrl+S 打开保存对话框(记忆上次目录)">
+          <span style={hintStyle}>Ctrl+S</span>
+        </Row>
+        <Row title="取消截图" desc="Esc 或右键;会话中再按截图快捷键也可强制取消">
+          <span style={hintStyle}>Esc</span>
+        </Row>
+        <Row title="移动/调整选区" desc="拖动选区边缘移动;拖四角/四边手柄调整大小">
+          <span style={hintStyle}>边缘拖动 / 手柄</span>
+        </Row>
       </div>
     </>
   );
 }
+
+const hintStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: "var(--ant-color-text-tertiary, #999)",
+  fontFamily: "ui-monospace, monospace",
+};
 
 /// 快捷键捕获输入框:聚焦后按组合键即捕获,Esc 放弃
 function HotkeyInput({
@@ -1056,28 +1142,25 @@ function AboutSection({
 
   // 挂载时恢复下载状态(下载中切换设置页回来不丢进度)
   useEffect(() => {
+    let disposed = false;
+    void updateCheckState().then((r) => { if (!disposed) setResult(r); });
     void updateDownloadState().then((st) => {
-      if (st && !st.done) setDl(st);
+      if (!disposed && st && !st.done) setDl(st);
     });
+    const stop = subscribeEvent<UpdateResult>("update-available", (e) => setResult(e.payload));
+    return () => { disposed = true; stop(); };
   }, []);
 
   // 进度事件订阅
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void (async () => {
-      try {
-        const { listen } = await import("@tauri-apps/api/event");
-        unlisten = await listen<DownloadProgress>("update-download-progress", (e) => {
+    return subscribeEvent<DownloadProgress>("update-download-progress", (e) => {
           setDl(e.payload);
           if (e.payload.done && e.payload.error == null) {
             void message.success("安装包下载完成,可立即安装");
           } else if (e.payload.done && e.payload.error != null) {
             void message.error(`下载失败:${e.payload.error}`);
           }
-        });
-      } catch { /* 浏览器环境 */ }
-    })();
-    return () => unlisten?.();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

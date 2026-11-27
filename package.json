@@ -1,7 +1,7 @@
 {
   "name": "nexclip-desktop-tauri",
   "private": true,
-  "version": "2.0.0-dev",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,8 +10,12 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
+    "@remixicon/react": "^4.9.0",
+    "@tabler/icons-react": "^3.52.0",
     "@tauri-apps/api": "^2.9.0",
     "antd": "^5.29.0",
+    "konva": "^10.9.1",
     "lucide-react": "^0.545.0",
     "qrcode.react": "^4.2.0",
     "react": "^18.3.1",

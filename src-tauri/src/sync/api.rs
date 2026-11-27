@@ -42,19 +42,29 @@ impl std::fmt::Display for ApiError {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ClipboardEntry {
+    #[serde(alias = "Id")]
     pub id: i64,
+    #[serde(alias = "Starred")]
     pub starred: bool,
+    #[serde(alias = "Remark")]
     pub remark: Option<String>,
     /// Text | Image(文件条目仅存本地,不经过服务端)
-    #[serde(rename = "type")]
+    #[serde(rename = "type", alias = "Type")]
     pub entry_type: String,
+    #[serde(alias = "Text")]
     pub text: Option<String>,
+    #[serde(alias = "Html")]
     pub html: Option<String>,
+    #[serde(alias = "ImageRef")]
     pub image_ref: Option<String>,
+    #[serde(alias = "DeviceId")]
     pub device_id: String,
+    #[serde(alias = "DeviceName")]
     pub device_name: Option<String>,
+    #[serde(alias = "IsManual")]
     pub is_manual: bool,
     /// ISO-8601 UTC
+    #[serde(alias = "CreatedAt")]
     pub created_at: Option<String>,
 }
 
@@ -163,6 +173,12 @@ async fn send(
     device_id: &str,
     token: &str,
 ) -> Result<reqwest::Response, ApiError> {
+    send_allowing(req, device_id, token, &[]).await
+}
+
+async fn send_allowing(
+    req: reqwest::RequestBuilder, device_id: &str, token: &str, allowed: &[u16],
+) -> Result<reqwest::Response, ApiError> {
     let req = if !device_id.trim().is_empty() && !token.trim().is_empty() {
         req.header("X-Device-Id", device_id).header("X-Device-Token", token)
     } else {
@@ -173,7 +189,7 @@ async fn send(
         status: None,
         code: None,
     })?;
-    if resp.status().is_success() {
+    if resp.status().is_success() || allowed.contains(&resp.status().as_u16()) {
         Ok(resp)
     } else {
         Err(read_error_detail(resp).await)
@@ -273,6 +289,9 @@ pub async fn upload_image(
     device_id: &str, device_name: &str,
     platform: &str, version: &str, is_manual: bool,
 ) -> Result<Option<ClipboardEntry>, ApiError> {
+    if png_bytes.len() > crate::capture::MAX_IMAGE_BYTES {
+        return Err(ApiError { message: "图片超过 10MB 同步上限".into(), status: Some(413), code: None });
+    }
     let part = reqwest::multipart::Part::bytes(png_bytes)
         .file_name("clipboard.png")
         .mime_str("image/png")
@@ -344,9 +363,9 @@ pub async fn update_entry_metadata(
 pub async fn download_image(
     server_url: &str, device_id: &str, token: &str, image_ref: &str,
 ) -> Result<Option<Vec<u8>>, ApiError> {
-    let resp = send(
+    let resp = send_allowing(
         client()?.get(endpoint(server_url, &format!("/api/images/{}", image_ref.trim_start_matches('/')))),
-        device_id, token,
+        device_id, token, &[404],
     ).await?;
     let status = resp.status().as_u16();
     if status == 404 || status == 204 {
@@ -365,6 +384,7 @@ pub async fn download_image(
 pub async fn upload_file(
     server_url: &str, token: &str, file_path: &str,
     device_id: &str, device_name: &str, platform: &str, version: &str,
+    target_device_ids: &[String],
 ) -> Result<Option<FileTransferInfo>, ApiError> {
     let file_name = std::path::Path::new(file_path)
         .file_name()
@@ -382,7 +402,8 @@ pub async fn upload_file(
     let mut form = reqwest::multipart::Form::new()
         .part("file", part)
         .text("deviceId", device_id.to_string())
-        .text("deviceName", device_name.to_string());
+        .text("deviceName", device_name.to_string())
+        .text("deviceIds", target_device_ids.join(","));
     if !platform.trim().is_empty() {
         form = form.text("platform", platform.to_string());
     }
@@ -400,9 +421,9 @@ pub async fn upload_file(
 pub async fn download_file(
     server_url: &str, device_id: &str, token: &str, file_id: &str,
 ) -> Result<Option<Vec<u8>>, ApiError> {
-    let resp = send(
+    let resp = send_allowing(
         client()?.get(endpoint(server_url, &format!("/api/files/{file_id}/download"))),
-        device_id, token,
+        device_id, token, &[404, 410],
     ).await?;
     let status = resp.status().as_u16();
     if status == 404 || status == 410 || status == 204 {
@@ -592,5 +613,42 @@ mod tests {
         assert!(missing.is_credential_missing() && !missing.is_credential_dead());
         assert!(invalid.is_credential_dead());
         assert!(revoked.is_credential_dead());
+    }
+
+    #[test]
+    fn clipboard_entry_accepts_pascal_case_payload() {
+        // 服务端/旧客户端可能返回 PascalCase;若字段被默忽略,
+        // IsManual 会变成 false,互传消息随后被 chat_query 过滤掉。
+        let v = serde_json::json!({
+            "Id": 12357,
+            "Type": "Text",
+            "Text": "333826",
+            "DeviceId": "e93f1cf5-89cf-49b7-b9d1-4a0c072cab0f",
+            "DeviceName": "小米 14",
+            "IsManual": true,
+            "CreatedAt": "2026-11-18T16:31:39Z"
+        });
+        let entry: ClipboardEntry = serde_json::from_value(v).unwrap();
+        assert_eq!(entry.id, 12357);
+        assert_eq!(entry.entry_type, "Text");
+        assert_eq!(entry.text.as_deref(), Some("333826"));
+        assert_eq!(entry.device_name.as_deref(), Some("小米 14"));
+        assert!(entry.is_manual);
+    }
+
+    #[test]
+    fn clipboard_entry_accepts_camel_case_payload() {
+        let v = serde_json::json!({
+            "id": 1,
+            "type": "Text",
+            "text": "hello",
+            "deviceId": "peer",
+            "deviceName": "Phone",
+            "isManual": true
+        });
+        let entry: ClipboardEntry = serde_json::from_value(v).unwrap();
+        assert_eq!(entry.id, 1);
+        assert!(entry.is_manual);
+        assert_eq!(entry.device_id, "peer");
     }
 }

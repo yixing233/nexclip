@@ -30,6 +30,14 @@ pub enum HotkeyAction {
     OpenUrl,
     /// 置顶开关(Ctrl+Alt+T)
     Topmost,
+    /// 截图(F1,可在设置中修改)
+    Screenshot,
+    /// 活屏快捷截图(Ctrl+Shift+F)
+    ScreenshotScreen,
+    /// 活动窗口快捷截图(Ctrl+Shift+W)
+    ScreenshotWindow,
+    /// 把剪贴板里的图片贴到屏幕(F3)
+    PinFromClipboard,
 }
 
 /// 单个热键:修饰键 + 虚拟键码。
@@ -64,11 +72,16 @@ pub fn parse_hotkey(s: &str) -> Option<(u32, u32)> {
             "WIN" | "SUPER" | "META" => modifiers |= MOD_WIN,
             _ => {
                 let code = if let Some(rest) = upper.strip_prefix('F') {
-                    let n: u32 = rest.parse().ok()?;
-                    if !(1..=24).contains(&n) {
-                        return None;
+                    // F 后必须跟数字才是功能键(F1-F24);裸 "F" 是字母 F
+                    if rest.is_empty() {
+                        0x46 // VK_F(字母 F)
+                    } else {
+                        let n: u32 = rest.parse().ok()?;
+                        if !(1..=24).contains(&n) {
+                            return None;
+                        }
+                        0x70 + n - 1 // F1-F24
                     }
-                    0x70 + n - 1 // F1-F24
                 } else if upper.len() == 1 {
                     let c = upper.chars().next().unwrap();
                     if c.is_ascii_digit() {
@@ -99,6 +112,10 @@ fn spec_id(spec: &HotkeySpec) -> i32 {
         HotkeyAction::Settings => 2,
         HotkeyAction::OpenUrl => 3,
         HotkeyAction::Topmost => 4,
+        HotkeyAction::Screenshot => 5,
+        HotkeyAction::ScreenshotScreen => 6,
+        HotkeyAction::ScreenshotWindow => 7,
+        HotkeyAction::PinFromClipboard => 8,
     }
 }
 

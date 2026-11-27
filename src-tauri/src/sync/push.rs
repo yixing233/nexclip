@@ -13,7 +13,6 @@
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use futures_util::FutureExt;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
@@ -201,7 +200,11 @@ async fn negotiate(
 }
 
 /// SignalR JSON 帧处理:返回需要回发的帧(如 ping 应答)。
-fn handle_signalr_frame(
+///
+/// 事件投递是异步的:引擎可能正在下载图片/写数据库。这里若用
+/// `now_or_never()` 投递,通道暂时满时事件会被静默丢弃,表现为
+/// “通道已连接但互传页收不到消息”。因此帧循环内 await 投递。
+async fn handle_signalr_frame(
     frame: &str,
     event_tx: &mpsc::Sender<PushEvent>,
 ) -> Option<String> {
@@ -224,7 +227,9 @@ fn handle_signalr_frame(
                 "DevicesChanged" => PushEvent::DevicesChanged,
                 _ => return None,
             };
-            let _ = event_tx.send(pe).now_or_never();
+            if event_tx.send(pe).await.is_err() {
+                return None;
+            }
             None
         }
         // type 6 = ping → 回 pong 帧
@@ -240,6 +245,7 @@ async fn pump_signalr(
     conn_id: &str,
     params: &ConnParams,
     event_tx: mpsc::Sender<PushEvent>,
+    state_tx: mpsc::Sender<PushState>,
 ) -> Result<(), String> {
     let url = format!(
         "{}/hubs/clipboard?id={}&deviceId={}",
@@ -300,6 +306,9 @@ async fn pump_signalr(
     })?;
 
     log::info!("推送通道已连接(SignalR 模式)");
+    // 关键:监督器依赖 Connected 状态触发历史补齐与重连提示。
+    // 之前这里只打日志,引擎永远收不到“已连接”。
+    let _ = state_tx.send(PushState::Connected).await;
 
     // 帧循环:解析调用帧、应答 ping
     let mut keepalive = tokio::time::interval(Duration::from_secs(10));
@@ -323,7 +332,7 @@ async fn pump_signalr(
                             if frame.is_empty() {
                                 continue;
                             }
-                            if let Some(reply) = handle_signalr_frame(frame, &event_tx) {
+                            if let Some(reply) = handle_signalr_frame(frame, &event_tx).await {
                                 if sink.send(Message::Text(reply.into())).await.is_err() {
                                     return Ok(());
                                 }
@@ -351,6 +360,7 @@ async fn pump_signalr(
 async fn pump_native(
     params: ConnParams,
     event_tx: mpsc::Sender<PushEvent>,
+    state_tx: mpsc::Sender<PushState>,
 ) -> Result<(), String> {
     let url = build_ws_url(
         &params.server_url, &params.device_id, &params.device_name,
@@ -365,6 +375,7 @@ async fn pump_native(
     let (mut sink, mut stream) = ws.split();
 
     log::info!("推送通道已连接(原生 WS 模式)");
+    let _ = state_tx.send(PushState::Connected).await;
     let mut keepalive = tokio::time::interval(Duration::from_secs(10));
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -416,6 +427,7 @@ async fn pump_native(
 async fn pump_once(
     params: ConnParams,
     event_tx: mpsc::Sender<PushEvent>,
+    state_tx: mpsc::Sender<PushState>,
 ) -> Result<(), String> {
     let http = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
@@ -423,8 +435,8 @@ async fn pump_once(
         .map_err(|e| e.to_string())?;
 
     match negotiate(&http, &params).await? {
-        Some(conn_id) => pump_signalr(&http, &conn_id, &params, event_tx).await,
-        None => pump_native(params, event_tx).await,
+        Some(conn_id) => pump_signalr(&http, &conn_id, &params, event_tx, state_tx).await,
+        None => pump_native(params, event_tx, state_tx).await,
     }
 }
 
@@ -460,7 +472,8 @@ async fn supervisor(
             // 泵送当前连接;期间新 Connect/Stop 命令会中断它
             let pump_params = params.clone();
             let pump_tx = event_tx.clone();
-            let pump = tokio::spawn(pump_once(pump_params, pump_tx));
+            let pump_state_tx = state_tx.clone();
+            let pump = tokio::spawn(pump_once(pump_params, pump_tx, pump_state_tx));
 
             enum Step {
                 Pump(Result<(), String>),

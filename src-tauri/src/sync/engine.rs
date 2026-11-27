@@ -7,6 +7,7 @@
 //! - DevicesChanged → GET /api/devices 刷新 devices_cache.json(与旧版同格式)。
 
 use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::json;
@@ -44,6 +45,10 @@ pub enum EngineMsg {
 }
 
 static ENGINE_TX: OnceLock<mpsc::Sender<EngineMsg>> = OnceLock::new();
+/// 历史补齐互斥:连接抖动/多次 Connected 不应并发扫描全量历史。
+static HISTORY_SYNC_RUNNING: AtomicBool = AtomicBool::new(false);
+/// 本进程是否已做过一次「互传发送方对账」(启动后仅首次连接执行)。
+static IDENTITY_RECONCILED: AtomicBool = AtomicBool::new(false);
 
 /// 本地捕获后调用(文件条目跳过)。
 pub fn submit_upload(id: i64) {
@@ -181,9 +186,16 @@ async fn run_engine(
             }
             EngineMsg::RemoteFile(v) => {
                 // 文件互传:展示层事件(绝不写入剪贴板/自动粘贴,旧版铁律)
-                let _ = app.emit("file-transferred", v);
+                if let Ok(file) = serde_json::from_value::<api::FileTransferInfo>(v) {
+                    let value = serde_json::to_value(&file).unwrap_or_default();
+                    let cached = state.lock().unwrap_or_else(|p| p.into_inner())
+                        .history.cache_transfer_file(&file.file_id, &value);
+                    if let Err(e) = cached { log::warn!("文件记录缓存失败: {e}"); }
+                    let _ = app.emit("file-transferred", value);
+                }
             }
             EngineMsg::RemoteFileDeleted(file_id) => {
+                let _ = state.lock().unwrap_or_else(|p| p.into_inner()).history.delete_transfer_file(&file_id);
                 let _ = app.emit("file-deleted", file_id);
             }
             EngineMsg::DevicesChanged => {
@@ -196,6 +208,13 @@ async fn run_engine(
                 }
                 if st == super::push::PushState::Connected {
                     refresh_devices(&app, &state).await;
+                    // 推送可能漏帧(重连/短暂断线),用 REST 历史补齐本地缺失条目。
+                    // 独立任务执行,避免阻塞引擎消息循。
+                    let sync_app = app.clone();
+                    let sync_state = Arc::clone(&state);
+                    tauri::async_runtime::spawn(async move {
+                        sync_remote_history(&sync_app, &sync_state).await;
+                    });
                     // 重连成功提示(从断线恢复时,一次性)
                     if was_disconnected {
                         crate::notify(&app, &state, "NexClip 同步", "推送通道已重新连接");
@@ -244,13 +263,19 @@ async fn upload_entry(
         if item.is_file() {
             return;
         }
-        let (server_url, token, device_id, device_name, platform, version) = {
+        // 超限图片(原始 >10MB)仅本地保存,不参与同步。
+        if item.oversized {
+            log::info!("跳过超限图片同步(id={id})");
+            return;
+        }
+        let (server_url, token, device_id, device_name, platform, version, rich_text) = {
             let guard = state.lock().unwrap_or_else(|p| p.into_inner());
             let s = &guard.settings;
             (
                 s.server_url.clone(), s.auth_token.clone(), s.device_id.clone(),
                 s.device_name.clone(), "Windows".to_string(),
                 env!("CARGO_PKG_VERSION").to_string(),
+                s.rich_text_enabled,
             )
         };
         if token.trim().is_empty() || !server_url.trim().starts_with("http") {
@@ -263,7 +288,7 @@ async fn upload_entry(
                     &server_url, &token,
                     item.text.as_deref().unwrap_or(""),
                     &device_id, &device_name, &platform, &version,
-                    item.is_manual(), item.html.as_deref(),
+                    item.is_manual(), item.html.as_deref().filter(|_| rich_text),
                 )
                 .await
             }
@@ -276,6 +301,10 @@ async fn upload_entry(
                         return;
                     }
                 };
+                if png.len() > crate::capture::MAX_IMAGE_BYTES {
+                    log::warn!("图片缓存超过 10MB,跳过同步(id={id})");
+                    return;
+                }
                 api::upload_image(
                     &server_url, &token, png, &device_id, &device_name,
                     &platform, &version, item.is_manual(),
@@ -311,6 +340,38 @@ async fn handle_remote_entry(
 ) -> Result<(), String> {
     let entry: api::ClipboardEntry = serde_json::from_value(v.clone())
         .map_err(|e| format!("条目解析失败: {e}"))?;
+    store_remote_entry(app, state, entry, true).await.map(|_| ())
+}
+
+/// 远端条目入库(推送与 REST 补齐共用)。
+///
+/// `apply_side_effects=false` 用于历史补齐:只补本地记录,不重放旧的自动粘贴。
+/// 返回是否新增了本地记录(false = 已存在/本机回显/重复内容置顶)。
+async fn store_remote_entry(
+    app: &AppHandle,
+    state: &Arc<Mutex<AppState>>,
+    entry: api::ClipboardEntry,
+    apply_side_effects: bool,
+) -> Result<bool, String> {
+
+    if entry.is_manual && state.lock().unwrap_or_else(|p| p.into_inner())
+        .history.is_chat_deleted(entry.id).map_err(|e| e.to_string())? {
+        return Ok(false);
+    }
+
+    // 自己上传内容的回显:服务端会把本机刚上传的条目再广播回来。
+    // 旧版 SyncEngine.HandlePushAsync 的铁律 —— DeviceId 等于本机就直接返回,
+    // 只做 UI 提示,绝不再当成远端条目入库。否则会出现:
+    // 本机复制一条内容,列表里立刻多出一条 origin=1(远端)的重复记录,
+    // 且 device_id 却是本机自己,UI 上看起来像「别的设备同步过来的」。
+    let self_id = {
+        let guard = state.lock().unwrap_or_else(|p| p.into_inner());
+        guard.settings.device_id.clone()
+    };
+    if !self_id.is_empty() && entry.device_id.eq_ignore_ascii_case(&self_id) {
+        log::debug!("忽略本机上传条目的服务端回显(server_id={})", entry.id);
+        return Ok(false);
+    }
 
     // created_at:ISO → .NET Ticks(本地历史统一用 Ticks)
     let created_ticks = entry
@@ -324,6 +385,17 @@ async fn handle_remote_entry(
     let mut image_path: Option<String> = None;
     let mut content_hash: Option<String> = None;
     if entry.entry_type == "Image" {
+        // 已存在的服务端条目直接跳过,补齐旧历史时不重复下载图片。
+        let known_item = {
+            let guard = state.lock().unwrap_or_else(|p| p.into_inner());
+            guard
+                .history
+                .find_by_server_id(entry.id)
+                .map_err(|e| e.to_string())?
+        };
+        if known_item.as_ref().and_then(|item| item.image_path.as_deref()).is_some_and(|path| std::path::Path::new(path).is_file()) {
+            return Ok(false);
+        }
         let Some(r) = entry.image_ref.as_deref().filter(|r| !r.is_empty()) else {
             return Err("图片条目缺少 image_ref".into());
         };
@@ -350,14 +422,22 @@ async fn handle_remote_entry(
             std::fs::write(&path, &png).map_err(|e| format!("图片缓存写入失败: {e}"))?;
         }
         image_path = Some(path.to_string_lossy().into_owned());
+        if known_item.is_some() {
+            let guard = state.lock().unwrap_or_else(|p| p.into_inner());
+            guard.history.restore_remote_image_cache(entry.id, content_hash.as_deref().unwrap_or_default(), image_path.as_deref().unwrap_or_default())
+                .map_err(|e| e.to_string())?;
+            let _ = app.emit("clipboard-changed", ());
+            return Ok(false);
+        }
     }
 
-    let (auto_paste, device_id_local, _device_name_local) = {
+    let (auto_paste, device_id_local, _device_name_local, rich_text) = {
         let guard = state.lock().unwrap_or_else(|p| p.into_inner());
         (
             guard.settings.auto_paste,
             guard.settings.device_id.clone(),
             guard.settings.device_name.clone(),
+            guard.settings.rich_text_enabled,
         )
     };
 
@@ -386,20 +466,55 @@ async fn handle_remote_entry(
         origin: ORIGIN_REMOTE,
         starred: entry.starred,
         remark: entry.remark.clone(),
+        oversized: false,
     };
 
     let hash = item.content_hash.clone().unwrap_or_default();
     let mut touched = false;
     {
         let guard = state.lock().unwrap_or_else(|p| p.into_inner());
-        if !hash.is_empty() {
+        // A user can delete/clear while an image download is in flight.
+        if is_manual && guard.history.is_chat_deleted(entry.id).map_err(|e| e.to_string())? {
+            return Ok(false);
+        }
+        if guard
+            .history
+            .find_by_server_id(entry.id)
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            return Ok(false);
+        }
+        // 旧版铁律:手动互传条目**绝不去重**,必须每次插入新记录,
+        // 否则 (a) 对话流会丢消息、(b) touch_by_hash 会把已有条目的
+        // device_id/device_name 覆盖成远端设备,导致自己发的消息在互传页
+        // 显示成"对方发的"。只有普通剪贴板内容才按 hash 置顶。
+        if !is_manual && !hash.is_empty() {
             touched = guard
                 .history
                 .touch_by_hash(&hash, Some(entry.id), &item.device_id, item.device_name.as_deref(), created_ticks, None, None, None)
                 .unwrap_or(false);
+            if touched {
+                if let Some(path) = item.image_path.as_deref() {
+                    guard.history.repair_image_cache(&hash, path, item.oversized).map_err(|e| e.to_string())?;
+                    let _ = app.emit("clipboard-changed", ());
+                }
+            }
         }
+        let mut inserted_new = false;
         if !touched {
-            guard.history.insert(&item).map_err(|e| e.to_string())?;
+            // server_id UNIQUE 冲突返回 0:这是推送重放/历史补齐已存在的条目,
+            // 不能再弹通知或重复自动粘贴。
+            let inserted = guard.history.insert(&item).map_err(|e| e.to_string())?;
+            if inserted == 0 {
+                return Ok(false);
+            }
+            inserted_new = true;
+        }
+        if !inserted_new {
+            // 普通剪贴板内容命中已有 hash:只置顶,不算补齐新增。
+            return Ok(false);
         }
     }
 
@@ -412,7 +527,7 @@ async fn handle_remote_entry(
     }
 
     // 新内容通知(开关控制;自动粘贴的不再弹,避免噪声)
-    if !touched && !(auto_paste) {
+    if apply_side_effects && !touched && !(auto_paste) {
         let from = item.device_name.clone().unwrap_or_else(|| "其他设备".into());
         let what = match item.entry_type.as_str() {
             "Text" => item.text.as_deref().map(|t| {
@@ -428,28 +543,171 @@ async fn handle_remote_entry(
         crate::notify(app, state, "NexClip 同步", &format!("{from} · {body}"));
     }
 
-    // 手动推送(即时互传)或开启自动粘贴:写回剪贴板并注入当前前台应用
-    // (旧版 HandlePushAsync 行为;目标取"此刻的前台",而不是弹窗呼出时的记录)
-    if is_manual || (auto_paste && !touched) {
-        if let Some(target) = crate::platform::paste::capture_target() {
-            let payload = payload_for_remote(&item);
-            if crate::platform::writer::submit(payload, 3000).is_ok() {
-                let _ = crate::platform::paste::inject(&target, false);
-            }
-        }
+    // Write recent pushes to the clipboard only; receiving content must not type into an app.
+    if should_write_remote(apply_side_effects, auto_paste, touched, created_ticks, crate::history::now_ticks()) {
+        let payload = payload_for_remote(&item, rich_text);
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            crate::platform::writer::submit(payload, 3000)
+        }).await;
     }
 
     // 智能直达 toast(远端文本)
-    if item.entry_type == "Text" {
+    if apply_side_effects && item.entry_type == "Text" {
         if let Some(t) = &item.text {
             crate::show_smart_toast(app, state, t);
         }
     }
-    Ok(())
+    Ok(true)
+}
+
+/// 连接建立后从服务端历史增量补齐本地缺失条目。
+///
+/// WebSocket 推送没有重放语义:断线、后台挂起或服务端漏发时,
+/// 仅靠 `ClipboardUpdated` 会永久丢消息。这里按 server_id 补齐,
+/// 已有条目由 UNIQUE(server_id) 自动跳过。
+async fn sync_remote_history(app: &AppHandle, state: &Arc<Mutex<AppState>>) {
+    if HISTORY_SYNC_RUNNING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+    struct SyncGuard;
+    impl Drop for SyncGuard {
+        fn drop(&mut self) {
+            HISTORY_SYNC_RUNNING.store(false, Ordering::SeqCst);
+        }
+    }
+    let _guard = SyncGuard;
+
+    const PAGE: i64 = 100;
+    // 只补最近一段缺口:命中整页已存在即停止,不会每次启动都扫全量历史。
+    const MAX_PAGES: usize = 3;
+    // 每个进程启动后的第一次连接做一次较深的历史对账(修正被本机采集
+    // 覆盖掉的互传发送方),之后回到浅扫以控制请求量。
+    const RECONCILE_PAGES: usize = 6;
+    let full_reconcile = !IDENTITY_RECONCILED.swap(true, Ordering::SeqCst);
+    let max_pages = if full_reconcile { RECONCILE_PAGES } else { MAX_PAGES };
+
+    let (server_url, device_id, token, paired) = {
+        let guard = state.lock().unwrap_or_else(|p| p.into_inner());
+        (
+            guard.settings.server_url.clone(),
+            guard.settings.device_id.clone(),
+            guard.settings.auth_token.clone(),
+            guard.settings.is_paired,
+        )
+    };
+    if !paired || token.trim().is_empty() || !server_url.trim().starts_with("http") {
+        return;
+    }
+
+    // 用户清空互传记录时写入的水位:低于它的旧消息不再从服务端补回。
+    let chat_cleared_wave: i64 = {
+        let guard = state.lock().unwrap_or_else(|p| p.into_inner());
+        let p = crate::settings::resolve_storage_dir(&guard.settings.storage_dir)
+            .join("chat-cleared.wave");
+        std::fs::read_to_string(p)
+            .ok()
+            .and_then(|s| s.trim().parse::<i64>().ok())
+            .unwrap_or(0)
+    };
+
+    for page in 0..max_pages {
+        let entries = match api::get_remote_history(
+            &server_url,
+            &device_id,
+            &token,
+            (page as i64) * PAGE,
+            PAGE,
+            None,
+        )
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("远端历史补齐失败: {e}");
+                return;
+            }
+        };
+        if entries.is_empty() {
+            return;
+        }
+        // 逐条按 server_id 精确判断,不能只看“最大 id”:本地可能有较新的条目
+        // 而中间仍存在空洞(某次推送漏掉),只看最大值会永久跳过缺口。
+        let page_len = entries.len();
+        let mut known_in_page = 0usize;
+        let mut added = 0usize;
+        for entry in entries {
+            // 已清空的旧互传消息:跳过,不补回、不对账。
+            if entry.is_manual && entry.id <= chat_cleared_wave {
+                known_in_page += 1;
+                continue;
+            }
+            // 不能按“最大 server_id”提前跳过:本地可能有较新的条目,
+            // 而中间仍存在空洞(某次推送漏掉)。逐条精确判断。
+            let (known_item, deleted) = {
+                let guard = state.lock().unwrap_or_else(|p| p.into_inner());
+                (guard.history.find_by_server_id(entry.id).ok().flatten(),
+                    entry.is_manual && guard.history.is_chat_deleted(entry.id).unwrap_or(false))
+            };
+            let known = deleted || known_item.is_some_and(|item|
+                item.entry_type != "Image" || item.image_path.as_deref().is_some_and(|path| std::path::Path::new(path).is_file()));
+            if known {
+                // 对账:本机采集去重可能把远端互传消息的发送方改写成本机,
+                // 以服务端为准恢复,否则互传页会显示成「自己发的」或名字错乱。
+                if entry.is_manual {
+                    let guard = state.lock().unwrap_or_else(|p| p.into_inner());
+                    if let Err(e) = guard.history.set_device_by_server_id(
+                        entry.id,
+                        &entry.device_id,
+                        entry.device_name.as_deref(),
+                    ) {
+                        log::warn!("互传发送方对账失败(server_id={}): {e}", entry.id);
+                    }
+                }
+                known_in_page += 1;
+                continue;
+            }
+            match store_remote_entry(app, state, entry, false).await {
+                Ok(true) => added += 1,
+                Ok(false) => known_in_page += 1,
+                Err(e) => log::warn!("远端历史条目补齐失败: {e}"),
+            }
+        }
+        if added > 0 {
+            log::info!("远端历史补齐完成: {added} 条");
+        }
+        // 整页都已存在 → 已追平,停止翻页;首次对账时继续往后翻,
+        // 让更早的互传消息也能被校正发送方。
+        if known_in_page == page_len && !full_reconcile {
+            return;
+        }
+        // 继续翻页只用于覆盖最近的缺口;MAX_PAGES 限制总耗时。
+    }
 }
 
 /// 远端条目 → 写入载荷。
-fn payload_for_remote(item: &HistoryItem) -> crate::platform::writer::WritePayload {
+fn should_write_remote(side_effects: bool, enabled: bool, touched: bool, created: i64, now: i64) -> bool {
+    side_effects && enabled && !touched && now.abs_diff(created) <= 5 * 60 * 10_000_000
+}
+
+#[cfg(test)]
+mod remote_write_tests {
+    use super::*;
+
+    #[test]
+    fn only_recent_enabled_pushes_write_the_clipboard() {
+        let now = crate::history::now_ticks();
+        assert!(should_write_remote(true, true, false, now - 60 * 10_000_000, now));
+        assert!(!should_write_remote(true, true, false, now - 301 * 10_000_000, now));
+        assert!(!should_write_remote(true, false, false, now, now));
+        assert!(!should_write_remote(false, true, false, now, now));
+        assert!(!should_write_remote(true, true, true, now, now));
+    }
+}
+
+fn payload_for_remote(item: &HistoryItem, rich_text: bool) -> crate::platform::writer::WritePayload {
     if item.entry_type == "Image" {
         if let Some(path) = item.image_path.as_deref() {
             if let Ok(png) = std::fs::read(path) {
@@ -459,7 +717,7 @@ fn payload_for_remote(item: &HistoryItem) -> crate::platform::writer::WritePaylo
     }
     crate::platform::writer::WritePayload::Text {
         text: item.text.clone().unwrap_or_default(),
-        html: item.html.clone(),
+        html: item.html.clone().filter(|_| rich_text),
     }
 }
 
