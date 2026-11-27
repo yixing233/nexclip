@@ -84,6 +84,21 @@ src-tauri/            # Rust 后端
 Tauri 更新只识别 `NexClip_Tauri_*_x64-setup.exe`。直连服务器使用 `version.json` 的
 `windowsTauri` 段；尚未提供该通道时自动检查 GitHub Releases，不使用 WinUI 的 `windows` 段。
 
+### 发布直连通道
+
+GitHub Release 发布后，还需要将同一安装包同步到直连服务器。将安装包归档到
+`release-out/NexClip_Tauri_<version>_x64-setup.exe`，准备好 `docs/releases/v<version>.md`，执行：
+
+```bash
+node --test scripts/publish-direct.test.mjs
+node scripts/publish-direct.mjs --publish 2.0.0
+```
+
+脚本使用已登录的 `gh` 校对 GitHub 资产摘要，再通过 SSH 上传并校验安装包，备份并原子替换
+`version.json` 的 `windowsTauri` 段，保留 WinUI、Android 和其他字段，最后通过公网重新下载验证。
+默认 SSH 入口为 `root@47.116.39.247`，可用最后一个参数指定其他 SSH 主机。
+服务器发布目录为 `/var/www/nexclip-server/releases`，由现有静态路由提供，无需重启服务。
+
 ---
 
 ## 独立分支
